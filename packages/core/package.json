@@ -1,0 +1,39 @@
+{
+  "name": "@review-agent/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Domain logic, types, schemas. Zero I/O. Foundation of the review-agent monorepo.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "@vitest/coverage-v8": "2.1.5",
+    "tsup": "8.3.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}
