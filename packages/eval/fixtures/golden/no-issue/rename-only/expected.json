@@ -1,0 +1,6 @@
+{
+  "category": "no-issue",
+  "language": "ts",
+  "expected_findings": [],
+  "rationale": "Pure rename refactor; no behavioral change."
+}

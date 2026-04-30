@@ -1,0 +1,15 @@
+{
+  "name": "@review-agent/eval",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Golden PR set + promptfoo configuration for review-agent regression evaluation.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "eval": "promptfoo eval -c promptfooconfig.yaml",
+    "eval:view": "promptfoo view"
+  },
+  "devDependencies": {
+    "promptfoo": "0.96.0"
+  }
+}

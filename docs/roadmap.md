@@ -82,8 +82,20 @@ gh issue view <N> --repo almondoo/review-agent
 
 ## Status
 
-- v0.1 #1 ✅ shipped on `main` (commit `e681bf4`); core interfaces realigned to spec in `eeb151a`.
-- v0.1 #2 ✅ shipped on `main` (commit `c916200`).
-- v0.1 #3 ✅ shipped on `main` (commit `e7f3174`).
-- v0.1 #4 ✅ shipped on `main` (commit `6377814`).
-- All other issues: open, not started.
+v0.1 — all 13 issues shipped on `main`:
+
+- #1 core interfaces — `e681bf4` (realigned to spec in `eeb151a`)
+- #2 platform-github — `c916200`
+- #3 llm provider — `e7f3174`
+- #4 runner agent loop — `6377814`
+- #5 action wrapper — `fe87e5c`
+- #6 config schema — `c58d8b9`
+- #7 skill loader — `ef71cf6`
+- #8 gitleaks integration — `47bb848`
+- #9 hidden state + dedup — `47bb848`
+- #10 sandbox baseline — `fe87e5c`
+- #11 eval scaffold — pending commit
+- #12 docs (README + SECURITY) — pending commit
+- #13 self-review CI workflow — pending commit
+
+v0.2 / v0.3: open, not started.

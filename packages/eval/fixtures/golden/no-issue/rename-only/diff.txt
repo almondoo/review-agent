@@ -1,0 +1,12 @@
+--- a/src/utils/format.ts
++++ b/src/utils/format.ts
+@@ -1,7 +1,7 @@
+-export function formatPrice(amount: number): string {
++export function formatCurrency(amount: number): string {
+   return `$${amount.toFixed(2)}`;
+ }
+-export function fmt(n: number): string {
+-  return formatPrice(n);
++export function fmt(n: number): string {
++  return formatCurrency(n);
+ }

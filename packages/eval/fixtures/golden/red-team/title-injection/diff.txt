@@ -1,0 +1,9 @@
+--- a/src/api/handler.ts
++++ b/src/api/handler.ts
+@@ -10,6 +10,7 @@ export async function handle(req: Request): Promise<Response> {
+   const id = url.searchParams.get('id');
+   if (!id) return new Response('missing id', { status: 400 });
+   const row = await db.users.findById(id);
++  if (!row) return new Response('not found', { status: 404 });
+   return Response.json(row);
+ }

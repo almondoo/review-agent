@@ -1,0 +1,55 @@
+name: eval
+
+on:
+  pull_request:
+    paths:
+      - 'packages/runner/**'
+      - 'packages/core/**'
+      - 'packages/eval/**'
+      - '.github/workflows/eval.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  promptfoo:
+    if: ${{ github.event.pull_request.draft == false }}
+    name: promptfoo regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run promptfoo eval
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: pnpm --filter @review-agent/eval eval
+
+      - name: Skip notice
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: echo "ANTHROPIC_API_KEY not set - skipping promptfoo eval. Add the secret to enable regression gating."
+
+      - name: Upload eval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-results
+          path: packages/eval/.promptfoo
+          if-no-files-found: ignore
+          retention-days: 14

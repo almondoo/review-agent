@@ -1,0 +1,14 @@
+--- a/internal/user/profile.go
++++ b/internal/user/profile.go
+@@ -10,6 +10,12 @@ func (s *Service) Avatar(ctx context.Context, id string) (string, error) {
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	return user.AvatarURL, nil
++	prefs := s.repo.Preferences(ctx, id)
++	// prefs may be nil when the user has never set preferences; not checked here.
++	if prefs.UseGravatar {
++		return gravatarURL(user.Email), nil
++	}
++	return user.AvatarURL, nil
+ }
