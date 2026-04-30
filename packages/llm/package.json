@@ -1,8 +1,8 @@
 {
-  "name": "@review-agent/core",
+  "name": "@review-agent/llm",
   "version": "0.0.0",
   "private": true,
-  "description": "Domain logic, types, schemas. Zero I/O. Foundation of the review-agent monorepo.",
+  "description": "Provider-agnostic LLM abstraction + drivers (anthropic, openai, ...) over Vercel AI SDK.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -27,6 +27,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "1.0.0",
+    "@review-agent/core": "workspace:*",
+    "ai": "4.0.0",
     "zod": "3.25.76"
   },
   "devDependencies": {
