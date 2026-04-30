@@ -34,8 +34,54 @@ startNodeServer({ db, queue, webhookSecret, port: 8080 });
 ```
 
 `db` is a `@review-agent/db` `DbClient`, `queue` is any `QueueClient`
-(SQS impl ships in v0.2 #16), `webhookSecret` is the GitHub App webhook
-secret (Appendix B `GITHUB_WEBHOOK_SECRET`).
+(`createSqsQueueClient` for AWS, future Pub/Sub / Service Bus adapters
+plug in via the same interface), `webhookSecret` is the GitHub App
+webhook secret (Appendix B `GITHUB_WEBHOOK_SECRET`).
+
+## Worker
+
+The worker process consumes the queue, applies the synchronize debounce,
+and runs the review handler.
+
+```ts
+import { createSqsQueueClient, startWorker } from '@review-agent/server';
+
+const queue = createSqsQueueClient({ queueUrl: process.env.QUEUE_URL });
+await startWorker({
+  db,
+  queue,
+  handler: async (msg) => {
+    // run the runner / post comments
+  },
+});
+```
+
+Lambda SQS-trigger:
+
+```ts
+import { createSqsLambdaHandler } from '@review-agent/server';
+export const worker = createSqsLambdaHandler({ handler });
+```
+
+`createSqsLambdaHandler` returns a partial-batch-failure handler:
+records that fail validation or whose handler throws are reported back
+via `batchItemFailures` so SQS only redrives the failed messages
+(`maxReceiveCount: 5`, then DLQ).
+
+### Synchronize debounce (§11.2)
+
+`startWorker` checks the latest `review_state` row for the PR. If a
+synchronize message arrives whose `headSha` differs from the latest
+stored head and the latest state was updated within the debounce window
+(default 5s), the message is dropped — a fresher push is already
+in flight.
+
+### Idempotency cleanup (§7.2)
+
+`startIdempotencyCleanup` runs an hourly sweep that deletes
+`webhook_deliveries` rows older than 7 days. Election uses
+`pg_try_advisory_lock(0xabba0001)` so a multi-worker fleet only deletes
+once per cycle. Use `pg_cron` instead in environments that support it.
 
 ## Security
 
