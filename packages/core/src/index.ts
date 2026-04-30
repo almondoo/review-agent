@@ -31,6 +31,15 @@ export {
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export {
+  type ApplyLineShiftInput,
+  type ComputeDiffStrategyDeps,
+  computeDiffStrategy,
+  type DiffHunk,
+  type DiffStrategy,
+  type RunGit,
+  shiftLineThroughHunks,
+} from './incremental.js';
+export {
   type DequeueOpts,
   type JobMessage,
   JobMessageSchema,
