@@ -1,0 +1,30 @@
+services:
+  review-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: review-agent:local
+    environment:
+      # Action inputs (read by @actions/core via INPUT_<NAME>).
+      INPUT_GITHUB-TOKEN: ${GITHUB_TOKEN}
+      INPUT_ANTHROPIC-API-KEY: ${ANTHROPIC_API_KEY}
+      INPUT_LANGUAGE: ${REVIEW_AGENT_LANGUAGE:-en-US}
+      INPUT_CONFIG-PATH: ${REVIEW_AGENT_CONFIG_PATH:-.review-agent.yml}
+      INPUT_COST-CAP-USD: ${REVIEW_AGENT_COST_CAP_USD:-1.0}
+      # @actions/github context — read from GITHUB_REPOSITORY + GITHUB_EVENT_PATH.
+      GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}
+      GITHUB_EVENT_NAME: pull_request
+      GITHUB_EVENT_PATH: /workspace/event.json
+      GITHUB_SHA: ${GITHUB_SHA:-HEAD}
+      # Force entry point even though we're not on the Actions runner.
+      REVIEW_AGENT_ACTION_RUN: "1"
+    volumes:
+      # Provide a synthesized pull_request event payload.
+      - ./examples/local-run/event.json:/workspace/event.json:ro
+      # Optional: drop a `.review-agent.yml` next to docker-compose.yml and
+      # uncomment the next line to override defaults. Without it, the action
+      # falls back to defaultConfig() which is fine for smoke-testing.
+      # - ./.review-agent.yml:/app/.review-agent.yml:ro
+    working_dir: /app
+    # The action exits after one PR review.
+    restart: "no"

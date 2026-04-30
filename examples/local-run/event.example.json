@@ -1,0 +1,18 @@
+{
+  "action": "synchronize",
+  "number": 0,
+  "pull_request": {
+    "number": 0,
+    "draft": false,
+    "title": "Replace this with the PR title you want to review",
+    "body": "Replace this with the PR body.",
+    "user": { "login": "your-github-username" },
+    "head": { "sha": "0000000000000000000000000000000000000000" },
+    "base": { "sha": "0000000000000000000000000000000000000000" }
+  },
+  "repository": {
+    "owner": { "login": "your-org" },
+    "name": "your-repo",
+    "full_name": "your-org/your-repo"
+  }
+}

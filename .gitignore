@@ -35,3 +35,6 @@ Thumbs.db
 
 # worktrees
 .worktrees/
+
+# local-run scratch files (keep .example.json committed)
+examples/local-run/event.json
