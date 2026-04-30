@@ -10,7 +10,11 @@ export {
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export {
+  COST_LEDGER_PHASES,
+  COST_LEDGER_STATUSES,
+  type CostLedgerPhase,
   type CostLedgerRow,
+  type CostLedgerStatus,
   type InlineComment,
   type ReviewPayload,
   type ReviewState,
@@ -31,7 +35,7 @@ export type {
   Diff,
   DiffFile,
   ExistingComment,
-  PostInlineCommentInput,
+  GetDiffOpts,
   PR,
   PRRef,
   VCS,

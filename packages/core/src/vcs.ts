@@ -1,3 +1,5 @@
+import type { ReviewPayload, ReviewState } from './review.js';
+
 export type PRRef = {
   readonly platform: 'github' | 'codecommit';
   readonly owner: string;
@@ -36,10 +38,11 @@ export type Diff = {
 };
 
 export type CloneOpts = {
-  readonly destination: string;
   readonly depth?: number;
-  readonly partial?: boolean;
+  readonly filter?: 'blob:none' | 'tree:0' | 'none';
   readonly sparsePaths?: ReadonlyArray<string>;
+  readonly submodules?: boolean;
+  readonly lfs?: boolean;
 };
 
 export type ExistingComment = {
@@ -52,21 +55,19 @@ export type ExistingComment = {
   readonly createdAt: string;
 };
 
-export type PostInlineCommentInput = {
-  readonly path: string;
-  readonly line: number;
-  readonly side: 'LEFT' | 'RIGHT';
-  readonly body: string;
+export type GetDiffOpts = {
+  readonly sinceSha?: string;
 };
 
 export type VCS = {
   readonly platform: 'github' | 'codecommit';
   getPR(ref: PRRef): Promise<PR>;
-  getDiff(ref: PRRef): Promise<Diff>;
-  clone(ref: PRRef, opts: CloneOpts): Promise<void>;
-  listExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
-  postInlineComment(ref: PRRef, input: PostInlineCommentInput): Promise<void>;
-  postSummaryComment(ref: PRRef, body: string): Promise<void>;
-  upsertHiddenStateComment(ref: PRRef, body: string): Promise<void>;
-  readHiddenStateComment(ref: PRRef): Promise<string | null>;
+  getDiff(ref: PRRef, opts?: GetDiffOpts): Promise<Diff>;
+  getFile(ref: PRRef, path: string, sha: string): Promise<Buffer>;
+  cloneRepo(ref: PRRef, dir: string, opts: CloneOpts): Promise<void>;
+  postReview(ref: PRRef, review: ReviewPayload): Promise<void>;
+  postSummary(ref: PRRef, body: string): Promise<{ commentId: string }>;
+  getExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
+  getStateComment(ref: PRRef): Promise<ReviewState | null>;
+  upsertStateComment(ref: PRRef, state: ReviewState): Promise<void>;
 };

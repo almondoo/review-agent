@@ -8,41 +8,46 @@ export type InlineComment = {
   readonly path: string;
   readonly line: number;
   readonly side: Side;
-  readonly severity: Severity;
-  readonly title: string;
   readonly body: string;
-  readonly suggestion: string | null;
-  readonly category: string;
-};
-
-export type ReviewPayload = {
-  readonly summary: string;
-  readonly comments: ReadonlyArray<InlineComment>;
+  readonly fingerprint: string;
+  readonly severity: Severity;
+  readonly suggestion?: string;
 };
 
 export type ReviewState = {
   readonly schemaVersion: 1;
-  readonly headSha: string;
+  readonly lastReviewedSha: string;
   readonly baseSha: string;
-  readonly fingerprints: ReadonlyArray<string>;
   readonly reviewedAt: string;
-  readonly costUsd: number;
-  readonly tokensIn: number;
-  readonly tokensOut: number;
-  readonly model: string;
-  readonly provider: string;
+  readonly modelUsed: string;
+  readonly totalTokens: number;
+  readonly totalCostUsd: number;
+  readonly commentFingerprints: ReadonlyArray<string>;
 };
 
+export type ReviewPayload = {
+  readonly comments: ReadonlyArray<InlineComment>;
+  readonly summary: string;
+  readonly state: ReviewState;
+};
+
+export const COST_LEDGER_PHASES = ['injection_detect', 'review_main', 'review_retry'] as const;
+export type CostLedgerPhase = (typeof COST_LEDGER_PHASES)[number];
+
+export const COST_LEDGER_STATUSES = ['success', 'failed', 'cancelled', 'cost_exceeded'] as const;
+export type CostLedgerStatus = (typeof COST_LEDGER_STATUSES)[number];
+
 export type CostLedgerRow = {
-  readonly id: string;
-  readonly installationId: string | null;
-  readonly repo: string;
-  readonly prNumber: number;
+  readonly installationId: bigint;
+  readonly jobId: string;
   readonly provider: string;
   readonly model: string;
-  readonly tokensIn: number;
-  readonly tokensOut: number;
-  readonly cachedTokensIn: number;
+  readonly callPhase: CostLedgerPhase;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheCreationTokens: number;
   readonly costUsd: number;
-  readonly createdAt: string;
+  readonly status: CostLedgerStatus;
+  readonly createdAt: Date;
 };

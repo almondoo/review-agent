@@ -1,53 +1,50 @@
 import { z } from 'zod';
 import { SEVERITIES, SIDES } from './review.js';
 
-const MAX_TITLE_LENGTH = 200;
-const MAX_BODY_LENGTH = 4000;
-const MAX_SUGGESTION_LENGTH = 4000;
-const MAX_SUMMARY_LENGTH = 8000;
-const MAX_CATEGORY_LENGTH = 64;
-const MAX_PATH_LENGTH = 1024;
+const PATH_MAX = 500;
+const BODY_MAX = 5000;
+const SUGGESTION_MAX = 5000;
+const SUMMARY_MAX = 10_000;
+const LINE_MAX = 1_000_000;
+const COMMENTS_MAX = 50;
 
-const BROADCAST_MENTION = /@(everyone|channel|here)\b/i;
-const SHELL_HTTP_FETCH = /\b(curl|wget)\s+[^\s|]*?https?:\/\//i;
+const NO_NUL = /^[^\0]+$/;
+const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
 
 function notBroadcastMention(text: string): boolean {
-  return !BROADCAST_MENTION.test(text);
+  return !text.includes('@everyone') && !text.includes('@channel');
 }
 
 function notShellHttpFetch(text: string): boolean {
   return !SHELL_HTTP_FETCH.test(text);
 }
 
-const safeText = (min: number, max: number) =>
-  z
-    .string()
-    .min(min)
-    .max(max)
-    .refine(notBroadcastMention, {
-      message: 'Broadcast mentions (@everyone, @channel, @here) are not allowed.',
-    })
-    .refine(notShellHttpFetch, {
-      message: 'Shell commands fetching remote URLs (curl/wget http) are not allowed.',
-    });
+const safeBody = z
+  .string()
+  .min(1)
+  .max(BODY_MAX)
+  .refine(notBroadcastMention, {
+    message: 'must not include broadcast mentions',
+  })
+  .refine(notShellHttpFetch, {
+    message: 'must not include shell commands',
+  });
 
 export const InlineCommentSchema = z
   .object({
-    path: z.string().min(1).max(MAX_PATH_LENGTH),
-    line: z.number().int().positive(),
+    path: z.string().min(1).max(PATH_MAX).regex(NO_NUL),
+    line: z.number().int().positive().max(LINE_MAX),
     side: z.enum(SIDES),
+    body: safeBody,
     severity: z.enum(SEVERITIES),
-    title: safeText(1, MAX_TITLE_LENGTH),
-    body: safeText(1, MAX_BODY_LENGTH),
-    suggestion: safeText(0, MAX_SUGGESTION_LENGTH).nullable(),
-    category: z.string().min(1).max(MAX_CATEGORY_LENGTH),
+    suggestion: z.string().max(SUGGESTION_MAX).optional(),
   })
   .strict();
 
 export const ReviewOutputSchema = z
   .object({
-    summary: safeText(1, MAX_SUMMARY_LENGTH),
-    comments: z.array(InlineCommentSchema).max(100),
+    comments: z.array(InlineCommentSchema).max(COMMENTS_MAX),
+    summary: z.string().min(1).max(SUMMARY_MAX),
   })
   .strict();
 
