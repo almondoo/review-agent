@@ -70,6 +70,46 @@ importers:
         specifier: 2.1.5
         version: 2.1.5(@types/node@24.0.0)
 
+  packages/cli:
+    dependencies:
+      '@review-agent/config':
+        specifier: workspace:*
+        version: link:../config
+      '@review-agent/core':
+        specifier: workspace:*
+        version: link:../core
+      '@review-agent/llm':
+        specifier: workspace:*
+        version: link:../llm
+      '@review-agent/platform-github':
+        specifier: workspace:*
+        version: link:../platform-github
+      '@review-agent/runner':
+        specifier: workspace:*
+        version: link:../runner
+      commander:
+        specifier: 12.1.0
+        version: 12.1.0
+      yaml:
+        specifier: 2.6.1
+        version: 2.6.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.0.0
+        version: 24.0.0
+      '@vitest/coverage-v8':
+        specifier: 2.1.5
+        version: 2.1.5(vitest@2.1.5(@types/node@24.0.0))
+      tsup:
+        specifier: 8.3.0
+        version: 8.3.0(postcss@8.5.12)(tsx@4.19.2)(typescript@5.6.3)(yaml@2.6.1)
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 2.1.5
+        version: 2.1.5(@types/node@24.0.0)
+
   packages/config:
     dependencies:
       '@review-agent/core':
