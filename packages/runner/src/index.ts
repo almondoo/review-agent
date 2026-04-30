@@ -22,6 +22,16 @@ export {
 } from './middleware/index.js';
 export { type ComposeSystemPromptOptions, composeSystemPrompt } from './prompts/system-prompt.js';
 export { type UntrustedMetadata, wrapUntrusted } from './prompts/untrusted.js';
+export {
+  type LoadSkillDeps,
+  loadSkill,
+  loadSkills,
+  type RenderSkillsOptions,
+  renderSkillsBlock,
+  type Skill,
+  type SkillFrontmatter,
+  SkillFrontmatterSchema,
+} from './skill-loader.js';
 export { type BuildStateInput, buildReviewState } from './state-builder.js';
 export {
   createTools,

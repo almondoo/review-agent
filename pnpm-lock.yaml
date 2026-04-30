@@ -153,6 +153,9 @@ importers:
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: 24.0.0
