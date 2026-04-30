@@ -8,8 +8,16 @@ export {
 export { PROVIDER_DEFAULTS, type ProviderDefaults } from './defaults.js';
 
 export {
+  classifyOpenAIError,
+  createOpenAIProvider,
+  type OpenAIDriverDeps,
+  type OpenAIProvider,
+} from './openai.js';
+
+export {
   ANTHROPIC_PRICING,
   type ModelPrice,
+  OPENAI_PRICING,
   priceForModel,
 } from './pricing.js';
 

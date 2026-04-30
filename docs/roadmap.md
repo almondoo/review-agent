@@ -98,4 +98,11 @@ v0.1 — all 13 issues shipped on `main`:
 - #12 docs (README + SECURITY) — `ad3c754`
 - #13 self-review CI workflow — `ad3c754`
 
-v0.2 / v0.3: open, not started.
+v0.2 progress:
+
+- #14 platform-github GitHub App auth — `2d3bc34`
+- #18 db Drizzle + Postgres schema — `68bd5bd`
+- #24 llm OpenAI provider — pending commit
+- #15 / #16 / #17 / #19 / #20 / #21 / #22 / #23: open
+
+v0.3: open, not started.
