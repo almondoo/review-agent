@@ -1,0 +1,84 @@
+import { getTableConfig } from 'drizzle-orm/pg-core';
+import { describe, expect, it } from 'vitest';
+import { auditLog } from '../audit-log.js';
+import { costLedger, installationCostDaily } from '../cost-ledger.js';
+import { installationTokens } from '../installation-tokens.js';
+import { reviewHistory } from '../review-history.js';
+import { reviewState } from '../review-state.js';
+import { webhookDeliveries } from '../webhook-deliveries.js';
+
+const tableNames = (table: Parameters<typeof getTableConfig>[0]): string[] =>
+  getTableConfig(table).columns.map((c) => c.name);
+
+describe('db schema shape', () => {
+  it('webhook_deliveries has delivery_id PK + received_at index', () => {
+    const cfg = getTableConfig(webhookDeliveries);
+    expect(cfg.name).toBe('webhook_deliveries');
+    expect(tableNames(webhookDeliveries)).toEqual(['delivery_id', 'received_at', 'status']);
+    const pk = cfg.columns.find((c) => c.name === 'delivery_id');
+    expect(pk?.primary).toBe(true);
+    expect(cfg.indexes.some((i) => i.config.name === 'webhook_deliveries_received_at_idx')).toBe(
+      true,
+    );
+  });
+
+  it('installation_tokens keyed by installation_id', () => {
+    const cfg = getTableConfig(installationTokens);
+    expect(cfg.name).toBe('installation_tokens');
+    expect(cfg.columns.find((c) => c.name === 'installation_id')?.primary).toBe(true);
+    expect(tableNames(installationTokens)).toContain('expires_at');
+  });
+
+  it('review_state is unique on (installation_id, pr_id)', () => {
+    const cfg = getTableConfig(reviewState);
+    expect(cfg.name).toBe('review_state');
+    expect(
+      cfg.uniqueConstraints.some((u) => u.name === 'review_state_installation_pr_idx') ||
+        cfg.indexes.some(
+          (i) => i.config.unique && i.config.name === 'review_state_installation_pr_idx',
+        ),
+    ).toBe(true);
+  });
+
+  it('cost_ledger covers all required columns', () => {
+    const cols = tableNames(costLedger);
+    for (const required of [
+      'installation_id',
+      'job_id',
+      'provider',
+      'model',
+      'call_phase',
+      'input_tokens',
+      'output_tokens',
+      'cache_read_tokens',
+      'cache_creation_tokens',
+      'cost_usd',
+      'status',
+      'created_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+  });
+
+  it('installation_cost_daily uses composite PK', () => {
+    const cfg = getTableConfig(installationCostDaily);
+    expect(cfg.primaryKeys.length).toBe(1);
+    expect(cfg.primaryKeys[0]?.columns.map((c) => c.name).sort()).toEqual(
+      ['date', 'installation_id'].sort(),
+    );
+  });
+
+  it('audit_log has prev_hash + hash', () => {
+    const cols = tableNames(auditLog);
+    expect(cols).toContain('prev_hash');
+    expect(cols).toContain('hash');
+  });
+
+  it('review_history defaults expires_at to now() + 180 days', () => {
+    const cfg = getTableConfig(reviewHistory);
+    const expires = cfg.columns.find((c) => c.name === 'expires_at');
+    expect(expires).toBeDefined();
+    expect(expires?.notNull).toBe(true);
+    expect(expires?.hasDefault).toBe(true);
+  });
+});

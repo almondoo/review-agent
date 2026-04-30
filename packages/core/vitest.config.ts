@@ -7,7 +7,14 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
       include: ['src/**/*.ts'],
-      exclude: ['src/index.ts', 'src/vcs.ts', 'src/**/*.test.ts'],
+      exclude: [
+        'src/index.ts',
+        'src/vcs.ts',
+        'src/**/*.test.ts',
+        'src/db/schema/index.ts',
+        'src/db/schema/roles.ts',
+        'src/db/schema/__tests__/**',
+      ],
       thresholds: {
         lines: 95,
         functions: 95,

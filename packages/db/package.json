@@ -1,8 +1,8 @@
 {
-  "name": "@review-agent/core",
+  "name": "@review-agent/db",
   "version": "0.0.0",
   "private": true,
-  "description": "Domain logic, types, schemas. Zero I/O. Foundation of the review-agent monorepo.",
+  "description": "Postgres connection + migrate runner. Driver-side companion to @review-agent/core/db (which holds the Drizzle schema).",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -13,11 +13,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    },
-    "./db": {
-      "types": "./dist/db/schema/index.d.ts",
-      "import": "./dist/db/schema/index.js",
-      "require": "./dist/db/schema/index.cjs"
     }
   },
   "files": [
@@ -29,17 +24,23 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx src/cli/migrate.ts",
+    "db:generate": "drizzle-kit generate --config ../core/drizzle.config.ts",
+    "db:push": "drizzle-kit push --config ../core/drizzle.config.ts",
+    "db:studio": "drizzle-kit studio --config ../core/drizzle.config.ts"
   },
   "dependencies": {
+    "@review-agent/core": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "zod": "3.25.76"
+    "postgres": "3.4.5"
   },
   "devDependencies": {
     "@types/node": "24.0.0",
     "@vitest/coverage-v8": "2.1.5",
     "drizzle-kit": "0.30.0",
     "tsup": "8.3.0",
+    "tsx": "4.19.2",
     "typescript": "5.6.3",
     "vitest": "2.1.5"
   }

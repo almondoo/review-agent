@@ -84,11 +84,12 @@ See spec §21 for the full coding standard.
 ## Package boundaries
 
 ```
-core            # zero I/O. Types, schemas, fingerprint, errors. Foundation.
+core            # zero I/O. Types, schemas, fingerprint, errors, Drizzle schema. Foundation.
 platform-*      # VCS adapters. Implements VCS interface from core.
 llm             # LlmProvider abstraction + per-provider drivers.
 runner          # Agent loop, tool dispatch, middleware. Provider-agnostic.
 config          # .review-agent.yml schema/loader. Resolves provider.
+db              # postgres-js pool + migrate runner. Driver-side companion to core/db.
 action          # GitHub Action wrapper. Thin entry point.
 server          # Hono webhook server (Lambda + Node adapters). v0.2+.
 cli             # `review-agent` CLI bin. v0.2+.
