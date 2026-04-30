@@ -1,0 +1,38 @@
+name: review-agent
+description: AI code review for GitHub PRs. Posts inline comments and a summary using your own LLM API key.
+author: almondoo
+
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  github-token:
+    description: GitHub token for posting comments. Defaults to `secrets.GITHUB_TOKEN`.
+    required: false
+    default: ${{ github.token }}
+  anthropic-api-key:
+    description: Anthropic API key (BYOK). Required for the default Anthropic provider.
+    required: false
+  language:
+    description: Output language for review comments (ISO 639-1 + region). Defaults to en-US.
+    required: false
+    default: en-US
+  config-path:
+    description: Path to .review-agent.yml inside the repository. Defaults to .review-agent.yml.
+    required: false
+    default: .review-agent.yml
+  cost-cap-usd:
+    description: Per-PR cost cap in USD. Defaults to 1.0.
+    required: false
+    default: '1.0'
+
+outputs:
+  posted-comments:
+    description: Number of inline comments posted in this run.
+  cost-usd:
+    description: USD cost of this review.
+
+runs:
+  using: node20
+  main: dist/index.js

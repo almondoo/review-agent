@@ -25,10 +25,7 @@
         },
         "profile": {
           "type": "string",
-          "enum": [
-            "chill",
-            "assertive"
-          ],
+          "enum": ["chill", "assertive"],
           "default": "chill"
         },
         "provider": {
@@ -76,10 +73,7 @@
               "default": true
             }
           },
-          "required": [
-            "type",
-            "model"
-          ],
+          "required": ["type", "model"],
           "additionalProperties": false
         },
         "reviews": {
@@ -102,11 +96,7 @@
                     "type": "string",
                     "minLength": 1
                   },
-                  "default": [
-                    "main",
-                    "master",
-                    "develop"
-                  ]
+                  "default": ["main", "master", "develop"]
                 },
                 "paths": {
                   "type": "array",
@@ -141,10 +131,7 @@
                     "minLength": 1
                   }
                 },
-                "required": [
-                  "path",
-                  "instructions"
-                ],
+                "required": ["path", "instructions"],
                 "additionalProperties": false
               },
               "default": []
@@ -165,11 +152,7 @@
                 "type": "string",
                 "minLength": 1
               },
-              "default": [
-                "dependabot[bot]",
-                "renovate[bot]",
-                "github-actions[bot]"
-              ]
+              "default": ["dependabot[bot]", "renovate[bot]", "github-actions[bot]"]
             }
           },
           "additionalProperties": false,
