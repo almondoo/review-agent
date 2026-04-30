@@ -89,7 +89,7 @@ export function createAnthropicProvider(
   }
   if (!config.model) throw new Error('createAnthropicProvider requires config.model');
 
-  const apiKey = config.apiKey ?? process.env['ANTHROPIC_API_KEY'];
+  const apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     throw new Error(
       'Anthropic API key not configured. Set ANTHROPIC_API_KEY env or provide config.apiKey.',
