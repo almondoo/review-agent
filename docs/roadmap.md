@@ -103,9 +103,13 @@ v0.2 progress:
 - #14 platform-github GitHub App auth — `2d3bc34`
 - #15 server Hono webhook — `45bb542`
 - #16 server SQS + idempotency cleanup — `c0fe860`
+- #17 platform-codecommit adapter — `9354788`
 - #18 db Drizzle + Postgres schema — `68bd5bd`
+- #19 incremental review (rebase + line shift + state mirror) — `2331ad6`
+- #20 OTel + Langfuse + body redaction — `91e216d`
 - #21 cost ledger + audit HMAC chain — `8d48d9a`
+- #22 AWS Lambda + Terraform + deployment docs — see latest commit
+- #23 review-agent CLI — `7983256`
 - #24 llm OpenAI provider — `3815cea`
-- #17 / #19 / #20 / #22 / #23: open
 
 v0.3: open, not started.
