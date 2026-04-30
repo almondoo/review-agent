@@ -1,0 +1,187 @@
+import { lstat, readdir, readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+import { ToolDispatchRefusedError } from '@review-agent/core';
+
+const DENY_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)\.env(\..*)?$/,
+  /(^|\/)secrets?(\/|$)/i,
+  /(^|\/)private(\/|$)/i,
+  /(^|\/)credentials?(\/|$)/i,
+  /\.(key|pem|p12|pfx)$/i,
+  /credentials.*\.json$/i,
+  /service-account.*\.json$/i,
+  /^\.aws\/credentials$/,
+];
+
+export const TOOL_NAMES = ['read_file', 'glob', 'grep'] as const;
+export type ToolName = (typeof TOOL_NAMES)[number];
+
+export type Tools = {
+  read_file(args: { path: string }): Promise<string>;
+  glob(args: { pattern: string }): Promise<ReadonlyArray<string>>;
+  grep(args: { pattern: string; path?: string }): Promise<ReadonlyArray<string>>;
+};
+
+export type ToolDeps = {
+  readonly readFile?: (path: string, encoding: 'utf8') => Promise<string>;
+  readonly lstat?: typeof lstat;
+  readonly readdir?: typeof readdir;
+};
+
+const MAX_FILE_SIZE = 1_000_000;
+
+function checkDenyList(rel: string): void {
+  for (const pattern of DENY_PATTERNS) {
+    if (pattern.test(rel)) {
+      throw new ToolDispatchRefusedError('read_file', `path matches deny-list: '${rel}'`);
+    }
+  }
+}
+
+async function resolveSafePath(
+  workspace: string,
+  requested: string,
+  lstatFn: typeof lstat,
+): Promise<string> {
+  if (!requested) throw new ToolDispatchRefusedError('read_file', 'empty path');
+  if (requested.includes('\0'))
+    throw new ToolDispatchRefusedError('read_file', 'path contains NUL byte');
+  if (path.isAbsolute(requested))
+    throw new ToolDispatchRefusedError('read_file', `absolute path: '${requested}'`);
+  if (requested.startsWith('~'))
+    throw new ToolDispatchRefusedError('read_file', `home-expanded path: '${requested}'`);
+
+  const absolute = path.resolve(workspace, requested);
+  const rel = path.relative(workspace, absolute);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new ToolDispatchRefusedError('read_file', `path escapes workspace: '${requested}'`);
+  }
+  checkDenyList(rel);
+
+  let cursor = workspace;
+  for (const segment of rel.split(path.sep)) {
+    if (!segment) continue;
+    cursor = path.join(cursor, segment);
+    const stat = await lstatFn(cursor).catch(() => null);
+    if (stat?.isSymbolicLink()) {
+      throw new ToolDispatchRefusedError('read_file', `path traverses a symlink: '${rel}'`);
+    }
+  }
+
+  return absolute;
+}
+
+export function createTools(workspace: string, deps: ToolDeps = {}): Tools {
+  const readFn = (deps.readFile ?? readFile) as (p: string, enc: 'utf8') => Promise<string>;
+  const lstatFn = deps.lstat ?? lstat;
+  const readdirFn = deps.readdir ?? readdir;
+
+  return {
+    read_file: async ({ path: requested }) => {
+      const absolute = await resolveSafePath(workspace, requested, lstatFn);
+      const content = await readFn(absolute, 'utf8');
+      if (content.length > MAX_FILE_SIZE) {
+        return `${content.slice(0, MAX_FILE_SIZE)}\n[...truncated at ${MAX_FILE_SIZE} chars]`;
+      }
+      return content;
+    },
+    glob: async ({ pattern }) => {
+      if (typeof pattern !== 'string' || !pattern) {
+        throw new ToolDispatchRefusedError('glob', 'empty pattern');
+      }
+      if (pattern.includes('..')) {
+        throw new ToolDispatchRefusedError('glob', `traversal pattern: '${pattern}'`);
+      }
+      return walkAndMatch(workspace, pattern, readdirFn);
+    },
+    grep: async ({ pattern, path: scope }) => {
+      if (!pattern) throw new ToolDispatchRefusedError('grep', 'empty pattern');
+      const target = scope ? await resolveSafePath(workspace, scope, lstatFn) : workspace;
+      return grepInDir(target, pattern, readdirFn, readFn);
+    },
+  };
+}
+
+async function walkAndMatch(
+  root: string,
+  pattern: string,
+  readdirFn: typeof readdir,
+): Promise<string[]> {
+  const matcher = patternToRegExp(pattern);
+  const out: string[] = [];
+  await walk(root, root, matcher, out, readdirFn);
+  return out;
+}
+
+async function walk(
+  root: string,
+  dir: string,
+  matcher: RegExp,
+  out: string[],
+  readdirFn: typeof readdir,
+): Promise<void> {
+  const entries = await readdirFn(dir, { withFileTypes: true }).catch(() => []);
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    const rel = path.relative(root, full);
+    if (DENY_PATTERNS.some((p) => p.test(rel))) continue;
+    if (e.isDirectory()) {
+      await walk(root, full, matcher, out, readdirFn);
+    } else if (e.isFile() && matcher.test(rel)) {
+      out.push(rel);
+    }
+  }
+}
+
+function patternToRegExp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regex = escaped.replace(/\*\*/g, '§§').replace(/\*/g, '[^/]*').replace(/§§/g, '.*');
+  return new RegExp(`^${regex}$`);
+}
+
+async function grepInDir(
+  scope: string,
+  pattern: string,
+  readdirFn: typeof readdir,
+  readFn: (p: string, enc: 'utf8') => Promise<string>,
+): Promise<string[]> {
+  const re = new RegExp(pattern);
+  const out: string[] = [];
+  const walkAll = async (dir: string): Promise<void> => {
+    const entries = await readdirFn(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      const rel = path.relative(scope, full);
+      if (DENY_PATTERNS.some((p) => p.test(rel))) continue;
+      if (e.isDirectory()) await walkAll(full);
+      else if (e.isFile()) {
+        const text = await readFn(full, 'utf8').catch(() => '');
+        text.split('\n').forEach((line, i) => {
+          if (re.test(line)) out.push(`${rel}:${i + 1}: ${line}`);
+        });
+      }
+    }
+  };
+  await walkAll(scope);
+  return out;
+}
+
+export async function dispatchTool(name: string, args: unknown, tools: Tools): Promise<unknown> {
+  if (!isToolName(name)) {
+    throw new ToolDispatchRefusedError(name, 'tool not in whitelist');
+  }
+  if (typeof args !== 'object' || args === null) {
+    throw new ToolDispatchRefusedError(name, 'invalid args (must be object)');
+  }
+  if (name === 'read_file') {
+    return tools.read_file(args as { path: string });
+  }
+  if (name === 'glob') {
+    return tools.glob(args as { pattern: string });
+  }
+  return tools.grep(args as { pattern: string; path?: string });
+}
+
+function isToolName(name: string): name is ToolName {
+  return (TOOL_NAMES as ReadonlyArray<string>).includes(name);
+}

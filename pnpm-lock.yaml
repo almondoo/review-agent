@@ -111,6 +111,31 @@ importers:
         specifier: 2.1.5
         version: 2.1.5(@types/node@24.0.0)
 
+  packages/runner:
+    dependencies:
+      '@review-agent/core':
+        specifier: workspace:*
+        version: link:../core
+      '@review-agent/llm':
+        specifier: workspace:*
+        version: link:../llm
+    devDependencies:
+      '@types/node':
+        specifier: 24.0.0
+        version: 24.0.0
+      '@vitest/coverage-v8':
+        specifier: 2.1.5
+        version: 2.1.5(vitest@2.1.5(@types/node@24.0.0))
+      tsup:
+        specifier: 8.3.0
+        version: 8.3.0(postcss@8.5.12)(typescript@5.6.3)
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 2.1.5
+        version: 2.1.5(@types/node@24.0.0)
+
 packages:
 
   '@ai-sdk/anthropic@1.0.0':
