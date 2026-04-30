@@ -286,6 +286,43 @@ importers:
         specifier: 2.1.5
         version: 2.1.5(@types/node@24.0.0)
 
+  packages/server:
+    dependencies:
+      '@hono/node-server':
+        specifier: 1.13.7
+        version: 1.13.7(hono@4.6.13)
+      '@review-agent/core':
+        specifier: workspace:*
+        version: link:../core
+      '@review-agent/db':
+        specifier: workspace:*
+        version: link:../db
+      drizzle-orm:
+        specifier: 0.45.2
+        version: 0.45.2(@libsql/client-wasm@0.17.3)(@opentelemetry/api@1.9.0)(better-sqlite3@11.10.0)(postgres@3.4.5)
+      hono:
+        specifier: 4.6.13
+        version: 4.6.13
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: 24.0.0
+        version: 24.0.0
+      '@vitest/coverage-v8':
+        specifier: 2.1.5
+        version: 2.1.5(vitest@2.1.5(@types/node@24.0.0))
+      tsup:
+        specifier: 8.3.0
+        version: 8.3.0(postcss@8.5.12)(tsx@4.19.2)(typescript@5.6.3)(yaml@2.6.1)
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 2.1.5
+        version: 2.1.5(@types/node@24.0.0)
+
 packages:
 
   '@actions/core@1.11.1':
@@ -1436,6 +1473,12 @@ packages:
     resolution: {integrity: sha512-rc1hOQtjIWGxcxpb9aHAfLpIctjEnsDehj0DAiVfBlmT84uvR0uUtN2hEi/ecvWVjXUGf5qPF4qEgiLOx1YIMQ==}
     engines: {node: '>=6'}
     hasBin: true
+
+  '@hono/node-server@1.13.7':
+    resolution: {integrity: sha512-kTfUMsoloVKtRA2fLiGSd9qBddmru9KadNyhJCwgKBxTiNkaAJEwkVN9KV/rS4HtmmNRtUh6P+YpmjRMl0d9vQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
 
   '@ibm-cloud/watsonx-ai@1.7.11':
     resolution: {integrity: sha512-sBMj/YhV5qvJdBpvgutmX6vLUUnSwvhFaJk7r3hiMh5aB7BQWQ+5zyzvSPLywOwTWZbgy4v8jxTUhR6jb+kguw==}
@@ -3520,6 +3563,10 @@ packages:
 
   hoist-non-react-statics@3.3.2:
     resolution: {integrity: sha512-/gGivxi8JPKWNm/W0jSmzcMPpfpPLc3dY/6GxhX2hQ9iGj3aDfklV4ET7NjKpSinLpJ5vafa9iiGIEZg10SfBw==}
+
+  hono@4.6.13:
+    resolution: {integrity: sha512-haV0gaMdSjy9URCRN9hxBPlqHa7fMm/T72kAImIxvw4eQLbNz1rgjN4hHElLJSieDiNuiIAXC//cC6YGz2KCbg==}
+    engines: {node: '>=16.9.0'}
 
   html-escaper@2.0.2:
     resolution: {integrity: sha512-H2iMtd0I4Mt5eYiapRdIDjp+XzelXQ0tFE4JS7YFwFevXXMmOp9myNrUvCg0D6ws8iqkRPBfKHgbwig1SmlLfg==}
@@ -6653,6 +6700,10 @@ snapshots:
       protobufjs: 7.5.6
       yargs: 17.7.2
 
+  '@hono/node-server@1.13.7(hono@4.6.13)':
+    dependencies:
+      hono: 4.6.13
+
   '@ibm-cloud/watsonx-ai@1.7.11(typescript@5.6.3)':
     dependencies:
       '@types/node': 18.19.130
@@ -8901,6 +8952,8 @@ snapshots:
   hoist-non-react-statics@3.3.2:
     dependencies:
       react-is: 16.13.1
+
+  hono@4.6.13: {}
 
   html-escaper@2.0.2: {}
 

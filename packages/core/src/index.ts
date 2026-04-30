@@ -10,6 +10,12 @@ export {
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export {
+  type DequeueOpts,
+  type JobMessage,
+  JobMessageSchema,
+  type QueueClient,
+} from './queue.js';
+export {
   COST_LEDGER_PHASES,
   COST_LEDGER_STATUSES,
   type CostLedgerPhase,
@@ -23,7 +29,6 @@ export {
   SIDES,
   type Side,
 } from './review.js';
-
 export {
   type InlineCommentInput,
   InlineCommentSchema,

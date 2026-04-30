@@ -91,7 +91,7 @@ runner          # Agent loop, tool dispatch, middleware. Provider-agnostic.
 config          # .review-agent.yml schema/loader. Resolves provider.
 db              # postgres-js pool + migrate runner. Driver-side companion to core/db.
 action          # GitHub Action wrapper. Thin entry point.
-server          # Hono webhook server (Lambda + Node adapters). v0.2+.
+server          # Hono webhook server (Lambda + Node adapters).
 cli             # `review-agent` CLI bin. v0.2+.
 eval            # promptfoo + golden PR fixtures. Not in build artifact.
 ```

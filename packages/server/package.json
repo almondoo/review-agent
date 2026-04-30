@@ -1,0 +1,52 @@
+{
+  "name": "@review-agent/server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Hono webhook server. Receives GitHub webhooks, verifies signatures, idempotency-checks, and enqueues review jobs.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./serverless": {
+      "types": "./dist/serverless.d.ts",
+      "import": "./dist/serverless.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.13.7",
+    "@review-agent/core": "workspace:*",
+    "@review-agent/db": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.6.13",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "@vitest/coverage-v8": "2.1.5",
+    "tsup": "8.3.0",
+    "typescript": "5.6.3",
+    "vitest": "2.1.5"
+  }
+}
