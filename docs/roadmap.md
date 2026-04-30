@@ -101,8 +101,11 @@ v0.1 — all 13 issues shipped on `main`:
 v0.2 progress:
 
 - #14 platform-github GitHub App auth — `2d3bc34`
+- #15 server Hono webhook — `45bb542`
+- #16 server SQS + idempotency cleanup — `c0fe860`
 - #18 db Drizzle + Postgres schema — `68bd5bd`
+- #21 cost ledger + audit HMAC chain — pending commit
 - #24 llm OpenAI provider — `3815cea`
-- #15 / #16 / #17 / #19 / #20 / #21 / #22 / #23: open
+- #17 / #19 / #20 / #22 / #23: open
 
 v0.3: open, not started.

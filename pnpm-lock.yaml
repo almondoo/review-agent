@@ -167,10 +167,17 @@ importers:
         version: 2.1.5(@types/node@24.0.0)
 
   packages/eval:
+    dependencies:
+      '@review-agent/db':
+        specifier: workspace:*
+        version: link:../db
     devDependencies:
       promptfoo:
         specifier: 0.96.0
         version: 0.96.0(@aws-sdk/client-bedrock-runtime@3.1039.0)(@aws-sdk/credential-provider-sso@3.972.37)(@azure/identity@4.13.1)(@azure/openai-assistants@1.0.0-beta.6)(@fal-ai/serverless-client@0.14.3)(@ibm-cloud/watsonx-ai@1.7.11(typescript@5.6.3))(@ibm-generative-ai/node-sdk@2.0.6(@langchain/core@1.1.42(@opentelemetry/api@1.9.0)(openai@4.104.0(ws@8.20.0)(zod@3.25.76))(ws@8.20.0)))(@libsql/client-wasm@0.17.3)(@opentelemetry/api@1.9.0)(@playwright/browser-chromium@1.59.1)(@smithy/node-http-handler@4.6.1)(@types/react@19.2.14)(babel-plugin-macros@3.1.0)(google-auth-library@9.15.1)(ibm-cloud-sdk-core@5.4.12)(langfuse@3.38.20)(node-sql-parser@5.4.0)(playwright-extra@4.3.6(playwright-core@1.59.1)(playwright@1.59.1))(playwright@1.59.1)(postgres@3.4.5)(puppeteer-extra-plugin-stealth@2.11.2(playwright-extra@4.3.6(playwright-core@1.59.1)(playwright@1.59.1)))(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      tsx:
+        specifier: 4.19.2
+        version: 4.19.2
 
   packages/llm:
     dependencies:

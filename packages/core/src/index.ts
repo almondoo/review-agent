@@ -1,4 +1,25 @@
 export {
+  AUDIT_GENESIS_HASH,
+  type AuditEvent,
+  type AuditRow,
+  appendAuditRow,
+  type ChainBreak,
+  type ChainLink,
+  canonicalPayload,
+  computeAuditHash,
+  verifyAuditChain,
+} from './audit.js';
+export {
+  COST_THRESHOLDS,
+  type CostGuardDecision,
+  type CostLedgerRecorder,
+  type CostTotals,
+  type CostTotalsReader,
+  type DecideCostInput,
+  decideCostAction,
+  type RecordPhaseInput,
+} from './cost.js';
+export {
   ConfigError,
   ContextLengthError,
   CostExceededError,

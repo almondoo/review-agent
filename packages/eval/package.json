@@ -7,9 +7,14 @@
   "type": "module",
   "scripts": {
     "eval": "promptfoo eval -c promptfooconfig.yaml",
-    "eval:view": "promptfoo view"
+    "eval:view": "promptfoo view",
+    "verify:audit": "tsx scripts/verify-audit-chain.ts"
+  },
+  "dependencies": {
+    "@review-agent/db": "workspace:*"
   },
   "devDependencies": {
-    "promptfoo": "0.96.0"
+    "promptfoo": "0.96.0",
+    "tsx": "4.19.2"
   }
 }
