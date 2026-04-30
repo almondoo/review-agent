@@ -82,5 +82,8 @@ gh issue view <N> --repo almondoo/review-agent
 
 ## Status
 
-- v0.1 #1 ✅ shipped on `main` (commits `4475e3d`, `e681bf4`).
+- v0.1 #1 ✅ shipped on `main` (commit `e681bf4`); core interfaces realigned to spec in `eeb151a`.
+- v0.1 #2 ✅ shipped on `main` (commit `c916200`).
+- v0.1 #3 ✅ shipped on `main` (commit `e7f3174`).
+- v0.1 #4 ✅ shipped on `main` (commit `6377814`).
 - All other issues: open, not started.
