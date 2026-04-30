@@ -27,8 +27,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "3.1039.0",
+    "@google-cloud/secret-manager": "5.6.0",
+    "@octokit/auth-app": "7.1.4",
+    "@octokit/plugin-retry": "7.1.2",
+    "@octokit/plugin-throttling": "9.4.0",
     "@octokit/rest": "21.0.2",
     "@review-agent/core": "workspace:*",
+    "@review-agent/db": "workspace:*",
+    "drizzle-orm": "0.45.2",
     "simple-git": "3.27.0"
   },
   "devDependencies": {
