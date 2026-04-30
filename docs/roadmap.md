@@ -104,7 +104,7 @@ v0.2 progress:
 - #15 server Hono webhook — `45bb542`
 - #16 server SQS + idempotency cleanup — `c0fe860`
 - #18 db Drizzle + Postgres schema — `68bd5bd`
-- #21 cost ledger + audit HMAC chain — pending commit
+- #21 cost ledger + audit HMAC chain — `8d48d9a`
 - #24 llm OpenAI provider — `3815cea`
 - #17 / #19 / #20 / #22 / #23: open
 
