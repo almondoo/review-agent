@@ -9,7 +9,7 @@ under the [LICENSE](./LICENSE) so that anyone can read, learn from, and reuse
 it, but external contributions (PRs, issues) are not accepted.
 
 - **Pull Requests**: Closed without review. See [CONTRIBUTING.md](./.github/CONTRIBUTING.md).
-- **Issues**: Disabled.
+- **Issues**: Used for internal task tracking only. External issue reports are not accepted.
 - **Forks**: Welcome — feel free to fork for your own use.
 
 ## Security

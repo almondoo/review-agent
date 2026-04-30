@@ -9,8 +9,9 @@ maintained as a personal project and **external contributions are not accepted**
 ## What this means
 
 - **Pull Requests**: Will be closed without review. Please do not open PRs.
-- **Issues**: Issue tracking is disabled. Please do not expect bug reports or
-  feature requests to be addressed.
+- **Issues**: Used for internal task tracking only. External issue reports
+  are not accepted; please do not open issues for bug reports or feature
+  requests.
 - **Forks**: You are welcome to fork this repository and modify it for your own
   use, subject to the LICENSE.
 
