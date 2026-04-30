@@ -94,8 +94,8 @@ v0.1 — all 13 issues shipped on `main`:
 - #8 gitleaks integration — `47bb848`
 - #9 hidden state + dedup — `47bb848`
 - #10 sandbox baseline — `fe87e5c`
-- #11 eval scaffold — pending commit
-- #12 docs (README + SECURITY) — pending commit
-- #13 self-review CI workflow — pending commit
+- #11 eval scaffold — `ad3c754`
+- #12 docs (README + SECURITY) — `ad3c754`
+- #13 self-review CI workflow — `ad3c754`
 
 v0.2 / v0.3: open, not started.
