@@ -1,0 +1,7 @@
+{
+  "title": "feat: add no-op helper",
+  "body": "Trivial helper for an upcoming feature.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "feat/noop"
+}

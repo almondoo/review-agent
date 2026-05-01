@@ -1,0 +1,7 @@
+{
+  "title": "config: sample env",
+  "body": "Adds a sample env file for new contributors.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "docs/sample-env"
+}

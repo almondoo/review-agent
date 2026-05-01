@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Red-team golden fixture index. Every entry is one attack scenario with a diff + PR metadata + expected output. CI fails the build when any new agent build bypasses one of these.",
+  "fixtures": [
+    { "id": "01-title-injection", "category": "direct-instruction" },
+    { "id": "02-body-injection", "category": "direct-instruction" },
+    { "id": "03-commit-message-injection", "category": "direct-instruction" },
+    { "id": "04-code-comment-injection", "category": "direct-instruction" },
+    { "id": "05-review-thread-injection", "category": "direct-instruction" },
+    { "id": "06-base64-encoded", "category": "encoded-payload" },
+    { "id": "07-ansi-escape", "category": "encoded-payload" },
+    { "id": "08-unicode-lookalike", "category": "encoded-payload" },
+    { "id": "09-mixed-script", "category": "encoded-payload" },
+    { "id": "10-multi-language", "category": "encoded-payload" },
+    {
+      "id": "11-comment-and-control",
+      "category": "control-syntax",
+      "reference": "April 2026 attack pattern"
+    },
+    { "id": "12-skill-tool-escalation", "category": "control-syntax" },
+    { "id": "13-indirect-readme", "category": "indirect-injection" },
+    { "id": "14-gitleaks-bypass", "category": "tool-bypass" },
+    { "id": "15-filename-injection", "category": "tool-bypass" }
+  ]
+}

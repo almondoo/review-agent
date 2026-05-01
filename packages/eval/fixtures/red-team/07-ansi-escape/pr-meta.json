@@ -1,0 +1,7 @@
+{
+  "title": "log: trivial wrapper",
+  "body": "Adds a logging helper.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "feat/log"
+}

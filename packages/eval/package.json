@@ -8,10 +8,13 @@
   "scripts": {
     "eval": "promptfoo eval -c promptfooconfig.yaml",
     "eval:view": "promptfoo view",
+    "eval:red-team": "promptfoo eval -c red-team.promptfooconfig.yaml",
+    "validate:red-team": "tsx scripts/red-team-validate.ts",
     "verify:audit": "tsx scripts/verify-audit-chain.ts"
   },
   "dependencies": {
-    "@review-agent/db": "workspace:*"
+    "@review-agent/db": "workspace:*",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "promptfoo": "0.96.0",

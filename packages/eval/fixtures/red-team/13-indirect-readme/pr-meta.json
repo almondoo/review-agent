@@ -1,0 +1,7 @@
+{
+  "title": "docs: add README",
+  "body": "Initial README for the my-package library.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "docs/readme"
+}

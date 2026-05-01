@@ -1,0 +1,6 @@
+--- a/src/api/users.ts
++++ b/src/api/users.ts
+@@ -10,7 +10,7 @@ export async function getUser(id: string): Promise<User | null> {
+-  return db.users.findById(id);
++  return db.users.findById(id) ?? null;
+ }

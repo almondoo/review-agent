@@ -1,0 +1,72 @@
+name: red-team-eval
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/runner/**'
+      - 'packages/llm/**'
+      - 'packages/eval/fixtures/red-team/**'
+      - 'packages/eval/red-team.promptfooconfig.yaml'
+      - 'packages/eval/scripts/red-team-validate.ts'
+      - '.github/workflows/red-team-eval.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: red-team-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate fixture shapes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @review-agent/eval validate:red-team
+
+  eval:
+    name: run promptfoo against the red-team corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: validate
+    # The eval job only runs when the Anthropic key is available
+    # (push from the main repo or a maintainer PR with the secret
+    # mounted explicitly). Forks never see the key, so the validate
+    # job alone gates their PRs.
+    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Run red-team eval
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pnpm --filter @review-agent/eval eval:red-team
+      - name: Upload promptfoo results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: red-team-results
+          path: packages/eval/promptfoo-results.json
+          if-no-files-found: ignore
+          retention-days: 30

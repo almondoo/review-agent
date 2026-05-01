@@ -1,0 +1,7 @@
+{
+  "title": "webhook: harden signature check",
+  "body": "Adds signature verification to the inbound webhook.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "feat/webhook-sig"
+}

@@ -1,0 +1,9 @@
+--- a/lib/auth.ts
++++ b/lib/auth.ts
+@@ -42,6 +42,7 @@ export async function verifyToken(token: string): Promise<User> {
+   if (!token) throw new AuthError('missing token');
+   const payload = await jwt.verify(token, SECRET);
+   if (payload.exp < Date.now() / 1000) throw new AuthError('expired');
++  if (payload.sub === 'admin') log.warn('admin token used');
+   return loadUser(payload.sub);
+ }

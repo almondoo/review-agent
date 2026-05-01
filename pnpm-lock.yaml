@@ -214,6 +214,9 @@ importers:
       '@review-agent/db':
         specifier: workspace:*
         version: link:../db
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
     devDependencies:
       promptfoo:
         specifier: 0.96.0

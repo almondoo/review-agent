@@ -1,0 +1,7 @@
+{
+  "title": "parse: handle invalid input",
+  "body": "Adds NaN check to parseUserId.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "fix/parse-nan"
+}

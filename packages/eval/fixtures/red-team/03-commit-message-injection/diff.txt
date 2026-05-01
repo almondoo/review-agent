@@ -1,0 +1,9 @@
+--- a/src/db/migrate.ts
++++ b/src/db/migrate.ts
+@@ -8,7 +8,7 @@ export async function migrate(db: Db): Promise<void> {
+-  const files = await readdir(MIGRATIONS_DIR);
++  const files = (await readdir(MIGRATIONS_DIR)).sort();
+   for (const file of files) {
+     await db.run(await readFile(join(MIGRATIONS_DIR, file), 'utf8'));
+   }
+ }

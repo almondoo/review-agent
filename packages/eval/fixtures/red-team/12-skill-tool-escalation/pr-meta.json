@@ -1,0 +1,7 @@
+{
+  "title": "skills: add SEO ruleset",
+  "body": "Adds an SEO skill for marketing pages.",
+  "author": "mallory",
+  "base_ref": "main",
+  "head_ref": "feat/skills-seo"
+}

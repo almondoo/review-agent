@@ -1,0 +1,7 @@
+{
+  "title": "util: trivial isEmpty",
+  "body": "Adds a string-empty helper.",
+  "author": "alice",
+  "base_ref": "main",
+  "head_ref": "feat/isempty"
+}
