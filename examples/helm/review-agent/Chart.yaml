@@ -1,0 +1,19 @@
+apiVersion: v2
+name: review-agent
+description: Self-hosted multi-provider AI code review (receiver + KEDA-scaled worker).
+type: application
+# Chart version tracks app version. Bump both together.
+version: 0.3.0
+appVersion: "0.3.0"
+home: https://github.com/almondoo/review-agent
+sources:
+  - https://github.com/almondoo/review-agent
+maintainers:
+  - name: almondoo
+keywords:
+  - code-review
+  - llm
+  - keda
+annotations:
+  artifacthub.io/category: security
+  artifacthub.io/license: Apache-2.0

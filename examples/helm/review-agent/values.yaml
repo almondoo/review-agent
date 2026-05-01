@@ -1,0 +1,106 @@
+# review-agent — default values.
+#
+# This chart is cloud-agnostic. The KEDA trigger differs per cloud
+# — see values-aws.yaml / values-gcp.yaml / values-azure.yaml.
+
+image:
+  repository: ghcr.io/almondoo/review-agent
+  tag: ""                      # defaults to .Chart.appVersion when empty
+  pullPolicy: IfNotPresent
+  pullSecrets: []              # []corev1.LocalObjectReference
+
+# Cosign verification is enforced via Sigstore Policy Controller in
+# your cluster — install it separately and document the Policy CR
+# in your operator runbook. This chart does NOT install the policy
+# controller; it just consumes its admission gate.
+
+receiver:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: false
+    className: ""              # e.g. "nginx" / "alb"
+    annotations: {}
+    hosts: []                  # [{ host: webhooks.example.com, paths: ["/webhook", "/healthz"] }]
+    tls: []                    # [{ hosts: [...], secretName: "..." }]
+
+worker:
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1, memory: 2Gi }
+  # KEDA ScaledObject defaults — overridden per cloud.
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    maxReplicaCount: 10
+    cooldownPeriod: 300
+    pollingInterval: 30
+    # The trigger block must be supplied at install time. See
+    # values-{aws,gcp,azure}.yaml for ready-to-use blocks.
+    triggers: []
+
+# Non-secret config. Mounted as a ConfigMap and surfaced via env.
+config:
+  NODE_ENV: production
+  REVIEW_AGENT_LANGUAGE: en-US
+  LANGFUSE_LOG_BODIES: "0"
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ""
+  # Queue + DB connection strings live alongside the rest of the
+  # operator-supplied config. Override per environment.
+  QUEUE_URL: ""
+  DATABASE_URL: ""
+  GITHUB_APP_ID: ""
+
+# Secrets policy. Two compatible options:
+#  - existingSecret: refer to a Secret managed out-of-band
+#    (Sealed Secrets, external-secrets, kubectl create secret).
+#  - inline: NOT supported here on purpose. Inline plaintext in
+#    values.yaml is too easy to accidentally commit; use one of the
+#    operator-managed paths.
+secrets:
+  existingSecret: review-agent-secrets
+  # The Secret must carry these keys (case-sensitive):
+  #   ANTHROPIC_API_KEY
+  #   GITHUB_APP_PRIVATE_KEY_PEM
+  #   GITHUB_WEBHOOK_SECRET
+  #   OTEL_EXPORTER_OTLP_HEADERS  (optional)
+
+serviceAccount:
+  create: true
+  name: ""                     # auto-generated when blank
+  annotations: {}              # e.g. eks.amazonaws.com/role-arn for IRSA
+                                # or iam.gke.io/gcp-service-account for Workload Identity
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+# Prometheus / Grafana scraping. Set enabled=false when the cluster
+# does not run the Prometheus Operator.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+  metricsPath: /metrics
+
+podAnnotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

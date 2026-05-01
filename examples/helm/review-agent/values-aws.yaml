@@ -1,0 +1,26 @@
+# Overlay for AWS deployments — KEDA scales the worker on SQS queue depth.
+# Combine with values.yaml:
+#   helm install review-agent ./review-agent \
+#     -f review-agent/values.yaml \
+#     -f review-agent/values-aws.yaml \
+#     --set config.QUEUE_URL=https://sqs.us-east-1.amazonaws.com/<account>/review-agent-jobs
+
+serviceAccount:
+  annotations:
+    # IRSA: bind to a role with sqs:ReceiveMessage / DeleteMessage /
+    # ChangeMessageVisibility on the jobs queue, plus
+    # secretsmanager:GetSecretValue on the BYOK + DB secrets.
+    eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/review-agent-worker
+
+worker:
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    maxReplicaCount: 10
+    triggers:
+      - type: aws-sqs-queue
+        metadata:
+          queueURL: https://sqs.<region>.amazonaws.com/<account>/review-agent-jobs
+          queueLength: "1"            # one pod per pending message
+          awsRegion: <region>
+          identityOwner: operator     # IAM role on the SA above

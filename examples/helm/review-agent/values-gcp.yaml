@@ -1,0 +1,30 @@
+# Overlay for GCP deployments — KEDA scales the worker on Pub/Sub
+# subscription backlog. Combine with values.yaml:
+#   helm install review-agent ./review-agent \
+#     -f review-agent/values.yaml \
+#     -f review-agent/values-gcp.yaml
+
+serviceAccount:
+  annotations:
+    # Workload Identity: bind to a GSA with roles/pubsub.subscriber
+    # on the jobs subscription, secretmanager.secretAccessor on the
+    # provider secrets, and (when applicable) aiplatform.user for
+    # Vertex.
+    iam.gke.io/gcp-service-account: review-agent-worker@<project>.iam.gserviceaccount.com
+
+worker:
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    maxReplicaCount: 10
+    triggers:
+      - type: gcp-pubsub
+        metadata:
+          subscriptionName: projects/<project>/subscriptions/review-agent-jobs
+          mode: SubscriptionSize
+          value: "1"
+          # Authentication via Workload Identity: the GSA bound to
+          # this pod's KSA must have roles/pubsub.viewer for the
+          # backlog metric and roles/monitoring.viewer for the
+          # operator's Stackdriver pull.
+          identityOwner: operator

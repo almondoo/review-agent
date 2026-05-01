@@ -1,0 +1,20 @@
+{{- if .Values.worker.keda.enabled -}}
+{{- if not .Values.worker.keda.triggers -}}
+{{- fail "worker.keda.triggers is empty. Pass values-aws.yaml / values-gcp.yaml / values-azure.yaml or supply your own triggers list." -}}
+{{- end -}}
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "review-agent.fullname" . }}-worker
+  labels:
+    {{- include "review-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: {{ include "review-agent.fullname" . }}-worker
+  minReplicaCount: {{ .Values.worker.keda.minReplicaCount }}
+  maxReplicaCount: {{ .Values.worker.keda.maxReplicaCount }}
+  cooldownPeriod: {{ .Values.worker.keda.cooldownPeriod }}
+  pollingInterval: {{ .Values.worker.keda.pollingInterval }}
+  triggers: {{- toYaml .Values.worker.keda.triggers | nindent 4 }}
+{{- end }}

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "review-agent.fullname" . }}-receiver
+  labels:
+    {{- include "review-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: receiver
+spec:
+  type: {{ .Values.receiver.service.type }}
+  selector:
+    {{- include "review-agent.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: receiver
+  ports:
+    - name: http
+      port: {{ .Values.receiver.service.port }}
+      targetPort: http

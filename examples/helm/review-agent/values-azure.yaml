@@ -1,0 +1,26 @@
+# Overlay for Azure deployments — KEDA scales the worker on Service
+# Bus queue length. Combine with values.yaml:
+#   helm install review-agent ./review-agent \
+#     -f review-agent/values.yaml \
+#     -f review-agent/values-azure.yaml
+
+serviceAccount:
+  annotations:
+    # Azure AD Workload Identity: link the KSA to a managed identity
+    # with the Azure Service Bus Data Receiver role on the queue +
+    # Key Vault Secrets User on the secrets vault.
+    azure.workload.identity/client-id: <managed-identity-client-id>
+
+worker:
+  keda:
+    enabled: true
+    minReplicaCount: 0
+    maxReplicaCount: 20
+    triggers:
+      - type: azure-servicebus
+        metadata:
+          queueName: review-agent-jobs
+          namespace: <ns>.servicebus.windows.net
+          messageCount: "1"
+          # When the cluster is using AAD Workload Identity:
+          identityOwner: operator
