@@ -1,0 +1,145 @@
+# review-agent — single-host self-host stack (§15.2).
+#
+# Bundles the receiver + worker process, Postgres for state / cost
+# ledger / audit log, and ElasticMQ as a local SQS-compatible queue.
+# Optional Langfuse stack lives behind the `telemetry` profile.
+#
+# Bring up:
+#   docker compose -f examples/docker-compose/docker-compose.yml up
+#
+# With telemetry:
+#   docker compose -f examples/docker-compose/docker-compose.yml \
+#     --profile telemetry up
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: review_agent
+      POSTGRES_USER: review_agent
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U review_agent -d review_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  elasticmq:
+    # SQS-compatible local queue. Spec §4.4 rationale: smaller / faster
+    # than LocalStack, sufficient for the SQS subset the worker uses.
+    image: softwaremill/elasticmq-native:1.6.7
+    restart: unless-stopped
+    ports:
+      - "9324:9324"   # API (boto3-compatible)
+      - "9325:9325"   # web UI (queue introspection)
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf:ro
+    healthcheck:
+      test:
+        ["CMD", "sh", "-c", "echo > /dev/tcp/127.0.0.1/9324"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  review-agent:
+    image: ghcr.io/almondoo/review-agent:${REVIEW_AGENT_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      elasticmq:
+        condition: service_healthy
+    ports:
+      - "${WEBHOOK_PORT:-8080}:8080"
+    environment:
+      NODE_ENV: production
+      PORT: "8080"
+
+      # Postgres
+      DATABASE_URL: "postgres://review_agent:${DB_PASSWORD}@db:5432/review_agent?sslmode=disable"
+
+      # Queue (ElasticMQ)
+      QUEUE_URL: "http://elasticmq:9324/queue/review-agent-jobs"
+      AWS_REGION: "elasticmq"
+      AWS_ACCESS_KEY_ID: "x"
+      AWS_SECRET_ACCESS_KEY: "x"
+      AWS_ENDPOINT_URL_SQS: "http://elasticmq:9324"
+
+      # GitHub App
+      GITHUB_APP_ID: ${GITHUB_APP_ID:?set GITHUB_APP_ID in .env}
+      GITHUB_APP_PRIVATE_KEY_PEM_PATH: /run/secrets/github_app_pem
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set GITHUB_WEBHOOK_SECRET in .env}
+
+      # LLM provider — Anthropic by default
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      REVIEW_AGENT_LANGUAGE: ${REVIEW_AGENT_LANGUAGE:-en-US}
+
+      # Optional OTel exporter
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+      LANGFUSE_LOG_BODIES: ${LANGFUSE_LOG_BODIES:-0}
+    secrets:
+      - github_app_pem
+    # Spec §15.6.6 hardening: non-root, read-only rootfs, only /tmp
+    # writable for the per-job workspace.
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch("http://127.0.0.1:8080/healthz").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ---- optional Langfuse stack (--profile telemetry) ---------------------
+
+  langfuse-db:
+    image: postgres:16-alpine
+    profiles: [telemetry]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_DB_PASSWORD:-langfuse}
+    volumes:
+      - langfuse-db-data:/var/lib/postgresql/data
+
+  langfuse:
+    # Self-hosted Langfuse — point review-agent at it via
+    # OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://langfuse:3000/api/public/otel/v1/traces
+    image: langfuse/langfuse:3
+    profiles: [telemetry]
+    restart: unless-stopped
+    depends_on:
+      - langfuse-db
+    environment:
+      # The :- defaults keep `docker compose config` clean even when the
+      # telemetry profile isn't active. Langfuse refuses to start with
+      # empty values, which is the loud failure we want when a user
+      # brings up the profile without setting these.
+      DATABASE_URL: postgres://langfuse:${LANGFUSE_DB_PASSWORD:-langfuse}@langfuse-db:5432/langfuse
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-}
+      SALT: ${LANGFUSE_SALT:-}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:-}
+      NEXTAUTH_URL: ${LANGFUSE_PUBLIC_URL:-http://localhost:3000}
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+
+secrets:
+  github_app_pem:
+    file: ${GITHUB_APP_PEM_FILE:?set GITHUB_APP_PEM_FILE in .env}
+
+volumes:
+  db-data:
+  langfuse-db-data:
