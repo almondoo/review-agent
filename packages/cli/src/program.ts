@@ -1,5 +1,6 @@
 import { Command, Option } from 'commander';
 import { runEvalCommand } from './commands/eval.js';
+import { recoverSyncStateCommand } from './commands/recover.js';
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
 import { validateConfigCommand } from './commands/validate.js';
@@ -75,6 +76,26 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.exitCode);
     });
 
+  const recover = program
+    .command('recover')
+    .description('Disaster-recovery commands (spec §8.6.6).');
+
+  recover
+    .command('sync-state')
+    .description(
+      'Walk every open PR in the repo, parse hidden review-state comments, and upsert review_state rows.',
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--installation <id>', 'GitHub App installation ID', (v) => BigInt(v))
+    .action(async (opts: RecoverSyncStateCliOpts) => {
+      const result = await recoverSyncStateCommand(io, {
+        repo: opts.repo,
+        installationId: opts.installation,
+        env,
+      });
+      io.exit(result.status === 'auth_failed' ? 1 : 0);
+    });
+
   program.exitOverride();
   return program;
 }
@@ -91,6 +112,11 @@ type ReviewCliOpts = {
 
 type EvalCliOpts = {
   suite: string;
+};
+
+type RecoverSyncStateCliOpts = {
+  repo: string;
+  installation: bigint;
 };
 
 export type { ProgramIo } from './io.js';

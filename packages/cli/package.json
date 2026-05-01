@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@octokit/rest": "21.0.2",
     "@review-agent/config": "workspace:*",
     "@review-agent/core": "workspace:*",
     "@review-agent/llm": "workspace:*",
