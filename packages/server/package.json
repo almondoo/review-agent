@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "3.1039.0",
-    "@hono/node-server": "1.13.7",
+    "@hono/node-server": "1.19.14",
     "@opentelemetry/api": "1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.55.0",
     "@opentelemetry/resources": "1.28.0",
@@ -46,7 +46,7 @@
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "hono": "4.6.13",
+    "hono": "4.12.16",
     "zod": "3.25.76"
   },
   "devDependencies": {

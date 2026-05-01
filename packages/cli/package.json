@@ -34,7 +34,7 @@
     "@review-agent/platform-github": "workspace:*",
     "@review-agent/runner": "workspace:*",
     "commander": "12.1.0",
-    "yaml": "2.6.1"
+    "yaml": "2.8.3"
   },
   "devDependencies": {
     "@types/node": "24.0.0",
