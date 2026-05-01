@@ -2,7 +2,7 @@
   "name": "@review-agent/llm",
   "version": "0.0.0",
   "private": true,
-  "description": "Provider-agnostic LLM abstraction + drivers (anthropic, openai, ...) over Vercel AI SDK.",
+  "description": "Provider-agnostic LLM abstraction + drivers (anthropic, openai, azure-openai, google, vertex, bedrock, openai-compatible) over Vercel AI SDK.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -34,7 +34,36 @@
     "js-tiktoken": "1.0.16",
     "zod": "3.25.76"
   },
+  "peerDependencies": {
+    "@ai-sdk/amazon-bedrock": ">=1.0.0",
+    "@ai-sdk/azure": ">=1.0.0",
+    "@ai-sdk/google": ">=1.0.0",
+    "@ai-sdk/google-vertex": ">=1.0.0",
+    "@ai-sdk/openai-compatible": ">=0.0.13"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/amazon-bedrock": {
+      "optional": true
+    },
+    "@ai-sdk/azure": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "@ai-sdk/google-vertex": {
+      "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@ai-sdk/amazon-bedrock": "1.0.0",
+    "@ai-sdk/azure": "1.0.0",
+    "@ai-sdk/google": "1.0.0",
+    "@ai-sdk/google-vertex": "1.0.0",
+    "@ai-sdk/openai-compatible": "0.0.13",
     "@types/node": "24.0.0",
     "@vitest/coverage-v8": "2.1.5",
     "tsup": "8.3.0",
