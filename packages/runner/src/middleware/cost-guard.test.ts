@@ -79,4 +79,70 @@ describe('createCostGuard', () => {
       status: 'success',
     });
   });
+
+  it('fires onThresholdCrossed with the expected event on each tier', async () => {
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const onThresholdCrossed = (e: { threshold: string; cumulativeUsd: number; capUsd: number }) =>
+      events.push(e);
+
+    // Fallback (80–100%)
+    const fallbackState: CostState = { totalCostUsd: 0 };
+    await createCostGuard({ state: fallbackState, onThresholdCrossed })(
+      makeCtx(0.85),
+      async () => okResult,
+    );
+    expect(events.at(-1)?.threshold).toBe('fallback');
+
+    // Abort (100–150%)
+    const abortState: CostState = { totalCostUsd: 0 };
+    await expect(() =>
+      createCostGuard({ state: abortState, onThresholdCrossed })(
+        makeCtx(1.2),
+        async () => okResult,
+      ),
+    ).rejects.toBeInstanceOf(CostExceededError);
+    expect(events.at(-1)?.threshold).toBe('abort');
+
+    // Kill (>150%) — feed an already-overrun running total via readTotals
+    const killState: CostState = { totalCostUsd: 0 };
+    await expect(() =>
+      createCostGuard({
+        state: killState,
+        onThresholdCrossed,
+        readTotals: async () => ({ running: 1.7, daily: 0 }),
+      })(makeCtx(0.01), async () => okResult),
+    ).rejects.toBeInstanceOf(CostExceededError);
+    expect(events.at(-1)?.threshold).toBe('kill');
+
+    // Daily cap
+    const dailyState: CostState = { totalCostUsd: 0 };
+    await expect(() =>
+      createCostGuard({
+        state: dailyState,
+        dailyCapUsd: 50,
+        onThresholdCrossed,
+        readTotals: async () => ({ running: 0, daily: 50 }),
+      })(makeCtx(0.01), async () => okResult),
+    ).rejects.toBeInstanceOf(CostExceededError);
+    expect(events.at(-1)?.threshold).toBe('daily_cap');
+  });
+
+  it('records a cost_exceeded ledger row when the cap is breached', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const recorder = vi.fn().mockResolvedValue(undefined);
+    const mw = createCostGuard({
+      state,
+      recorder,
+      recordContext: { installationId: 1n, jobId: 'j', provider: 'p', model: 'm' },
+    });
+    await expect(() => mw(makeCtx(1.5), async () => okResult)).rejects.toBeInstanceOf(
+      CostExceededError,
+    );
+    expect(recorder).toHaveBeenCalledOnce();
+    expect(recorder.mock.calls[0]?.[0]).toMatchObject({
+      installationId: 1n,
+      jobId: 'j',
+      status: 'cost_exceeded',
+    });
+  });
 });

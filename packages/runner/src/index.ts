@@ -1,4 +1,12 @@
 export { runReview } from './agent.js';
+export { createCostKillSwitch, type KillSwitchOpts } from './cost-kill-switch.js';
+export {
+  assertDailyCapNotExceeded,
+  type PreflightDecision,
+  type PreflightDeps,
+  type PreflightInput,
+  preflightDailyCap,
+} from './cost-preflight.js';
 export {
   applyRedactions,
   defaultSpawn,
@@ -12,7 +20,10 @@ export {
 } from './gitleaks.js';
 export {
   type CostGuardOptions,
+  type CostGuardRecordContext,
   type CostState,
+  type CostThreshold,
+  type CostThresholdEvent,
   createCostGuard,
   createInjectionGuard,
   type DedupOptions,
