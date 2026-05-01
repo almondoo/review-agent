@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { bigint, bigserial, index, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, bigserial, index, pgPolicy, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { appRole } from './roles.js';
 
 export const REVIEW_HISTORY_FACT_TYPES = [
   'accepted_pattern',
@@ -24,8 +25,15 @@ export const reviewHistory = pgTable(
   (t) => [
     index('review_history_installation_repo_idx').on(t.installationId, t.repo),
     index('review_history_expires_at_idx').on(t.expiresAt),
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      to: appRole,
+      for: 'all',
+      using: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+      withCheck: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+    }),
   ],
-);
+).enableRLS();
 
 export type ReviewHistoryRow = typeof reviewHistory.$inferSelect;
 export type NewReviewHistoryRow = typeof reviewHistory.$inferInsert;

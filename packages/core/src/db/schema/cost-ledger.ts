@@ -1,15 +1,18 @@
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   bigserial,
   doublePrecision,
   index,
   integer,
+  pgPolicy,
   pgTable,
   primaryKey,
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
 import type { COST_LEDGER_PHASES, COST_LEDGER_STATUSES } from '../../review.js';
+import { appRole } from './roles.js';
 
 export const costLedger = pgTable(
   'cost_ledger',
@@ -31,8 +34,15 @@ export const costLedger = pgTable(
   (t) => [
     index('cost_ledger_job_idx').on(t.installationId, t.jobId),
     index('cost_ledger_created_at_idx').on(t.createdAt),
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      to: appRole,
+      for: 'all',
+      using: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+      withCheck: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+    }),
   ],
-);
+).enableRLS();
 
 export type CostLedgerRowDb = typeof costLedger.$inferSelect;
 export type NewCostLedgerRow = typeof costLedger.$inferInsert;
@@ -45,8 +55,17 @@ export const installationCostDaily = pgTable(
     costUsd: doublePrecision('cost_usd').notNull().default(0),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
-  (t) => [primaryKey({ columns: [t.installationId, t.date] })],
-);
+  (t) => [
+    primaryKey({ columns: [t.installationId, t.date] }),
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      to: appRole,
+      for: 'all',
+      using: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+      withCheck: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+    }),
+  ],
+).enableRLS();
 
 export type InstallationCostDailyRow = typeof installationCostDaily.$inferSelect;
 export type NewInstallationCostDailyRow = typeof installationCostDaily.$inferInsert;

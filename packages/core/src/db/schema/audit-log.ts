@@ -1,4 +1,15 @@
-import { bigint, bigserial, index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  bigserial,
+  index,
+  integer,
+  pgPolicy,
+  pgTable,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
+import { appRole } from './roles.js';
 
 export const auditLog = pgTable(
   'audit_log',
@@ -14,8 +25,21 @@ export const auditLog = pgTable(
     prevHash: text('prev_hash'),
     hash: text('hash').notNull(),
   },
-  (t) => [index('audit_log_installation_idx').on(t.installationId, t.ts)],
-);
+  (t) => [
+    index('audit_log_installation_idx').on(t.installationId, t.ts),
+    // Tenants only see their own rows. Rows with installation_id IS NULL
+    // are system events (signature failures before tenant is known) and
+    // are intentionally invisible to tenant-scoped reads — they are read
+    // out of band by an admin/superuser role that bypasses RLS.
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      to: appRole,
+      for: 'all',
+      using: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+      withCheck: sql`${t.installationId} IS NULL OR ${t.installationId}::text = current_setting('app.current_tenant', true)`,
+    }),
+  ],
+).enableRLS();
 
 export type AuditLogRow = typeof auditLog.$inferSelect;
 export type NewAuditLogRow = typeof auditLog.$inferInsert;

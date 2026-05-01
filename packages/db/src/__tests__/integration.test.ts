@@ -7,8 +7,13 @@ import {
 import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createDbClient } from '../connection.js';
+import { readCurrentTenant, withTenant } from '../tenancy.js';
 
 const url = process.env.TEST_DATABASE_URL ?? '';
+// Same DB but logged in as `review_agent_app` so RLS applies. Tests
+// that need to seed cross-tenant rows still use the superuser via
+// `url`. Provide both env vars on a real Postgres test target.
+const appUrl = process.env.TEST_DATABASE_APP_URL ?? '';
 
 describe.skipIf(!url)('postgres integration', () => {
   it('round-trips webhook_deliveries, installation_tokens, review_state, cost_ledger', async () => {
@@ -70,6 +75,70 @@ describe.skipIf(!url)('postgres integration', () => {
         costUsd: 0.0123,
         status: 'success',
       });
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe.skipIf(!appUrl)('postgres RLS (tenant_isolation policy)', () => {
+  it('readCurrentTenant returns null outside withTenant', async () => {
+    const { db, close } = createDbClient({ url: appUrl });
+    try {
+      // Outside any explicit transaction the GUC is unset.
+      const result = await db.transaction((tx) => readCurrentTenant(tx));
+      expect(result).toBeNull();
+    } finally {
+      await close();
+    }
+  });
+
+  it('withTenant scopes selects to the matching installation_id', async () => {
+    const { db, close } = createDbClient({ url: appUrl });
+    try {
+      const tenantA = 9001n;
+      const tenantB = 9002n;
+      // Seed both tenants under their own scopes — RLS enforces the
+      // installation_id matches the GUC, so we must use withTenant.
+      await withTenant(db, tenantA, async (tx) => {
+        await tx
+          .insert(installationTokens)
+          .values({ installationId: tenantA, token: 'a', expiresAt: new Date(Date.now() + 60_000) })
+          .onConflictDoUpdate({
+            target: installationTokens.installationId,
+            set: { token: 'a' },
+          });
+      });
+      await withTenant(db, tenantB, async (tx) => {
+        await tx
+          .insert(installationTokens)
+          .values({ installationId: tenantB, token: 'b', expiresAt: new Date(Date.now() + 60_000) })
+          .onConflictDoUpdate({
+            target: installationTokens.installationId,
+            set: { token: 'b' },
+          });
+      });
+
+      // From tenant A: only A's row is visible.
+      const visible = await withTenant(db, tenantA, (tx) => tx.select().from(installationTokens));
+      expect(visible.map((r) => r.installationId)).toEqual([tenantA]);
+    } finally {
+      await close();
+    }
+  });
+
+  it('withTenant rejects writes for a different tenant via WITH CHECK', async () => {
+    const { db, close } = createDbClient({ url: appUrl });
+    try {
+      await expect(
+        withTenant(db, 9001n, async (tx) => {
+          await tx.insert(installationTokens).values({
+            installationId: 9999n,
+            token: 'cross-tenant',
+            expiresAt: new Date(Date.now() + 60_000),
+          });
+        }),
+      ).rejects.toThrow();
     } finally {
       await close();
     }

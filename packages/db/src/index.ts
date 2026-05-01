@@ -14,3 +14,4 @@ export {
   type ReviewStateMirror,
   type StateReader,
 } from './review-state.js';
+export { readCurrentTenant, TENANT_GUC, type TenantTransaction, withTenant } from './tenancy.js';

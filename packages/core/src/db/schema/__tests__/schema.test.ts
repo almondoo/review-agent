@@ -81,4 +81,33 @@ describe('db schema shape', () => {
     expect(expires?.notNull).toBe(true);
     expect(expires?.hasDefault).toBe(true);
   });
+
+  // §16.1 — every tenant-scoped table must enable RLS and install the
+  // tenant_isolation policy keyed on review_agent_app + the
+  // app.current_tenant GUC.
+  const tenantScoped = [
+    ['review_state', reviewState],
+    ['review_history', reviewHistory],
+    ['cost_ledger', costLedger],
+    ['installation_cost_daily', installationCostDaily],
+    ['installation_tokens', installationTokens],
+    ['audit_log', auditLog],
+  ] as const;
+
+  for (const [name, table] of tenantScoped) {
+    it(`${name} enables RLS with a tenant_isolation policy`, () => {
+      const cfg = getTableConfig(table);
+      expect(cfg.enableRLS).toBe(true);
+      const policy = cfg.policies.find((p) => p.name === 'tenant_isolation');
+      expect(policy, `${name} must have a tenant_isolation policy`).toBeDefined();
+      expect(policy?.as).toBe('permissive');
+      expect(policy?.for).toBe('all');
+    });
+  }
+
+  it('webhook_deliveries does not enable RLS (no installation_id column)', () => {
+    const cfg = getTableConfig(webhookDeliveries);
+    expect(cfg.enableRLS).toBe(false);
+    expect(cfg.policies).toEqual([]);
+  });
 });
