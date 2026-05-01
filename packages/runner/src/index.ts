@@ -34,6 +34,27 @@ export {
 export { type ComposeSystemPromptOptions, composeSystemPrompt } from './prompts/system-prompt.js';
 export { type UntrustedMetadata, wrapUntrusted } from './prompts/untrusted.js';
 export {
+  type ClassifiedBlock,
+  classifyForInjection,
+  createInMemoryDetectorCache,
+  INJECTION_DETECTOR_SYSTEM_PROMPT,
+  INJECTION_REDACTION_PLACEHOLDER,
+  INJECTION_VERDICTS,
+  type InjectionClassifier,
+  type InjectionDetectorCache,
+  type InjectionDetectorDeps,
+  type InjectionVerdict,
+  InjectionVerdictSchema,
+  type RedactionResult,
+  redactInjectionBlocks,
+  type UntrustedBlock,
+} from './security/injection-detector.js';
+export {
+  INJECTION_DETECTOR_OPT_OUT_ENV,
+  type InjectionDetectorPolicy,
+  resolveInjectionDetectorPolicy,
+} from './security/injection-detector-policy.js';
+export {
   type LoadSkillDeps,
   loadSkill,
   loadSkills,

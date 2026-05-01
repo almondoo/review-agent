@@ -27,4 +27,22 @@ describe('PROVIDER_DEFAULTS', () => {
       }
     }
   });
+
+  it('every provider with a non-null default also pins a cheapest model', () => {
+    for (const type of PROVIDER_TYPES) {
+      const entry = PROVIDER_DEFAULTS[type];
+      // Either both null (operator-supplied) or both populated.
+      if (entry.default === null) {
+        expect(entry.cheapest).toBeNull();
+      } else {
+        expect(entry.cheapest).toBeTruthy();
+      }
+    }
+  });
+
+  it('anthropic / openai / bedrock cheapest match the spec §7.3 list', () => {
+    expect(PROVIDER_DEFAULTS.anthropic.cheapest).toBe('claude-haiku-4-5-20251001');
+    expect(PROVIDER_DEFAULTS.openai.cheapest).toBe('gpt-4o-mini');
+    expect(PROVIDER_DEFAULTS.bedrock.cheapest).toBe('anthropic.claude-haiku-4-5-v1:0');
+  });
 });
