@@ -41,6 +41,15 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "drizzle-orm": ">=0.45.2",
+      "@tootallnate/once": ">=3.0.1",
+      "tmp": ">=0.2.4",
+      "fast-xml-parser": ">=5.7.0",
+      "esbuild": ">=0.25.0",
+      "mathjs": ">=15.2.0",
+      "undici": ">=6.24.0"
+    }
   }
 }

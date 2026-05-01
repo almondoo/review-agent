@@ -37,7 +37,7 @@
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "simple-git": "3.27.0"
+    "simple-git": "3.36.0"
   },
   "devDependencies": {
     "@types/node": "24.0.0",
