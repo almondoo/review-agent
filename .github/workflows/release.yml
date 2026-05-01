@@ -63,7 +63,7 @@ jobs:
 
       # Spec §15.6.6: Trivy must scan and block release on HIGH/CRITICAL.
       - name: Trivy CVE scan (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: review-agent:${{ steps.ver.outputs.version }}
           severity: HIGH,CRITICAL
@@ -74,7 +74,7 @@ jobs:
 
       - name: Trivy SARIF
         if: always()
-        uses: aquasecurity/trivy-action@0.30.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: review-agent:${{ steps.ver.outputs.version }}
           severity: HIGH,CRITICAL
