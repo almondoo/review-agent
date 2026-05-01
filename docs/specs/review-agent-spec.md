@@ -2384,40 +2384,77 @@ Publish JSON Schema at the docs URL. README includes the
 
 ---
 
-## 22. Open Questions (resolve before merging final v0.1)
+## 22. Open Questions
 
-These are **known unresolved**; do not invent answers — propose options and ask.
+All v0.1-blocking questions are resolved. The remaining items are deferred to
+v1.0+ as design work, not implementation blockers. Status as of v0.3 release:
 
-1. Project npm name: `review-agent` or scoped `@review-agent/<pkg>`? (Likely scoped
-   for monorepo packages, plus an unscoped `review-agent` CLI bin.) Confirm
-   availability.
-2. GitHub org / repo URL: where does the canonical OSS repo live?
+1. ~~Project npm name: `review-agent` or scoped `@review-agent/<pkg>`?~~
+   **Resolved**: scoped `@review-agent/*` for monorepo packages + unscoped
+   `review-agent` CLI bin (v0.2+).
+2. ~~GitHub org / repo URL: where does the canonical OSS repo live?~~
+   **Resolved**: `github.com/almondoo/review-agent`.
 3. Default Anthropic Workspace setup recommendations: do we ship a CLI command
    `review-agent setup workspace` to help users configure ZDR + spend caps?
-4. Skill marketplace: do we ship a `@review-agent/skill-*` namespace and publish
-   bundled skills, or rely on user-supplied skill paths only at v0.1?
-5. Bot identity: which GitHub user posts comments in Action mode (`github-actions[bot]`),
-   and in Server mode (the App's own actor)? Make sure dedup works across both.
+   **Deferred to v1.0+** — not blocking; documented manual setup in
+   `docs/deployment/*.md` is sufficient for v0.1–v0.3.
+4. ~~Skill marketplace: do we ship a `@review-agent/skill-*` namespace and publish
+   bundled skills, or rely on user-supplied skill paths only at v0.1?~~
+   **Resolved**: user-supplied skill paths only in v0.1–v0.3. The skill
+   loader infrastructure ships (`packages/runner/src/skill-loader.ts`) but
+   no `@review-agent/skill-*` packages are published. Reconsider for v1.0
+   based on observed user demand.
+5. Bot identity: which GitHub user posts comments in Action mode
+   (`github-actions[bot]`), and in Server mode (the App's own actor)?
+   **Partially resolved**: dedup is fingerprint-based
+   (`packages/runner/src/middleware/dedup.ts`), so identical content is
+   suppressed regardless of which actor posted it. The remaining design
+   question — should we recommend a single shared identity to make audit
+   trails uniform — is **deferred to v1.0+**.
 6. ~~CodeCommit incremental review: GA returned 2025-11; verify there's a hidden-comment
    equivalent or use Postgres alone.~~ **Resolved**: CodeCommit uses Postgres-only
    for state (see §5.2 caveat and §12.1.1 for full details). GitHub uses both
    hidden comment + Postgres mirror.
-7. Renovate / Dependabot PRs: review by default, skip by default, or summary-only?
-8. Draft PR behavior: skip until ready-for-review, or review on every push?
+7. ~~Renovate / Dependabot PRs: review by default, skip by default, or summary-only?~~
+   **Resolved**: skip by default. `reviews.ignore_authors` defaults to
+   `['dependabot[bot]', 'renovate[bot]', 'github-actions[bot]']` in
+   `packages/config/src/schema.ts`. Operators opt back in by overriding
+   the list in `.review-agent.yml`.
+8. ~~Draft PR behavior: skip until ready-for-review, or review on every push?~~
+   **Resolved**: skip drafts. `reviews.auto_review.drafts` defaults to
+   `false`. Drafts are reviewed on the `ready_for_review` webhook event, or
+   when an operator explicitly enables `drafts: true`.
 9. PR with bot author (e.g. `coderabbitai[bot]`): conflict prevention if multiple
-   review bots are installed.
-10. OSS telemetry: opt-in usage stats (count of installations, model used) or never?
+   review bots are installed. **Deferred to v1.0+** — fingerprint-based
+   dedup avoids in-tool duplication, but cross-bot coordination (e.g.,
+   defer to coderabbitai when both are installed) is a v1.0 design topic.
+10. ~~OSS telemetry: opt-in usage stats (count of installations, model used) or never?~~
+    **Resolved**: never. No telemetry code ships. The agent does not phone
+    home, post anonymous metrics, or call any Anthropic-owned analytics
+    endpoint. Operators run entirely self-hosted.
 11. GHES (GitHub Enterprise Server) compatibility: declare supported, declare unsupported,
-    or "best-effort, no commitment"?
+    or "best-effort, no commitment"? **Deferred to v1.0+** — v0.1–v0.3
+    target github.com only. PRD §post-v1.0 lists GHES as future work.
 12. Provider-tier disclosure: should we publish a per-provider feature parity
     matrix on the docs site (Sonnet 4.6 vs gpt-4o vs gemini-2.0-pro vs local
     Llama-3 70B) with eval-result deltas, so users can pick informed?
-13. OpenAI-compatible endpoint defaults: should we ship known-good model
+    **Deferred to v1.0+** — requires running the full eval against each
+    provider and stable per-model baselines. v0.3 ships the harness
+    (`packages/eval/`); the matrix is a content task for v1.0 release notes.
+13. ~~OpenAI-compatible endpoint defaults: should we ship known-good model
     presets (`ollama:llama3:70b`, `openrouter:anthropic/claude-3.7-sonnet`)
-    in the schema, or leave entirely user-defined?
-14. LLM-based injection detector cost: is the ~$0.001/PR overhead acceptable
+    in the schema, or leave entirely user-defined?~~ **Resolved**:
+    user-defined only. The `openai-compatible` provider requires
+    `base_url` + `model` from the operator;
+    `packages/llm/src/pricing.ts` `OPENAI_COMPATIBLE_PRICING` is empty so
+    unknown models price at zero (operator overrides via config). Adding
+    presets risks endorsing endpoints the maintainers cannot regression-test.
+14. ~~LLM-based injection detector cost: is the ~$0.001/PR overhead acceptable
     by default, or should we make it opt-out? Currently §7.3 lists it as
-    mandatory.
+    mandatory.~~ **Resolved**: default-on with explicit opt-out via
+    `REVIEW_AGENT_DISABLE_INJECTION_DETECTOR=1`. The opt-out is loud — the
+    worker logs a warning on every cold start. See
+    `packages/runner/src/security/injection-detector-policy.ts`.
 15. ~~Skill provenance for npm-distributed skills: support cosign-style
     attestation in addition to the `manifest.json` SHA-256 (§15.7.3)?~~
     **Resolved**: v0.3 ships with `manifest.json` + SHA-256 only (mandatory).
