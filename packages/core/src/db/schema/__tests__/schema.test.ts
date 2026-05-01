@@ -1,6 +1,7 @@
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { auditLog } from '../audit-log.js';
+import { installationSecrets } from '../byok-store.js';
 import { costLedger, installationCostDaily } from '../cost-ledger.js';
 import { installationTokens } from '../installation-tokens.js';
 import { reviewHistory } from '../review-history.js';
@@ -92,6 +93,7 @@ describe('db schema shape', () => {
     ['installation_cost_daily', installationCostDaily],
     ['installation_tokens', installationTokens],
     ['audit_log', auditLog],
+    ['installation_secrets', installationSecrets],
   ] as const;
 
   for (const [name, table] of tenantScoped) {
@@ -109,5 +111,33 @@ describe('db schema shape', () => {
     const cfg = getTableConfig(webhookDeliveries);
     expect(cfg.enableRLS).toBe(false);
     expect(cfg.policies).toEqual([]);
+  });
+
+  it('installation_secrets is keyed by (installation_id, provider) and stores envelope blobs as bytea', () => {
+    const cfg = getTableConfig(installationSecrets);
+    expect(cfg.name).toBe('installation_secrets');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'installation_id',
+      'provider',
+      'kms_key_id',
+      'wrapped_data_key',
+      'encrypted_secret',
+      'iv',
+      'auth_tag',
+      'created_at',
+      'rotated_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+    // Composite primary key on (installation_id, provider).
+    expect(cfg.primaryKeys[0]?.columns.map((c) => c.name).sort()).toEqual(
+      ['installation_id', 'provider'].sort(),
+    );
+    // bytea typed columns
+    for (const name of ['wrapped_data_key', 'encrypted_secret', 'iv', 'auth_tag']) {
+      const col = cfg.columns.find((c) => c.name === name);
+      expect(col?.dataType).toBe('custom');
+    }
   });
 });

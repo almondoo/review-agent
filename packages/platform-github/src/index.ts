@@ -21,6 +21,7 @@ export {
   type RunGit,
   type RunGitOptions,
 } from './clone.js';
+export { createGithubOrgConfigFetch, type GithubOrgConfigDeps } from './org-config.js';
 export { assertSafeRelativePath } from './path-guard.js';
 export {
   buildSummaryWithState,

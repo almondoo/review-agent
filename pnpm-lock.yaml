@@ -326,6 +326,9 @@ importers:
       '@octokit/rest':
         specifier: 21.0.2
         version: 21.0.2
+      '@review-agent/config':
+        specifier: workspace:*
+        version: link:../config
       '@review-agent/core':
         specifier: workspace:*
         version: link:../core
@@ -9662,7 +9665,7 @@ snapshots:
       jsonwebtoken: 9.0.3
       load-esm: 1.0.3
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.15.2)
+      retry-axios: 2.6.0(axios@1.15.2(debug@4.4.3))
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -10663,7 +10666,7 @@ snapshots:
       path-parse: 1.0.7
       supports-preserve-symlinks-flag: 1.0.0
 
-  retry-axios@2.6.0(axios@1.15.2):
+  retry-axios@2.6.0(axios@1.15.2(debug@4.4.3)):
     dependencies:
       axios: 1.15.2(debug@4.4.3)
 

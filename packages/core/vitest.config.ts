@@ -14,6 +14,7 @@ export default defineConfig({
         'src/db/schema/index.ts',
         'src/db/schema/roles.ts',
         'src/db/schema/__tests__/**',
+        'src/kms/index.ts',
       ],
       thresholds: {
         lines: 95,

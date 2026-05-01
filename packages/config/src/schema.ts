@@ -80,8 +80,18 @@ const IncrementalSchema = z
   })
   .strict();
 
+// `extends: 'org'` (§10.2 layer 3) opts the repo into merging the
+// `<org>/.github/review-agent.yml` central config underneath this
+// file. Without `extends`, the org file is consulted only as a
+// silent fallback when the repo file is absent. We accept the
+// keyword form (mirrors ESLint / Prettier) plus the explicit
+// `null` to mean "no inheritance", which lets a tenant override
+// inherited org config back to defaults.
+const ExtendsSchema = z.literal('org').or(z.null()).optional();
+
 export const ConfigSchema = z
   .object({
+    extends: ExtendsSchema,
     language: z.enum(SUPPORTED_LANGUAGES).default('en-US'),
     profile: z.enum(['chill', 'assertive']).default('chill'),
     provider: ProviderSchema.optional(),
