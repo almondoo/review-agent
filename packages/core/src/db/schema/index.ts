@@ -1,4 +1,5 @@
 export * from './audit-log.js';
+export * from './byok-store.js';
 export * from './cost-ledger.js';
 export * from './installation-tokens.js';
 export * from './review-history.js';

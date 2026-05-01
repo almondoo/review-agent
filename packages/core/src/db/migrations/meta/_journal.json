@@ -15,6 +15,13 @@
       "when": 1777563108727,
       "tag": "0001_rls_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1777599470073,
+      "tag": "0002_byok_table",
+      "breakpoints": true
     }
   ]
 }

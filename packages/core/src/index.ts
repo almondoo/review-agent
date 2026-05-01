@@ -40,6 +40,16 @@ export {
   shiftLineThroughHunks,
 } from './incremental.js';
 export {
+  BYOK_PROVIDERS,
+  type BYOKProvider,
+  decryptWithDataKey,
+  ENVELOPE_PARAMS,
+  type EncryptedPayload,
+  encryptWithDataKey,
+  generateDataKey,
+  type KmsClient,
+} from './kms/index.js';
+export {
   type DequeueOpts,
   type JobMessage,
   JobMessageSchema,
