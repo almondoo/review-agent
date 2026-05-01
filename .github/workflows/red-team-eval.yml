@@ -82,7 +82,7 @@ jobs:
         run: pnpm --filter @review-agent/eval eval:red-team
       - name: Upload promptfoo results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: red-team-results
           path: packages/eval/promptfoo-results.json
