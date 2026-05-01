@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "panic-on-untrusted-input",
+  "language": "Rust",
+  "must_contain_any": ["unwrap", "panic", "?", "Result", "expect"],
+  "rationale": "Switched from `unwrap_or(0)` to `unwrap()` — now panics on any malformed input. The function takes `&str` from the caller, which is untrusted by default."
+}

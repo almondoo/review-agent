@@ -1,0 +1,15 @@
+--- a/src/handlers/login.ts
++++ b/src/handlers/login.ts
+@@ -1,12 +1,11 @@
+ import bcrypt from 'bcrypt';
+ import { db } from '../db.js';
+
+ export async function login(email: string, password: string) {
+-  const user = await db.users.findByEmail(email);
++  const user = await db.users.findByEmailCaseInsensitive(email);
+   if (!user) return null;
+   const ok = await bcrypt.compare(password, user.passwordHash);
+   if (!ok) return null;
+-  await audit.log('login.success', { userId: user.id });
+   return user;
+ }

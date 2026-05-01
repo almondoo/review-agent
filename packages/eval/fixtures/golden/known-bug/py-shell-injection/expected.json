@@ -1,0 +1,8 @@
+{
+  "category": "known-bug",
+  "bug_class": "shell-injection",
+  "language": "Python",
+  "severity_min": "must_fix",
+  "must_contain_any": ["shell.?injection", "shell=True", "argument list", "interpolat"],
+  "rationale": "Switched from an argv list to `shell=True` with f-string interpolation of the user-provided path. A path of `/tmp/x; rm -rf /` runs the rm after pg_restore."
+}

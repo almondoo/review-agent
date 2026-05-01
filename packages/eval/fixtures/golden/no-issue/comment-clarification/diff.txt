@@ -1,0 +1,9 @@
+--- a/src/util/parse.ts
++++ b/src/util/parse.ts
+@@ -1,4 +1,5 @@
+-// Parses an ID from a path segment.
++// Parses a numeric ID from a path segment. Throws on non-numeric input;
++// the caller is responsible for validating user-provided strings first.
+ export function parseId(segment: string): number {
+   return Number.parseInt(segment, 10);
+ }

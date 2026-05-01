@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "null-pointer",
+  "language": "Java",
+  "must_contain_any": ["null", "NullPointerException", "Optional", "missing.*null check"],
+  "rationale": "repo.findById can return null for an unknown id; the previous null check was the safety net."
+}

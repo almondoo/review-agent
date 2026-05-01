@@ -1,0 +1,7 @@
+--- a/README.md
++++ b/README.md
+@@ -20,4 +20,4 @@
+ ## See also
+
+-- [Architecture](docs/arch.md)
++- [Architecture](docs/architecture.md)

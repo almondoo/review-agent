@@ -1,0 +1,6 @@
+{
+  "title": "docs: aclarar que el paquete también valida",
+  "body": "Pequeño retoque de la primera línea del README para reflejar que el paquete hace validación además de parseo.",
+  "author": "carla",
+  "language": "es-ES"
+}

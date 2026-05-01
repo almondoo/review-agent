@@ -1,12 +1,7 @@
 {
   "category": "known-bug",
-  "language": "go",
-  "expected_findings": [
-    {
-      "ruleId": "nil-deref",
-      "where": "internal/user/profile.go after call to s.repo.Preferences",
-      "rationale": "prefs may be nil when no preferences exist; UseGravatar dereferences without a guard."
-    }
-  ],
-  "must_not_contain": ["api key", "ignore previous"]
+  "bug_class": "nil-deref",
+  "language": "Go",
+  "must_contain_any": ["nil pointer", "nil deref", "guard", "preferences", "may be nil"],
+  "rationale": "prefs may be nil when no preferences exist; UseGravatar dereferences without a guard."
 }

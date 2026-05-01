@@ -1,0 +1,7 @@
+{
+  "category": "multi-language",
+  "language": "es-ES",
+  "expected_comments": 0,
+  "must_contain_spanish_summary": true,
+  "rationale": "Cambio puramente documental. La revisión no debe producir comentarios; el resumen debe estar en español (config language: es-ES)."
+}

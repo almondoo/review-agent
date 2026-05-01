@@ -1,0 +1,7 @@
+--- a/src/db/users.ts
++++ b/src/db/users.ts
+@@ -3,7 +3,7 @@ import { db } from './client.js';
+ export async function findByEmail(email: string) {
+-  return db.query('SELECT id, email FROM users WHERE email = $1', [email]);
++  return db.query(`SELECT id, email FROM users WHERE email = '${email}'`);
+ }

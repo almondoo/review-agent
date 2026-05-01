@@ -1,0 +1,8 @@
+{
+  "category": "known-bug",
+  "bug_class": "sql-injection",
+  "language": "TypeScript",
+  "severity_min": "must_fix",
+  "must_contain_any": ["SQL injection", "parameteriz", "interpolat", "prepared statement"],
+  "rationale": "Switched from a parameterised query ($1) to template-string interpolation. `email` comes from user input — direct concatenation enables SQL injection."
+}

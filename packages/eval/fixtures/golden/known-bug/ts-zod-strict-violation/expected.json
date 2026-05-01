@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "schema-laxness",
+  "language": "TypeScript",
+  "must_contain_any": ["strict", "extra.*fields", "passthrough", "validation"],
+  "rationale": "Removed `.strict()` on a payment schema. Untrusted clients can now smuggle additional fields (e.g., `bypassFraudCheck: true`) past validation."
+}

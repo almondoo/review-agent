@@ -1,0 +1,7 @@
+{
+  "category": "multi-language",
+  "language": "ja-JP",
+  "expected_comments": 0,
+  "must_contain_japanese_summary": true,
+  "rationale": "ドキュメントの一行修正。コメントを生成せず、日本語のサマリーで完結すべき。"
+}

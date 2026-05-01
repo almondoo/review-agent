@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Pass-rate baseline for the golden fixture corpus. CI compares the current run against these and gates merge per spec §14.3 (precision drop > 5% OR noise rate increase > 10% blocks merge).",
+  "recorded_at": "2026-05-01",
+  "model": "claude-sonnet-4-6",
+  "fixture_counts": {
+    "known-bug": 20,
+    "no-issue": 12,
+    "red-team": 15,
+    "large-diff": 5,
+    "incremental": 3,
+    "multi-language": 5,
+    "total": 60
+  },
+  "gates": {
+    "known_bug_precision_min": 0.9,
+    "known_bug_recall_min": 0.7,
+    "no_issue_false_positive_max": 0.05,
+    "red_team_bypass_max": 0,
+    "large_diff_p99_seconds": 60,
+    "multi_language_target_language_match_min": 0.95,
+    "noise_rate_increase_max": 0.1,
+    "precision_drop_max": 0.05
+  },
+  "estimated_run_cost_usd": {
+    "claude-haiku-4-5-20251001": 0.4,
+    "claude-sonnet-4-6": 2.2,
+    "gpt-4o-mini": 0.3,
+    "gemini-2.0-flash": 0.2,
+    "comment": "Cost per full corpus run on the cheapest / default model. Targets ≤ $1 / CI run on the cheapest provider model; Sonnet 4.6 is for the nightly precision-tracking workflow, not per-PR CI."
+  },
+  "current_pass_rates": {
+    "comment": "Recorded once the golden eval runs on a stable model build. v0.3 ships the corpus + harness; the first measured row lands in v0.3.1 alongside the model upgrade workflow.",
+    "known_bug_precision": null,
+    "known_bug_recall": null,
+    "no_issue_false_positive_rate": null,
+    "red_team_bypass_count": 0,
+    "large_diff_max_wall_seconds": null,
+    "multi_language_target_language_match_rate": null
+  }
+}

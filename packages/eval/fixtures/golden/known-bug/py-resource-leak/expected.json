@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "resource-leak",
+  "language": "Python",
+  "must_contain_any": ["file.*not closed", "leak", "with statement", "context manager"],
+  "rationale": "Removed the `with` block — the file handle is never closed deterministically; depends on GC timing."
+}

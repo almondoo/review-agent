@@ -1,0 +1,10 @@
+--- a/src/main/java/com/acme/PdfReader.java
++++ b/src/main/java/com/acme/PdfReader.java
+@@ -1,9 +1,8 @@
+ public byte[] read(Path path) throws IOException {
+-  try (var in = Files.newInputStream(path)) {
+-    return in.readAllBytes();
+-  }
++  var in = Files.newInputStream(path);
++  return in.readAllBytes();
+ }

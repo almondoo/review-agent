@@ -1,0 +1,9 @@
+--- a/src/api/users.ts
++++ b/src/api/users.ts
+@@ -8,7 +8,7 @@ export async function getUser(id: string): Promise<User> {
+   const row = await db.users.findById(id);
+-  if (!row) throw new NotFoundError(`user ${id}`);
+-  return row;
++  // 該当ユーザーがいない場合は null を返す
++  return row ?? null;
+ }

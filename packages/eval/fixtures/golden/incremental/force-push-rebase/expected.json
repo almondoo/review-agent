@@ -1,0 +1,14 @@
+{
+  "category": "incremental",
+  "subtype": "force-push-divergence",
+  "previous_state": {
+    "lastReviewedSha": "deadbe1",
+    "baseSha": "main-old"
+  },
+  "current_state": {
+    "headSha": "feedfa9",
+    "baseSha": "main-new"
+  },
+  "expected_diff_strategy": "full",
+  "rationale": "Previous review's lastReviewedSha is no longer reachable from current head (force-push). computeDiffStrategy must return 'full' and the agent must re-review every changed file from scratch — including the dropped audit.log call (which is now a regression)."
+}

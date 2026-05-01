@@ -1,0 +1,64 @@
+--- a/src/services/Cart.ts
++++ b/src/services/ShoppingBasket.ts
+@@ -1,9 +1,9 @@
+-// Cart aggregates line items, applies promotions, and produces the
++// ShoppingBasket aggregates line items, applies promotions, and produces the
+ // checkout-ready summary.
+ import type { LineItem, Promotion, CheckoutSummary } from '../types.js';
+
+-export class Cart {
++export class ShoppingBasket {
+   private items: LineItem[] = [];
+
+   add(item: LineItem): void {
+@@ -23,14 +23,14 @@ export class Cart {
+   }
+ }
+
+-export function emptyCart(): Cart {
+-  return new Cart();
++export function emptyBasket(): ShoppingBasket {
++  return new ShoppingBasket();
+ }
+--- a/src/services/index.ts
++++ b/src/services/index.ts
+@@ -1,4 +1,4 @@
+-export { Cart, emptyCart } from './Cart.js';
++export { ShoppingBasket, emptyBasket } from './ShoppingBasket.js';
+ export { Catalog } from './Catalog.js';
+ export { Customer } from './Customer.js';
+ export { Order } from './Order.js';
+--- a/src/api/checkout.ts
++++ b/src/api/checkout.ts
+@@ -1,11 +1,11 @@
+ import { Request, Response } from 'express';
+-import { Cart, emptyCart } from '../services/Cart.js';
++import { ShoppingBasket, emptyBasket } from '../services/ShoppingBasket.js';
+
+ export async function checkout(req: Request, res: Response) {
+-  const cart: Cart = req.session?.cart ?? emptyCart();
+-  const summary = cart.summary();
++  const basket: ShoppingBasket = req.session?.basket ?? emptyBasket();
++  const summary = basket.summary();
+   res.json(summary);
+ }
+--- a/test/services/Cart.test.ts
++++ b/test/services/ShoppingBasket.test.ts
+@@ -1,12 +1,12 @@
+ import { describe, expect, it } from 'vitest';
+-import { Cart } from '../../src/services/Cart.js';
++import { ShoppingBasket } from '../../src/services/ShoppingBasket.js';
+
+-describe('Cart', () => {
++describe('ShoppingBasket', () => {
+   it('aggregates line totals', () => {
+-    const cart = new Cart();
+-    cart.add({ id: 1, price: 100, qty: 2 });
+-    cart.add({ id: 2, price: 50, qty: 1 });
+-    expect(cart.summary().total).toBe(250);
++    const basket = new ShoppingBasket();
++    basket.add({ id: 1, price: 100, qty: 2 });
++    basket.add({ id: 2, price: 50, qty: 1 });
++    expect(basket.summary().total).toBe(250);
+   });
+ });

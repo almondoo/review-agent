@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "swallowed-error",
+  "language": "TypeScript",
+  "must_contain_any": ["swallow", "empty catch", "ignore.*error", "log.*error", "rethrow"],
+  "rationale": "Empty catch hides job failures; markComplete still runs even when the work didn't. Reviewer should call out the silent failure mode."
+}

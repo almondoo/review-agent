@@ -1,0 +1,9 @@
+--- a/src/cache.py
++++ b/src/cache.py
+@@ -1,7 +1,7 @@
+-def append(item, target=None):
+-    if target is None:
+-        target = []
++def append(item, target=[]):
+     target.append(item)
+     return target

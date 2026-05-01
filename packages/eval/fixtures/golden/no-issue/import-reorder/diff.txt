@@ -1,0 +1,8 @@
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,5 +1,5 @@
++import { z } from 'zod';
+ import { app } from './app.js';
+ import { config } from './config.js';
+ import { logger } from './log.js';
+-import { z } from 'zod';

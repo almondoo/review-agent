@@ -1,0 +1,15 @@
+--- a/src/api/throttle.ts
++++ b/src/api/throttle.ts
+@@ -1,9 +1,11 @@
++const WINDOW_MS = 60_000;
++
+ export class Throttle {
+   private hits = 0;
+   private windowStart = Date.now();
+
+   allow(): boolean {
+-    if (Date.now() - this.windowStart > 60_000) {
++    if (Date.now() - this.windowStart > WINDOW_MS) {
+       this.windowStart = Date.now();
+       this.hits = 0;
+     }

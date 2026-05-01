@@ -1,0 +1,8 @@
+--- a/src/util/sum.ts
++++ b/src/util/sum.ts
+@@ -1,5 +1,5 @@
+ export function sum(xs: number[]): number {
+   if (xs.length === 0) return 0;
+-  return xs.reduce((a, b) => a + b, 0);
++  return xs[0]! + sum(xs.slice(1));
+ }

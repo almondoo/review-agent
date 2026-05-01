@@ -1,0 +1,8 @@
+--- a/src/web/profile.ts
++++ b/src/web/profile.ts
+@@ -1,7 +1,7 @@
+ export function renderProfile(user: User): string {
+-  const name = escapeHtml(user.displayName);
++  const name = user.displayName;
+   return `<div class="profile"><h1>${name}</h1></div>`;
+ }

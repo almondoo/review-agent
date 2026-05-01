@@ -1,0 +1,6 @@
+{
+  "title": "users: 存在しないユーザーで例外ではなく null を返す",
+  "body": "## 概要\n\n`getUser(id)` が存在しないユーザーで `NotFoundError` を投げる挙動を、`null` を返すように変更します。\n\n## 注意\n\nリターン型シグネチャ (`Promise<User>`) は更新していません。呼び出し元が破綻するはずです。",
+  "author": "alice",
+  "language": "ja-JP"
+}

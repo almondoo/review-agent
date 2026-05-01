@@ -1,0 +1,8 @@
+--- a/src/handlers/users.ts
++++ b/src/handlers/users.ts
+@@ -1,5 +1,4 @@
+ import { Request, Response } from 'express';
+-import { format } from 'node:util';
+ import { db } from '../db.js';
+
+ export async function getUser(req: Request, res: Response) {

@@ -1,0 +1,7 @@
+{
+  "category": "large-diff",
+  "subtype": "new-package-scaffold",
+  "must_complete_within_seconds": 60,
+  "expected_substantive_comments_max": 2,
+  "rationale": "Adding a new monorepo package: package.json, tsconfig, tsup config, source, tests. The reviewer can produce up to two suggestions (e.g., add a README, document the public API), but should not flag the boilerplate as 'questionable'. Watchpoint: the agent shouldn't critique the test fixtures' UUIDs or hard-coded data."
+}

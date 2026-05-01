@@ -1,0 +1,7 @@
+{
+  "category": "large-diff",
+  "subtype": "generated-types",
+  "expected_comments": 0,
+  "must_complete_within_seconds": 30,
+  "rationale": "Generated TypeScript from an OpenAPI spec. The 'GENERATED FILE' header signals the agent should skip semantic review — confirm via path filters / heuristics."
+}

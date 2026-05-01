@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "mutable-default-argument",
+  "language": "Python",
+  "must_contain_any": ["mutable default", "shared", "default argument", "None"],
+  "rationale": "Python evaluates default args once at function definition. `target=[]` is shared across every call where target is omitted, so successive calls accumulate state."
+}

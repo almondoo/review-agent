@@ -1,0 +1,25 @@
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -1,7 +1,7 @@
+ lockfileVersion: '9.0'
+
+ importers:
+   .:
+     dependencies:
+       zod:
+-        specifier: 3.25.40
+-        version: 3.25.40
++        specifier: 3.25.76
++        version: 3.25.76
+       ai:
+         specifier: 4.0.0
+         version: 4.0.0
+@@ -50,6 +50,15 @@ packages:
++  zod@3.25.76:
++    resolution: { integrity: sha512-redacted }
++    engines: { node: '>=18' }
++
++# (… 200 more lines of resolution metadata …)
++# (… package integrity checksums …)
++# (… per-platform binary distribution metadata …)
++# (… nested dependency tree updates …)

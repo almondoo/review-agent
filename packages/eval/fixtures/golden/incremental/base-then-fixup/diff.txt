@@ -1,0 +1,12 @@
+--- a/src/api/orders.ts
++++ b/src/api/orders.ts
+@@ -10,11 +10,11 @@ export class OrderService {
+   async create(req: OrderRequest): Promise<Order> {
+     const order = await db.orders.insert(req);
+-    audit.log({ event: 'order.created', orderId: order.id });
+-    metrics.increment('orders.created');
++    await audit.log({ event: 'order.created', orderId: order.id });
++    await metrics.increment('orders.created');
+     return order;
+   }
+ }

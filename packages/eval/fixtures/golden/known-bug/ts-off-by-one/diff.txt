@@ -1,0 +1,7 @@
+--- a/src/util/window.ts
++++ b/src/util/window.ts
+@@ -1,6 +1,6 @@
+ export function lastN<T>(items: T[], n: number): T[] {
+-  return items.slice(items.length - n);
++  return items.slice(items.length - n - 1);
+ }

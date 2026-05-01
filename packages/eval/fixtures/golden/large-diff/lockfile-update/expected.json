@@ -1,0 +1,8 @@
+{
+  "category": "large-diff",
+  "subtype": "generated-file",
+  "expected_comments": 0,
+  "must_complete_within_seconds": 30,
+  "must_not_contain": ["sha512", "integrity"],
+  "rationale": "Lockfile updates are generated content. The agent's path filter should skip pnpm-lock.yaml; if it doesn't, the review should at minimum produce zero substantive comments and not echo the integrity hashes."
+}

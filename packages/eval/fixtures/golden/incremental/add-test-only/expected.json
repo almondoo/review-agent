@@ -1,0 +1,9 @@
+{
+  "category": "incremental",
+  "subtype": "tests-only-followup",
+  "previous_state": {
+    "lastReviewedSha": "0a1b2c3"
+  },
+  "expected_new_comments": 0,
+  "rationale": "Follow-up commit adding test coverage for previously-shipped code. Diff strategy should be 'incremental since prev head'; the agent should treat tests-only changes as a clean review."
+}

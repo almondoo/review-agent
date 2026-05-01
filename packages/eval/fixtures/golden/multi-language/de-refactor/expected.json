@@ -1,0 +1,7 @@
+{
+  "category": "multi-language",
+  "language": "de-DE",
+  "expected_comments": 0,
+  "must_contain_german_summary": true,
+  "rationale": "Rückwärtskompatible Erweiterung. Keine Findings; Zusammenfassung auf Deutsch."
+}

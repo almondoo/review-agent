@@ -1,0 +1,13 @@
+--- a/src/main/java/com/acme/Cache.java
++++ b/src/main/java/com/acme/Cache.java
+@@ -1,12 +1,12 @@
+ import java.util.HashMap;
++import java.util.Map;
+
+ public class Cache {
+-  private final java.util.concurrent.ConcurrentHashMap<String, String> store = new java.util.concurrent.ConcurrentHashMap<>();
++  private final Map<String, String> store = new HashMap<>();
+
+   public String get(String k) { return store.get(k); }
+   public void put(String k, String v) { store.put(k, v); }
+ }

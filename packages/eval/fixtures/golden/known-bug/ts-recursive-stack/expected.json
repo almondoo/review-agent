@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "stack-overflow",
+  "language": "TypeScript",
+  "must_contain_any": ["stack overflow", "recursion", "tail call", "iterative", "performance"],
+  "rationale": "Replaced an O(n) reduce with O(n²) recursion + slice. Stack overflows on arrays > ~10k items in V8; also allocates n slices."
+}

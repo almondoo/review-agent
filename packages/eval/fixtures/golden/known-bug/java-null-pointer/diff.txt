@@ -1,0 +1,9 @@
+--- a/src/main/java/com/acme/UserService.java
++++ b/src/main/java/com/acme/UserService.java
+@@ -10,7 +10,7 @@ public class UserService {
+   public String displayName(long userId) {
+     User u = repo.findById(userId);
+-    return u == null ? "(unknown)" : u.getDisplayName();
++    return u.getDisplayName();
+   }
+ }

@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "off-by-one",
+  "language": "TypeScript",
+  "must_contain_any": ["off.?by.?one", "n\\s*\\+\\s*1", "returns.*n\\s*\\+\\s*1", "extra"],
+  "rationale": "Slicing from `length - n - 1` returns n+1 items when n < length, not n."
+}

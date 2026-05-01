@@ -1,0 +1,6 @@
+{
+  "title": "docs: pnpm 推奨を明示し、Bun 未サポートを補足",
+  "body": "セットアップガイドの一行修正です。",
+  "author": "daisuke",
+  "language": "ja-JP"
+}

@@ -1,0 +1,9 @@
+--- a/package.json
++++ b/package.json
+@@ -1,5 +1,5 @@
+ {
+   "name": "@acme/widgets",
+-  "version": "1.4.2",
++  "version": "1.4.3",
+   "license": "Apache-2.0",
+ }

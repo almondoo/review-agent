@@ -1,0 +1,10 @@
+--- a/src/api/types.ts
++++ b/src/api/types.ts
+@@ -1,7 +1,7 @@
+ import { z } from 'zod';
+
+ export const PaymentSchema = z.object({
+   amountCents: z.number().int().positive(),
+   currency: z.string().length(3),
+-}).strict();
++});

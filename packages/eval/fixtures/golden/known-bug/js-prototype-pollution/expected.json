@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "prototype-pollution",
+  "language": "JavaScript",
+  "must_contain_any": ["prototype.?pollution", "__proto__", "constructor", "hasOwnProperty"],
+  "rationale": "Removing the hasOwnProperty guard while recursively merging untrusted sources lets `__proto__` keys reach Object.prototype — classic prototype pollution."
+}

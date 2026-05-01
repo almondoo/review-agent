@@ -1,0 +1,7 @@
+{
+  "category": "large-diff",
+  "subtype": "docs-only",
+  "expected_comments": 0,
+  "must_complete_within_seconds": 30,
+  "rationale": "Doc-only restructure. Agent should produce no substantive comments; ideally one summary acknowledging the docs change without nitpicking prose."
+}

@@ -1,0 +1,7 @@
+{
+  "category": "large-diff",
+  "subtype": "rename-refactor",
+  "expected_comments": 0,
+  "must_complete_within_seconds": 60,
+  "rationale": "Pure mechanical rename across 4 files. No behavioural change. Reviewer should produce no must_fix / consider comments — at most one nit-level mention if the agent thinks the new name needs a deprecation alias."
+}

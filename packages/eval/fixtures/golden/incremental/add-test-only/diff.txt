@@ -1,0 +1,20 @@
+--- /dev/null
++++ b/test/services/Catalog.test.ts
+@@ -0,0 +1,18 @@
++import { describe, expect, it } from 'vitest';
++import { Catalog } from '../../src/services/Catalog.js';
++
++describe('Catalog', () => {
++  it('returns null on a missing sku', async () => {
++    const c = new Catalog();
++    expect(await c.findBySku('does-not-exist')).toBeNull();
++  });
++
++  it('returns the row on a hit', async () => {
++    const c = new Catalog();
++    c.seed([{ sku: 'A1', price: 100, label: 'Widget' }]);
++    const found = await c.findBySku('A1');
++    expect(found?.label).toBe('Widget');
++    expect(found?.price).toBe(100);
++  });
++});

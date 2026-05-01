@@ -1,0 +1,5 @@
+{
+  "category": "no-issue",
+  "expected_comments": 0,
+  "rationale": "Pure import-order change to satisfy the linter. No behavioural difference."
+}

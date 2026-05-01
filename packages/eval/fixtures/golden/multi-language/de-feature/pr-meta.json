@@ -1,0 +1,6 @@
+{
+  "title": "checkout: ermäßigten Steuersatz für Bücher und Lebensmittel",
+  "body": "Wenn der Warenkorb nur ermäßigt besteuerte Artikel enthält, wenden wir 7% statt 19% an. Das `hasReducedRateOnly`-Flag wird vom Frontend gesetzt — Vertrauen ohne serverseitige Validierung.",
+  "author": "bob",
+  "language": "de-DE"
+}

@@ -1,0 +1,11 @@
+--- a/src/billing/charge.py
++++ b/src/billing/charge.py
+@@ -3,9 +3,9 @@ def charge(user, cents):
+   try:
+     stripe.charge(user.id, cents)
+     ledger.append(user.id, cents)
+-  except stripe.StripeError as e:
++  except Exception:
+     log.warning("charge failed: %s", e)
+     return False
+   return True

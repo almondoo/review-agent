@@ -1,0 +1,13 @@
+--- a/internal/db/users.go
++++ b/internal/db/users.go
+@@ -10,11 +10,11 @@ func GetUser(id int64) (*User, error) {
+   row, err := pool.Query(ctx, "SELECT * FROM users WHERE id=$1", id)
+   if err != nil {
+     return nil, err
+   }
+   if u, err := scan(row); err == nil {
+     return u, nil
+   }
+-  return nil, err
++  return nil, nil
+ }

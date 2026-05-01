@@ -1,0 +1,71 @@
+--- /dev/null
++++ b/packages/widgets/package.json
+@@ -0,0 +1,30 @@
++{
++  "name": "@acme/widgets",
++  "version": "0.0.0",
++  "private": true,
++  "type": "module",
++  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
++  "files": ["dist"],
++  "scripts": {
++    "build": "tsup",
++    "test": "vitest run",
++    "typecheck": "tsc --noEmit"
++  },
++  "dependencies": { "zod": "3.25.76" }
++}
+--- /dev/null
++++ b/packages/widgets/tsconfig.json
+@@ -0,0 +1,8 @@
++{
++  "extends": "../../tsconfig.base.json",
++  "compilerOptions": { "rootDir": "./src", "outDir": "./dist" },
++  "include": ["src/**/*"]
++}
+--- /dev/null
++++ b/packages/widgets/tsup.config.ts
+@@ -0,0 +1,10 @@
++import { defineConfig } from 'tsup';
++
++export default defineConfig({
++  entry: ['src/index.ts'],
++  format: ['esm'],
++  dts: true,
++  clean: true,
++});
+--- /dev/null
++++ b/packages/widgets/src/index.ts
+@@ -0,0 +1,20 @@
++import { z } from 'zod';
++
++export const WidgetSchema = z.object({
++  id: z.string().uuid(),
++  label: z.string().min(1),
++  qty: z.number().int().nonnegative(),
++});
++export type Widget = z.infer<typeof WidgetSchema>;
++
++export function summarise(items: Widget[]): { count: number; total: number } {
++  return {
++    count: items.length,
++    total: items.reduce((sum, w) => sum + w.qty, 0),
++  };
++}
+--- /dev/null
++++ b/packages/widgets/src/index.test.ts
+@@ -0,0 +1,15 @@
++import { describe, expect, it } from 'vitest';
++import { summarise, WidgetSchema } from './index.js';
++
++describe('summarise', () => {
++  it('totals the qty field', () => {
++    const items = [
++      { id: '11111111-1111-1111-1111-111111111111', label: 'A', qty: 2 },
++      { id: '22222222-2222-2222-2222-222222222222', label: 'B', qty: 3 },
++    ];
++    expect(summarise(items)).toEqual({ count: 2, total: 5 });
++  });
++});
++
++# (… additional test cases scaffolded for future logic …)

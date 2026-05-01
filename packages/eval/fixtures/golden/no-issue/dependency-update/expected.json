@@ -1,0 +1,5 @@
+{
+  "category": "no-issue",
+  "expected_comments": 0,
+  "rationale": "Patch-level dep bump within the same minor. CI's separate dependency-vetting workflow should handle anything stricter."
+}

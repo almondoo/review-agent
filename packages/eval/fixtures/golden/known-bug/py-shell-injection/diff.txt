@@ -1,0 +1,8 @@
+--- a/src/admin/import.py
++++ b/src/admin/import.py
+@@ -1,7 +1,6 @@
+ import subprocess
+
+ def import_dump(path: str) -> int:
+-    return subprocess.run(["pg_restore", path], check=True).returncode
++    return subprocess.run(f"pg_restore {path}", shell=True, check=True).returncode

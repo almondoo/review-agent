@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "race-condition",
+  "language": "Python",
+  "must_contain_any": ["race", "lock", "atomic", "thread.?safety", "concurrent"],
+  "rationale": "Read-modify-write on _count without a lock is racy across threads despite the GIL — bytecode interleaving on `_count += 1` produces lost updates."
+}

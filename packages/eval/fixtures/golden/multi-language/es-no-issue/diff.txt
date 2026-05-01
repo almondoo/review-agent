@@ -1,0 +1,9 @@
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,7 @@
+ # mi-paquete
+
+-Un paquete pequeño para parsear datos FOO.
++Un paquete pequeño para parsear y validar datos FOO.
+
+ ## Instalación

@@ -1,0 +1,54 @@
+--- a/docs/index.md
++++ b/docs/getting-started.md
+@@ -1,4 +1,4 @@
+-# Documentation
++# Getting started
+
+ ## Install
+
+@@ -12,7 +12,7 @@ pnpm add my-package
+ import lib from 'my-package';
+ ```
+
+-## Configuration
++## Configure
+
+ The package reads `.my-package.yml` from the project root. Every key
+ is optional.
+@@ -28,7 +28,7 @@ logging:
+   level: info
+ ```
+
+-## Advanced topics
++## Next steps
+
+-See `docs/architecture.md` for the system overview, and
+-`docs/security.md` for the threat model.
++- [Architecture](./architecture.md) — system overview.
++- [Security](./security.md) — threat model.
++- [Reference](./reference.md) — full config schema.
+--- /dev/null
++++ b/docs/reference.md
+@@ -0,0 +1,80 @@
++# Reference
++
++Full schema for `.my-package.yml`. Generated from the Zod schema.
++
++## logging
++
++- **level** (`string`, default `info`): one of `debug`, `info`, `warn`, `error`.
++- **destination** (`string`, default `stdout`): file path or `stdout` / `stderr`.
++
++## cache
++
++- **ttl_seconds** (`number`, default `300`): how long entries live.
++- **max_entries** (`number`, default `1000`): LRU capacity.
++
++## telemetry
++
++- **enabled** (`boolean`, default `true`): emit OpenTelemetry spans.
++- **endpoint** (`string`, default empty): OTLP HTTP traces endpoint.
++
++# (… 60 more lines of reference content …)
++# (… each option documented with examples …)
++# (… cross-references to the architecture doc …)

@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "broad-except",
+  "language": "Python",
+  "must_contain_any": ["broad except", "Exception", "specific.*exception", "swallow"],
+  "rationale": "Widened `except StripeError` to bare `except Exception`. Now hides every error — KeyboardInterrupt, ledger DB failures, AttributeError. Plus the format-string still references `e` which is no longer bound, so the log call AttributeErrors at runtime."
+}

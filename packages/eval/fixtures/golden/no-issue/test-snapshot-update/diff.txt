@@ -1,0 +1,11 @@
+--- a/test/__snapshots__/render.test.ts.snap
++++ b/test/__snapshots__/render.test.ts.snap
+@@ -3,7 +3,7 @@
+ exports[`renders the hero block 1`] = `
+ <div
+   class="hero"
+-  data-version="1.4.2"
++  data-version="1.4.3"
+ >
+   Hello world
+ </div>

@@ -1,0 +1,8 @@
+--- a/src/io/loader.py
++++ b/src/io/loader.py
+@@ -1,6 +1,6 @@
+ def load_json(path):
+-    with open(path) as f:
+-        return json.load(f)
++    f = open(path)
++    return json.load(f)

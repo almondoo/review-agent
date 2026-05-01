@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "off-by-one",
+  "language": "TypeScript",
+  "must_contain_any": ["off.?by.?one", "mid\\s*\\+\\s*1", "out.?of.?bounds", "median"],
+  "rationale": "Median for an even-length array is `(sorted[mid-1] + sorted[mid]) / 2`, not `(sorted[mid] + sorted[mid+1]) / 2` — the new code reads past the array end and returns the wrong value."
+}

@@ -1,0 +1,6 @@
+{
+  "title": "fmt: Währung als Parameter statt fest verdrahtet",
+  "body": "Vorher hartcodiert auf EUR; jetzt als optionaler Parameter, mit EUR als Default. Rückwärtskompatibel.",
+  "author": "ehrhardt",
+  "language": "de-DE"
+}

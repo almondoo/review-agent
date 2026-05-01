@@ -1,0 +1,10 @@
+--- a/README.md
++++ b/README.md
+@@ -10,7 +10,7 @@
+ ## Quick start
+
+-Install with `npm i my-package`. Then importt the default export:
++Install with `npm i my-package`. Then import the default export:
+
+ ```ts
+ import lib from 'my-package';

@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "missing-await",
+  "language": "TypeScript",
+  "must_contain_any": ["missing.*await", "await", "fire.?and.?forget", "unhandled promise"],
+  "rationale": "audit.log returns a Promise; not awaiting it loses the write if the request returns early. Same for metrics.increment."
+}

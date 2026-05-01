@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "thread-safety-regression",
+  "language": "Java",
+  "must_contain_any": ["thread.?safe", "concurrent", "HashMap", "ConcurrentHashMap", "synchroniz"],
+  "rationale": "Replaced ConcurrentHashMap with plain HashMap. The Cache class is shared across request threads; concurrent put can corrupt the internal table."
+}

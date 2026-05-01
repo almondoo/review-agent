@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "resource-leak",
+  "language": "Java",
+  "must_contain_any": ["try.?with.?resources", "InputStream", "close", "leak"],
+  "rationale": "Removed try-with-resources. The InputStream is never closed deterministically; under load, file handles exhaust before the GC collects."
+}

@@ -1,0 +1,13 @@
+--- a/src/util/fmt.ts
++++ b/src/util/fmt.ts
+@@ -1,7 +1,7 @@
+-// Formatiert einen Geldbetrag im aktuellen Locale.
+-export function formatMoney(cents: number, locale = 'de-DE'): string {
+-  return new Intl.NumberFormat(locale, { style: 'currency', currency: 'EUR' }).format(
+-    cents / 100,
+-  );
+-}
++// Formatiert einen Geldbetrag im angegebenen Locale.
++export function formatMoney(cents: number, locale = 'de-DE', currency = 'EUR'): string {
++  return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(cents / 100);
++}

@@ -1,0 +1,5 @@
+{
+  "category": "no-issue",
+  "expected_comments": 0,
+  "rationale": "Pure README typo fix. Reviewer should produce no comments and a brief 'no issues' summary."
+}

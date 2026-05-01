@@ -1,0 +1,7 @@
+--- a/src/parser.rs
++++ b/src/parser.rs
+@@ -1,6 +1,5 @@
+ pub fn parse(input: &str) -> u64 {
+-    input.parse::<u64>().unwrap_or(0)
++    input.parse::<u64>().unwrap()
+ }

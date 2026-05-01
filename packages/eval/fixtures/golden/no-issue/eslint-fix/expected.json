@@ -1,0 +1,5 @@
+{
+  "category": "no-issue",
+  "expected_comments": 0,
+  "rationale": "Tightened == to ===. Both arms are strings here, so the comparison result is identical; lint compliance only."
+}

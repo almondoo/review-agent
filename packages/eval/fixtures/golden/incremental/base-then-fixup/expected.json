@@ -1,0 +1,19 @@
+{
+  "category": "incremental",
+  "subtype": "fixup-after-feedback",
+  "previous_state": {
+    "lastReviewedSha": "abc1234",
+    "comments": [
+      {
+        "path": "src/api/orders.ts",
+        "line": 12,
+        "fingerprint": "fp-missing-await",
+        "severity": "must_fix",
+        "title": "missing await on audit.log"
+      }
+    ]
+  },
+  "expected_resolved_fingerprints": ["fp-missing-await"],
+  "expected_new_comments": 0,
+  "rationale": "The previous review flagged the missing-await bug (see ts-missing-await known-bug fixture). This incremental commit adds the awaits. Agent should mark the fingerprinted comment as resolved and produce no new findings."
+}

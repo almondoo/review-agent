@@ -1,0 +1,7 @@
+{
+  "category": "known-bug",
+  "bug_class": "swallowed-error",
+  "language": "Go",
+  "must_contain_any": ["shadow", "scope", "swallow", "nil.*error", "scan.*error"],
+  "rationale": "The `:=` inside the if creates a shadowed `err`; the outer return now always sees `nil`. Worse: the new code returns `nil, nil` so callers can't tell apart 'no row' from 'scan failed'."
+}

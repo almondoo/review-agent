@@ -1,0 +1,13 @@
+--- a/src/counter.py
++++ b/src/counter.py
+@@ -1,9 +1,7 @@
+ import threading
+
+ _count = 0
+-_lock = threading.Lock()
+
+ def increment():
+     global _count
+-    with _lock:
+-        _count += 1
++    _count += 1

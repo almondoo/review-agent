@@ -1,0 +1,42 @@
+--- a/types/api.generated.ts
++++ b/types/api.generated.ts
+@@ -1,5 +1,5 @@
+ // GENERATED FILE — do not edit by hand.
+-// openapi-typescript output from spec v1.4.2
++// openapi-typescript output from spec v1.4.3
+
+ export interface paths {
+   "/users": {
+@@ -41,6 +41,30 @@ export interface paths {
+       };
+     };
+   };
++  "/users/{id}/preferences": {
++    get: {
++      parameters: { path: { id: string } };
++      responses: {
++        200: { content: { "application/json": components["schemas"]["Preferences"] } };
++        404: { content: { "application/json": components["schemas"]["Error"] } };
++      };
++    };
++    put: {
++      parameters: { path: { id: string } };
++      requestBody: { content: { "application/json": components["schemas"]["Preferences"] } };
++      responses: {
++        204: never;
++        400: { content: { "application/json": components["schemas"]["Error"] } };
++      };
++    };
++  };
+ }
+
+ export interface components {
+   schemas: {
++    Preferences: {
++      timezone: string;
++      locale: string;
++      newsletterOptIn: boolean;
++    };
+     User: { id: string; email: string };
+     Error: { code: number; message: string };
+   };

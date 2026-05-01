@@ -1,0 +1,8 @@
+{
+  "category": "multi-language",
+  "language": "ja-JP",
+  "bug_class": "type-signature-mismatch",
+  "must_contain_japanese": true,
+  "must_contain_any": ["戻り値", "型", "シグネチャ", "Promise<User>", "null"],
+  "rationale": "返り値が null を含むのに型シグネチャは Promise<User> のまま。呼び出し側で実行時エラーになる。レビューは日本語で出力されるべき (config language: ja-JP)。"
+}

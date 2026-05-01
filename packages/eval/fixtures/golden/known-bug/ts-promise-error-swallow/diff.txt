@@ -1,0 +1,9 @@
+--- a/src/jobs/run.ts
++++ b/src/jobs/run.ts
+@@ -8,7 +8,9 @@ export async function runJob(job: Job): Promise<void> {
+-  await processor.run(job);
++  try {
++    await processor.run(job);
++  } catch {} // ignore failures — try the next job
+   await markComplete(job.id);
+ }

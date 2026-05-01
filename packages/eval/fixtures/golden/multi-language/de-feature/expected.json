@@ -1,0 +1,8 @@
+{
+  "category": "multi-language",
+  "language": "de-DE",
+  "bug_class": "client-trust",
+  "must_contain_german": true,
+  "must_contain_any": ["Validierung", "Frontend", "vertrauen", "Server", "Steuer"],
+  "rationale": "Das `hasReducedRateOnly`-Flag stammt vom Client und bestimmt direkt den Steuersatz — ein Manipulationsvektor. Die Review muss auf Deutsch sein (config language: de-DE)."
+}

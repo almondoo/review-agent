@@ -1,0 +1,8 @@
+{
+  "category": "known-bug",
+  "bug_class": "xss",
+  "language": "TypeScript",
+  "severity_min": "must_fix",
+  "must_contain_any": ["XSS", "escape", "sanitiz", "user.displayName"],
+  "rationale": "Removed escapeHtml on a user-controlled string before interpolating into HTML markup. A displayName of `<script>...</script>` executes."
+}
