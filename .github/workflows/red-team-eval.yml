@@ -36,16 +36,34 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @review-agent/eval validate:red-team
 
+  # GitHub Actions disallows the `secrets` context in job-level `if:`, so we
+  # surface the key's presence as an output from a tiny preflight job and let
+  # `eval` gate on `needs.preflight.outputs.has-key`. Forks never see the
+  # secret, so the eval job is automatically skipped for them and `validate`
+  # alone gates their PRs.
+  preflight:
+    name: check secret availability
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      has-key: ${{ steps.check.outputs.has-key }}
+    steps:
+      - id: check
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "has-key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-key=false" >> "$GITHUB_OUTPUT"
+          fi
+
   eval:
     name: run promptfoo against the red-team corpus
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: validate
-    # The eval job only runs when the Anthropic key is available
-    # (push from the main repo or a maintainer PR with the secret
-    # mounted explicitly). Forks never see the key, so the validate
-    # job alone gates their PRs.
-    if: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+    needs: [validate, preflight]
+    if: needs.preflight.outputs.has-key == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

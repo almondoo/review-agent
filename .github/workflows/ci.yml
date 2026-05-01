@@ -34,11 +34,15 @@ jobs:
 
       - run: pnpm lint
 
+      # `pnpm typecheck` (`tsc --noEmit`) resolves `@review-agent/*` workspace
+      # deps via each package's `package.json` `"types"` field, which points at
+      # `./dist/*.d.ts`. On a fresh checkout there is no `dist/`, so dependents
+      # fail with TS2307 unless we build the producers first.
+      - run: pnpm build
+
       - run: pnpm typecheck
 
       - run: pnpm test:coverage
-
-      - run: pnpm build
 
       - name: Upload coverage
         if: always()
