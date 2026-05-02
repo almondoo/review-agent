@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { JobMessageSchema } from './queue.js';
 
 describe('JobMessageSchema', () => {
@@ -24,7 +25,7 @@ describe('JobMessageSchema', () => {
     expect(m.prRef.headSha).toBe('abc1234');
   });
 
-  it('rejects unknown triggeredBy', () => {
+  it('rejects unknown triggeredBy with ZodError', () => {
     expect(() =>
       JobMessageSchema.parse({
         jobId: 'j',
@@ -33,10 +34,10 @@ describe('JobMessageSchema', () => {
         triggeredBy: 'random',
         enqueuedAt: '2026-04-30T00:00:00.000Z',
       }),
-    ).toThrow();
+    ).toThrow(z.ZodError);
   });
 
-  it('rejects non-positive PR number', () => {
+  it('rejects non-positive PR number with ZodError', () => {
     expect(() =>
       JobMessageSchema.parse({
         jobId: 'j',
@@ -45,6 +46,70 @@ describe('JobMessageSchema', () => {
         triggeredBy: 'manual',
         enqueuedAt: '2026-04-30T00:00:00.000Z',
       }),
-    ).toThrow();
+    ).toThrow(z.ZodError);
+  });
+
+  // Boundary cases for length-constrained string fields. The schema documents
+  // headSha 7..64, jobId 1..128, installationId 1..64. These tests pin those
+  // limits so a downstream tightening (e.g. min(8)) is caught immediately.
+  function buildBase() {
+    return {
+      jobId: 'j',
+      installationId: 'i',
+      prRef: { platform: 'github' as const, owner: 'o', repo: 'r', number: 1 },
+      triggeredBy: 'manual' as const,
+      enqueuedAt: '2026-04-30T00:00:00.000Z',
+    };
+  }
+
+  it('rejects headSha shorter than 7 chars', () => {
+    expect(() =>
+      JobMessageSchema.parse({
+        ...buildBase(),
+        prRef: { ...buildBase().prRef, headSha: 'abc123' },
+      }),
+    ).toThrow(z.ZodError);
+  });
+
+  it('accepts headSha at the 7-char minimum', () => {
+    const m = JobMessageSchema.parse({
+      ...buildBase(),
+      prRef: { ...buildBase().prRef, headSha: 'abc1234' },
+    });
+    expect(m.prRef.headSha).toBe('abc1234');
+  });
+
+  it('accepts headSha at the 64-char maximum', () => {
+    const sha = 'a'.repeat(64);
+    const m = JobMessageSchema.parse({
+      ...buildBase(),
+      prRef: { ...buildBase().prRef, headSha: sha },
+    });
+    expect(m.prRef.headSha).toBe(sha);
+  });
+
+  it('rejects headSha longer than 64 chars', () => {
+    expect(() =>
+      JobMessageSchema.parse({
+        ...buildBase(),
+        prRef: { ...buildBase().prRef, headSha: 'a'.repeat(65) },
+      }),
+    ).toThrow(z.ZodError);
+  });
+
+  it('rejects empty jobId', () => {
+    expect(() => JobMessageSchema.parse({ ...buildBase(), jobId: '' })).toThrow(z.ZodError);
+  });
+
+  it('rejects jobId longer than 128 chars', () => {
+    expect(() => JobMessageSchema.parse({ ...buildBase(), jobId: 'a'.repeat(129) })).toThrow(
+      z.ZodError,
+    );
+  });
+
+  it('rejects installationId longer than 64 chars', () => {
+    expect(() =>
+      JobMessageSchema.parse({ ...buildBase(), installationId: 'a'.repeat(65) }),
+    ).toThrow(z.ZodError);
   });
 });

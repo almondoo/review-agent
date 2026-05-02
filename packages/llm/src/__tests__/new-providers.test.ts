@@ -127,13 +127,18 @@ describe('createGoogleProvider', () => {
     ).rejects.toThrow(/Google AI Studio API key/);
   });
 
-  it('uses GOOGLE_GENERATIVE_AI_API_KEY env when present', async () => {
+  it('uses GOOGLE_GENERATIVE_AI_API_KEY env when present and routes the model through the factory', async () => {
     vi.stubEnv('GOOGLE_GENERATIVE_AI_API_KEY', 'env-key');
+    const modelForRequest = vi.fn((m: string) => ({ tag: m }));
     const provider = await createGoogleProvider(
       { type: 'google', model: 'gemini-2.0-pro' } as ProviderConfig,
-      { modelForRequest: fakeModelForRequest, generate: fakeGenerate() },
+      { modelForRequest, generate: fakeGenerate() },
     );
     expect(provider.name).toBe('google');
+    const out = await provider.generateReview(reviewInput);
+    // Pin that the configured model literally reaches the SDK factory.
+    expect(modelForRequest).toHaveBeenCalledWith('gemini-2.0-pro');
+    expect(out.tokensUsed).toEqual({ input: 100, output: 50 });
   });
 });
 

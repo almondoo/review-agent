@@ -13,11 +13,4 @@ describe('BYOK_PROVIDERS', () => {
       'openai-compatible',
     ]);
   });
-
-  it('is a frozen const tuple usable as a discriminator type', () => {
-    // typeof BYOK_PROVIDERS[number] is the union literal — sanity-check that
-    // narrowing works at runtime via .includes.
-    expect((BYOK_PROVIDERS as readonly string[]).includes('anthropic')).toBe(true);
-    expect((BYOK_PROVIDERS as readonly string[]).includes('not-a-provider')).toBe(false);
-  });
 });

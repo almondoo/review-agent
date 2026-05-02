@@ -81,6 +81,12 @@ describe('db schema shape', () => {
     expect(expires).toBeDefined();
     expect(expires?.notNull).toBe(true);
     expect(expires?.hasDefault).toBe(true);
+    // Pin the actual TTL — `hasDefault: true` alone would be satisfied even if
+    // someone changed the interval to 1 day or removed `now()`. We verify the
+    // SQL chunks include both `now()` and `180 days`.
+    const sqlText = JSON.stringify(expires?.default);
+    expect(sqlText).toContain('now()');
+    expect(sqlText).toContain('180 days');
   });
 
   // §16.1 — every tenant-scoped table must enable RLS and install the

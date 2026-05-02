@@ -359,6 +359,9 @@ importers:
       '@octokit/rest':
         specifier: 21.0.2
         version: 21.0.2
+      '@octokit/types':
+        specifier: 12.6.0
+        version: 12.6.0
       '@review-agent/config':
         specifier: workspace:*
         version: link:../config

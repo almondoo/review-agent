@@ -29,6 +29,7 @@ export type ToolDeps = {
 };
 
 const MAX_FILE_SIZE = 1_000_000;
+const MAX_GREP_PATTERN_LENGTH = 200;
 
 function checkDenyList(rel: string): void {
   for (const pattern of DENY_PATTERNS) {
@@ -96,8 +97,23 @@ export function createTools(workspace: string, deps: ToolDeps = {}): Tools {
     },
     grep: async ({ pattern, path: scope }) => {
       if (!pattern) throw new ToolDispatchRefusedError('grep', 'empty pattern');
+      if (typeof pattern !== 'string') {
+        throw new ToolDispatchRefusedError('grep', 'pattern must be a string');
+      }
+      if (pattern.length > MAX_GREP_PATTERN_LENGTH) {
+        throw new ToolDispatchRefusedError(
+          'grep',
+          `pattern too long (max ${MAX_GREP_PATTERN_LENGTH} chars) — defends against ReDoS`,
+        );
+      }
+      let compiled: RegExp;
+      try {
+        compiled = new RegExp(pattern);
+      } catch {
+        throw new ToolDispatchRefusedError('grep', `invalid regex: '${pattern}'`);
+      }
       const target = scope ? await resolveSafePath(workspace, scope, lstatFn) : workspace;
-      return grepInDir(target, pattern, readdirFn, readFn);
+      return grepInDir(target, compiled, readdirFn, readFn);
     },
   };
 }
@@ -141,11 +157,10 @@ function patternToRegExp(pattern: string): RegExp {
 
 async function grepInDir(
   scope: string,
-  pattern: string,
+  re: RegExp,
   readdirFn: typeof readdir,
   readFn: (p: string, enc: 'utf8') => Promise<string>,
 ): Promise<string[]> {
-  const re = new RegExp(pattern);
   const out: string[] = [];
   const walkAll = async (dir: string): Promise<void> => {
     const entries = await readdirFn(dir, { withFileTypes: true }).catch(() => []);

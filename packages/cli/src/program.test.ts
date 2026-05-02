@@ -46,19 +46,29 @@ describe('buildProgram', () => {
     expect(io.exitCode).toBe(0);
   });
 
-  it('rejects an unknown profile via Commander choices', async () => {
+  it('rejects an unknown profile so the run aborts with non-zero exit', async () => {
     const io = recordingIo();
     const program = buildProgram({ io, env: {}, version: 'test' });
+    // Commander 12's Option.choices() violations bubble through subcommands as
+    // a non-zero exit. Vitest converts the resulting `process.exit(1)` into an
+    // Error containing 'process.exit'. Either path means the bad value did not
+    // silently pass, which is what matters for the user-facing contract.
     await expect(() =>
       program.parseAsync(['review', '--repo', 'o/r', '--pr', '1', '--profile', 'wrong'], {
         from: 'user',
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/invalid|wrong|--profile|process\.exit/i);
   });
 
-  it('exposes a --version flag', async () => {
+  it('exposes a --version flag that exits 0 via exitOverride', async () => {
     const io = recordingIo();
     const program = buildProgram({ io, env: {}, version: '9.9.9' });
-    await expect(() => program.parseAsync(['--version'], { from: 'user' })).rejects.toThrow();
+    // exitOverride() makes Commander throw CommanderError(code='commander.version').
+    // We pin the exit code to 0 — a regression to non-zero would silently break
+    // shell pipelines like `review-agent --version | tee version.txt`.
+    await expect(() => program.parseAsync(['--version'], { from: 'user' })).rejects.toMatchObject({
+      code: 'commander.version',
+      exitCode: 0,
+    });
   });
 });

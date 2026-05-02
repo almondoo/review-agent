@@ -68,12 +68,54 @@ describe('verifyGithubSignature', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects when signature length differs (timing-safe path)', async () => {
+  it('rejects when signature length differs (length-fast-path before timingSafeEqual)', async () => {
     const body = '{}';
     const wrong = `sha256=${crypto.createHmac('sha256', SECRET).update(body).digest('hex').slice(0, 10)}`;
     const res = await buildApp().request('/hook', {
       method: 'POST',
       headers: { 'x-hub-signature-256': wrong },
+      body,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('rejects when signature has the right length but a wrong byte (timingSafeEqual path)', async () => {
+    // The previous test only exercises `a.length !== b.length`. This one
+    // forces the actual `timingSafeEqual` branch by submitting a 64-hex
+    // signature with the same shape as a real one but a single flipped char.
+    const body = '{}';
+    const real = sign(body, SECRET); // sha256=<64 hex>
+    const flipped = `${real.slice(0, -1)}${real.endsWith('a') ? 'b' : 'a'}`;
+    expect(flipped.length).toBe(real.length);
+    expect(flipped).not.toBe(real);
+    const res = await buildApp().request('/hook', {
+      method: 'POST',
+      headers: { 'x-hub-signature-256': flipped },
+      body,
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('rejects an empty signature header value', async () => {
+    // The implementation treats falsy headers via `if (!sig)` (line 14).
+    // Many proxies normalize a missing header into an empty string, so we
+    // pin both behaviors as equivalent.
+    const res = await buildApp().request('/hook', {
+      method: 'POST',
+      headers: { 'x-hub-signature-256': '' },
+      body: '{}',
+    });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'unauthorized' });
+  });
+
+  it('rejects a signature missing the sha256= prefix even if the digest is valid', async () => {
+    const body = '{}';
+    const realDigest = crypto.createHmac('sha256', SECRET).update(body).digest('hex');
+    const res = await buildApp().request('/hook', {
+      method: 'POST',
+      headers: { 'x-hub-signature-256': realDigest }, // no 'sha256=' prefix
       body,
     });
     expect(res.status).toBe(401);

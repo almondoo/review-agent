@@ -152,6 +152,21 @@ describe('createCodecommitVCS — getFile', () => {
     const buf = await vcs.getFile(REF, 'a.ts', 'h1');
     expect(buf.length).toBe(0);
   });
+
+  it('refuses unsafe paths before issuing GetFileCommand', async () => {
+    // Mirrors the GitHub adapter's path-guard behavior. The CodeCommit SDK
+    // would otherwise happily echo `..` segments to the server.
+    const client = fakeClient({
+      GetFileCommand: () => ({ fileContent: new TextEncoder().encode('LEAKED') }),
+    });
+    const vcs = createCodecommitVCS({ client });
+    for (const bad of ['/etc/passwd', '~/.aws/credentials', '../secrets.txt', 'a/../../etc/x']) {
+      await expect(vcs.getFile(REF, bad, 'h1')).rejects.toThrow(/Refusing/);
+    }
+    await expect(vcs.getFile(REF, '', 'h1')).rejects.toThrow(/empty/);
+    await expect(vcs.getFile(REF, 'a\0b', 'h1')).rejects.toThrow(/NUL/);
+    expect(client.send).not.toHaveBeenCalled();
+  });
 });
 
 describe('createCodecommitVCS — postReview', () => {

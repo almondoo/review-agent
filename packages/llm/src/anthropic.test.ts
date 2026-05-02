@@ -1,4 +1,3 @@
-import { ContextLengthError } from '@review-agent/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type AnthropicDriverDeps,
@@ -184,12 +183,18 @@ describe('classifyAnthropicError', () => {
   });
 
   it('classifies context-length messages as context_length', () => {
-    expect(
-      classifyAnthropicError({
-        status: 400,
-        message: 'prompt is too long for context window',
-      }),
-    ).toEqual({ kind: 'context_length' });
+    // Pin every alternation in looksLikeContextLength's regex
+    // (/context.{0,5}length|too long|maximum context|prompt is too long/i).
+    // Tightening the pattern in production must update these tests deliberately.
+    for (const message of [
+      'prompt is too long for context window',
+      'maximum context length is 200000 tokens',
+      'context_length_exceeded',
+      'Context Length exceeded',
+      'input is too long',
+    ]) {
+      expect(classifyAnthropicError({ message })).toEqual({ kind: 'context_length' });
+    }
   });
 
   it('classifies network errors as transient', () => {
@@ -209,11 +214,5 @@ describe('error classification integrates with provider.classifyError', () => {
   it('exposes classifyError that matches classifyAnthropicError', () => {
     const provider = createAnthropicProvider(baseConfig, makeDeps());
     expect(provider.classifyError({ status: 429 })).toEqual({ kind: 'rate_limit' });
-  });
-});
-
-describe('ContextLengthError import surface', () => {
-  it('is importable from @review-agent/core (sanity)', () => {
-    expect(ContextLengthError).toBeTypeOf('function');
   });
 });

@@ -131,4 +131,26 @@ describe('shiftLineThroughHunks', () => {
     ];
     expect(shiftLineThroughHunks(50, hunks)).toBe(51);
   });
+
+  it('maps the last line inside a hunk (oldStart + oldLines - 1)', () => {
+    // Boundary: originalLine == oldEnd. The branch at incremental.ts:96
+    // (`originalLine <= oldEnd`) is the off-by-one risk.
+    expect(
+      shiftLineThroughHunks(14, [{ oldStart: 10, oldLines: 5, newStart: 100, newLines: 5 }]),
+    ).toBe(104);
+  });
+
+  it('returns null when the last hunk line is deleted (newLines === 0 inside hunk)', () => {
+    // oldEnd = 14 with newLines: 0 → entire range deleted, including the boundary.
+    expect(
+      shiftLineThroughHunks(14, [{ oldStart: 10, oldLines: 5, newStart: 10, newLines: 0 }]),
+    ).toBeNull();
+  });
+
+  it('returns null when originalLine is inside hunk but offset >= newLines', () => {
+    // hunk shrinks: 5 old lines → 2 new lines. Lines 10–11 map; 12–14 are dropped.
+    expect(
+      shiftLineThroughHunks(13, [{ oldStart: 10, oldLines: 5, newStart: 50, newLines: 2 }]),
+    ).toBeNull();
+  });
 });

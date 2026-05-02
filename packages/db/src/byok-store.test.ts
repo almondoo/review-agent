@@ -118,6 +118,36 @@ describe('createByokStore', () => {
     expect(out).toBeNull();
   });
 
+  it('returns null for a different tenant even when the same provider exists', async () => {
+    // Tenant isolation contract at the application layer: a read for
+    // installationId=2 must not surface installationId=1's secret. RLS
+    // enforces this in production, but the read predicate must also be
+    // correctly scoped or RLS would be the only line of defense.
+    const { db } = fakeDb();
+    const store = createByokStore({ db, kms: inMemoryKms() });
+    await store.upsert({
+      installationId: 1n,
+      provider: 'anthropic',
+      kmsKeyId: 'k1',
+      secret: 'sk-tenant-1-secret',
+    });
+    const crossTenant = await store.read({ installationId: 2n, provider: 'anthropic' });
+    expect(crossTenant).toBeNull();
+  });
+
+  it('returns null when the provider differs even within the same tenant', async () => {
+    const { db } = fakeDb();
+    const store = createByokStore({ db, kms: inMemoryKms() });
+    await store.upsert({
+      installationId: 1n,
+      provider: 'anthropic',
+      kmsKeyId: 'k1',
+      secret: 'sk-anthropic-only',
+    });
+    const wrongProvider = await store.read({ installationId: 1n, provider: 'openai' });
+    expect(wrongProvider).toBeNull();
+  });
+
   it('rotate() re-wraps the stored secret with a new IV / wrapped key', async () => {
     const { db, rows } = fakeDb();
     const kms = inMemoryKms();

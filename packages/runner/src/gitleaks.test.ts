@@ -29,6 +29,26 @@ describe('quickScanContent — well-known secret patterns', () => {
     expect(findings.some((f) => f.ruleId === 'private-key-block')).toBe(true);
   });
 
+  it('matches OpenAI keys', () => {
+    const findings = quickScanContent(`OPENAI_API_KEY=sk-${'A'.repeat(48)}`);
+    expect(findings.some((f) => f.ruleId === 'openai-key')).toBe(true);
+  });
+
+  it('flags high-entropy strings >= 4.5 bits per char', () => {
+    // A random-looking 40+ char base64-like string with high entropy.
+    const highEntropy = 'aB3kJ7lQzYx9PqRtVw2sNm0E4hC1uF6dGyZjI8oX';
+    const findings = quickScanContent(`token=${highEntropy}`);
+    expect(findings.some((f) => f.ruleId === 'high-entropy')).toBe(true);
+    expect(findings.find((f) => f.ruleId === 'high-entropy')?.entropy).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('does not flag low-entropy long strings as high-entropy', () => {
+    // 40+ chars of base64-allowed characters but pure repetition → low entropy.
+    const lowEntropy = 'aaaa'.repeat(15);
+    const findings = quickScanContent(`token=${lowEntropy}`);
+    expect(findings.some((f) => f.ruleId === 'high-entropy')).toBe(false);
+  });
+
   it('returns empty for benign text', () => {
     expect(quickScanContent('hello world\nconst x = 1;\n')).toHaveLength(0);
   });
@@ -96,19 +116,25 @@ describe('shouldAbortReview', () => {
     expect(shouldAbortReview(four).abort).toBe(true);
   });
 
-  it('does not abort on 0–3 medium findings', () => {
-    const two = Array.from({ length: 2 }, () => ({
-      ruleId: 'medium',
-      description: '',
-      file: '',
-      startLine: 0,
-      endLine: 0,
-      match: '',
-      secret: '',
-      entropy: 0,
-      tags: ['medium'] as ReadonlyArray<string>,
-    }));
-    expect(shouldAbortReview(two).abort).toBe(false);
+  it('does not abort on 0–3 medium findings (boundary at exactly 3)', () => {
+    const mk = (count: number) =>
+      Array.from({ length: count }, () => ({
+        ruleId: 'medium',
+        description: '',
+        file: '',
+        startLine: 0,
+        endLine: 0,
+        match: '',
+        secret: '',
+        entropy: 0,
+        tags: ['medium'] as ReadonlyArray<string>,
+      }));
+    // The threshold is `> 3` (strict). Pin every value 0..3 — a future tightening
+    // to `>= 3` is the off-by-one we are guarding against.
+    expect(shouldAbortReview(mk(0)).abort).toBe(false);
+    expect(shouldAbortReview(mk(1)).abort).toBe(false);
+    expect(shouldAbortReview(mk(2)).abort).toBe(false);
+    expect(shouldAbortReview(mk(3)).abort).toBe(false);
   });
 });
 

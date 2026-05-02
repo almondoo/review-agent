@@ -24,12 +24,20 @@ function recordingIo() {
 }
 
 describe('printSchemaCommand', () => {
-  it('prints the JSON Schema to stdout', () => {
+  it('prints a JSON Schema describing the live ReviewAgentConfig', () => {
     const io = recordingIo();
     printSchemaCommand(io);
     const text = io.out.join('');
-    const parsed = JSON.parse(text) as Record<string, unknown>;
-    expect(parsed.$schema ?? parsed.title ?? parsed.type).toBeDefined();
     expect(text.endsWith('\n')).toBe(true);
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    // Pin specific fields. A regression to an empty `{}` would have passed
+    // the previous `$schema ?? title ?? type` check.
+    expect(parsed.$ref).toBe('#/definitions/ReviewAgentConfig');
+    const defs = parsed.definitions as Record<string, { properties?: Record<string, unknown> }>;
+    expect(defs.ReviewAgentConfig).toBeDefined();
+    const props = defs.ReviewAgentConfig?.properties ?? {};
+    for (const required of ['language', 'profile', 'reviews', 'cost', 'privacy']) {
+      expect(props[required], `expected '${required}' in schema`).toBeDefined();
+    }
   });
 });

@@ -17,11 +17,13 @@ describe('fingerprint', () => {
     expect(fingerprint(base)).toBe(fingerprint({ ...base }));
   });
 
-  it('matches the spec format `path:line:ruleId:suggestionType`', () => {
-    const expected = '8946d574fa0b1d5e';
-    const a = fingerprint({ path: 'a.ts', line: 1, ruleId: 'r', suggestionType: 't' });
-    expect(a).toMatch(/^[0-9a-f]{16}$/);
-    expect(a).not.toBe(expected.replace('a', 'b'));
+  it('matches the spec format `path:line:ruleId:suggestionType` (sha256 prefix)', () => {
+    // sha256('a.ts:1:r:t') prefix 16 hex chars — locks the canonical input
+    // format and the truncation length. If anyone reorders the fields, changes
+    // the separator, or swaps the hash, this fails.
+    expect(fingerprint({ path: 'a.ts', line: 1, ruleId: 'r', suggestionType: 't' })).toBe(
+      '6c94ff9c7e054313',
+    );
   });
 
   it('changes when path differs', () => {

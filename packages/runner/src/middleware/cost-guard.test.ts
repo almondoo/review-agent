@@ -127,6 +127,38 @@ describe('createCostGuard', () => {
     expect(events.at(-1)?.threshold).toBe('daily_cap');
   });
 
+  it('aborts post-call when the actual cost overshoots the per-PR cap', async () => {
+    // Estimate is fine (0.2 < cap 1), but the LLM actually billed 1.2 USD —
+    // exercises the post-`next()` overrun branch (cost-guard.ts:100-110)
+    // that the pre-call estimate never reaches.
+    const state: CostState = { totalCostUsd: 0 };
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const mw = createCostGuard({
+      state,
+      onThresholdCrossed: (e) => events.push(e),
+    });
+    const overrunResult: ReviewOutput = { ...okResult, costUsd: 1.2 };
+    await expect(() => mw(makeCtx(0.2), async () => overrunResult)).rejects.toBeInstanceOf(
+      CostExceededError,
+    );
+    expect(events.at(-1)).toEqual({ threshold: 'abort', cumulativeUsd: 1.2, capUsd: 1 });
+    expect(state.totalCostUsd).toBeCloseTo(1.2, 6);
+  });
+
+  it('escalates post-call overrun to kill when actual cost exceeds 1.5x cap', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const mw = createCostGuard({
+      state,
+      onThresholdCrossed: (e) => events.push(e),
+    });
+    const overrunResult: ReviewOutput = { ...okResult, costUsd: 1.7 };
+    await expect(() => mw(makeCtx(0.2), async () => overrunResult)).rejects.toBeInstanceOf(
+      CostExceededError,
+    );
+    expect(events.at(-1)?.threshold).toBe('kill');
+  });
+
   it('records a cost_exceeded ledger row when the cap is breached', async () => {
     const state: CostState = { totalCostUsd: 0 };
     const recorder = vi.fn().mockResolvedValue(undefined);

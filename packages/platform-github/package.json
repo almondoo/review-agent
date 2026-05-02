@@ -33,6 +33,7 @@
     "@octokit/plugin-retry": "7.1.2",
     "@octokit/plugin-throttling": "9.4.0",
     "@octokit/rest": "21.0.2",
+    "@octokit/types": "12.6.0",
     "@review-agent/config": "workspace:*",
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",

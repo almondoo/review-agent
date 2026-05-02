@@ -127,7 +127,10 @@ describe('runReview — cost guard', () => {
     const provider = makeProvider({
       estimateCost: vi.fn(async () => ({ inputTokens: 1000, estimatedUsd: 0.003 })),
     });
-    await expect(runReview(baseJob, provider)).resolves.toBeDefined();
+    const result = await runReview(baseJob, provider);
+    expect(result.provider).toBe('anthropic');
+    expect(result.comments).toHaveLength(2);
+    expect(result.droppedDuplicates).toBe(0);
     expect(provider.generateReview).toHaveBeenCalledTimes(1);
   });
 

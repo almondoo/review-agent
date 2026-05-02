@@ -104,6 +104,23 @@ describe('cloneWithStrategy', () => {
     expect(calls.some((c) => c.includes('sparse-checkout'))).toBe(false);
   });
 
+  it('still runs sparse-checkout when sparsePaths is exactly 100 entries (boundary)', async () => {
+    // The implementation guards `<= 100` (clone.ts:63). A flip to `< 100`
+    // would silently disable sparse-checkout for 100-entry inputs.
+    const { runGit, calls } = recordingRunGit();
+    const exactly100 = Array.from({ length: 100 }, (_, i) => `dir${i}`);
+    await cloneWithStrategy(
+      'https://example/x.git',
+      '/tmp/a',
+      ref,
+      headSha,
+      { sparsePaths: exactly100 },
+      runGit,
+    );
+    expect(calls.some((c) => c.join(' ').includes('sparse-checkout init'))).toBe(true);
+    expect(calls.some((c) => c.join(' ').includes('sparse-checkout set'))).toBe(true);
+  });
+
   it('passes --recurse-submodules when submodules: true', async () => {
     const { runGit, calls } = recordingRunGit();
     await cloneWithStrategy(

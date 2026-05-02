@@ -1,6 +1,6 @@
 import { ToolDispatchRefusedError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
-import { createTools, dispatchTool, TOOL_NAMES } from './tools.js';
+import { createTools, dispatchTool } from './tools.js';
 
 type DirentLike = {
   name: string;
@@ -161,10 +161,6 @@ describe('dispatchTool', () => {
     const tools = createTools(WORKSPACE, makeDeps({}));
     await expect(dispatchTool('read_file', null, tools)).rejects.toThrow(/invalid args/);
   });
-
-  it('accepts every whitelisted tool name', () => {
-    expect(TOOL_NAMES).toEqual(['read_file', 'glob', 'grep']);
-  });
 });
 
 describe('grep', () => {
@@ -186,5 +182,20 @@ describe('grep', () => {
   it('refuses empty pattern', async () => {
     const tools = createTools(WORKSPACE, makeDeps({}));
     await expect(tools.grep({ pattern: '' })).rejects.toThrow(/empty/);
+  });
+
+  it('refuses an invalid regex (e.g. unbalanced bracket) with ToolDispatchRefusedError', async () => {
+    const tools = createTools(WORKSPACE, makeDeps({}));
+    // `[` is not a valid character class — `new RegExp('[')` throws SyntaxError.
+    // The grep dispatch must convert that into a refusal, not let it bubble.
+    await expect(tools.grep({ pattern: '[' })).rejects.toBeInstanceOf(ToolDispatchRefusedError);
+    await expect(tools.grep({ pattern: '[' })).rejects.toThrow(/invalid regex/);
+  });
+
+  it('refuses patterns longer than the ReDoS guard limit', async () => {
+    const tools = createTools(WORKSPACE, makeDeps({}));
+    const evil = `${'a?'.repeat(120)}${'a'.repeat(120)}`;
+    await expect(tools.grep({ pattern: evil })).rejects.toBeInstanceOf(ToolDispatchRefusedError);
+    await expect(tools.grep({ pattern: evil })).rejects.toThrow(/pattern too long/);
   });
 });

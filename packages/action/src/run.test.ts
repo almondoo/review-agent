@@ -121,4 +121,29 @@ describe('runAction', () => {
     expect(stateArg?.lastReviewedSha).toBe('H');
     expect(stateArg?.modelUsed).toBe('claude-sonnet-4-6');
   });
+
+  it('surfaces cost-cap violations as a thrown error and posts no comments', async () => {
+    const vcs = makeVCS();
+    const provider = makeProvider();
+    // estimate >> costCapUsd → runner.cost-guard aborts with CostExceededError.
+    provider.estimateCost = vi.fn(async () => ({
+      inputTokens: 1_000_000,
+      estimatedUsd: 100,
+    }));
+    await expect(
+      runAction(
+        { ...inputs, costCapUsd: 0.01 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => provider,
+        },
+      ),
+    ).rejects.toThrow(/cost/i);
+    expect(vcs.postReview).not.toHaveBeenCalled();
+    expect(vcs.upsertStateComment).not.toHaveBeenCalled();
+  });
 });

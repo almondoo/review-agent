@@ -92,6 +92,64 @@ describe('startWorker debounce', () => {
     });
     expect(handler).toHaveBeenCalledOnce();
   });
+
+  it('runs the handler when re-delivered for the same headSha (debounce only fires for newer SHAs)', async () => {
+    // Same headSha + same window = duplicate delivery, not a "newer commit
+    // landed" race. The worker must still run so SQS at-least-once retries
+    // do not silently swallow legitimate idempotent replays.
+    const handler = vi.fn();
+    const db = makeDb({
+      reviewState: {
+        id: 'o/r#1',
+        headSha: baseMsg.prRef.headSha,
+        updatedAt: new Date('2026-04-30T00:00:01Z'),
+      },
+    });
+    const queue = {
+      enqueue: vi.fn(),
+      dequeue: vi.fn(async (cb: (m: typeof baseMsg) => Promise<void>) => {
+        await cb(baseMsg);
+      }),
+    };
+    await startWorker({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      queue,
+      handler,
+      debounceWindowMs: 60_000,
+      cleanupIntervalMs: 1_000_000,
+      now: () => new Date('2026-04-30T00:00:02Z'),
+    });
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('runs the handler when the latest stored state is older than the debounce window', async () => {
+    // Boundary: ageMs >= window means we don't drop, even if heads differ.
+    const handler = vi.fn();
+    const db = makeDb({
+      reviewState: {
+        id: 'o/r#1',
+        headSha: 'newer1',
+        updatedAt: new Date('2026-04-30T00:00:00Z'),
+      },
+    });
+    const queue = {
+      enqueue: vi.fn(),
+      dequeue: vi.fn(async (cb: (m: typeof baseMsg) => Promise<void>) => {
+        await cb(baseMsg);
+      }),
+    };
+    await startWorker({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      queue,
+      handler,
+      debounceWindowMs: 1_000,
+      cleanupIntervalMs: 1_000_000,
+      now: () => new Date('2026-04-30T01:00:00Z'),
+    });
+    expect(handler).toHaveBeenCalledOnce();
+  });
 });
 
 describe('startIdempotencyCleanup', () => {

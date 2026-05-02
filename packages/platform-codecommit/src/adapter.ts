@@ -34,6 +34,19 @@ function ensureCodeCommit(ref: PRRef): void {
   }
 }
 
+const TRAVERSAL_REGEX = /(^|[/\\])\.\.([/\\]|$)/;
+
+// Mirrors platform-github/path-guard.ts. Kept local rather than introducing a
+// platform-platform dependency. CodeCommit's GetFile API takes an arbitrary
+// `filePath` and does not by itself reject `..`, absolute paths, or NUL bytes.
+export function assertSafeRelativePath(path: string): void {
+  if (!path) throw new Error('Refusing empty path');
+  if (path.startsWith('/')) throw new Error(`Refusing absolute path: '${path}'`);
+  if (path.startsWith('~')) throw new Error(`Refusing home-expanded path: '${path}'`);
+  if (TRAVERSAL_REGEX.test(path)) throw new Error(`Refusing traversal path: '${path}'`);
+  if (path.includes('\0')) throw new Error('Refusing path with NUL byte');
+}
+
 function toPullRequestId(ref: PRRef): string {
   return String(ref.number);
 }
@@ -110,6 +123,7 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
 
   const getFile = async (ref: PRRef, path: string, sha: string): Promise<Buffer> => {
     ensureCodeCommit(ref);
+    assertSafeRelativePath(path);
     const out = await client.send(
       new GetFileCommand({
         repositoryName: ref.repo,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
   classifyForInjection,
   createInMemoryDetectorCache,
@@ -85,7 +86,7 @@ describe('classifyForInjection', () => {
       ({ verdict: 'definitely-bad', reason: 'x' }) as never;
     await expect(() =>
       classifyForInjection({ classifier, model: 'm1' }, blocks.slice(0, 1)),
-    ).rejects.toThrow();
+    ).rejects.toThrow(z.ZodError);
   });
 
   it('clamps the reason field to 200 chars (Zod max)', async () => {
@@ -96,7 +97,7 @@ describe('classifyForInjection', () => {
     });
     await expect(() =>
       classifyForInjection({ classifier, model: 'm1' }, blocks.slice(0, 1)),
-    ).rejects.toThrow();
+    ).rejects.toThrow(z.ZodError);
   });
 
   it('passes the cache hit to onVerdict with cached=true', async () => {

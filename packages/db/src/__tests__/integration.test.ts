@@ -127,9 +127,12 @@ describe.skipIf(!appUrl)('postgres RLS (tenant_isolation policy)', () => {
     }
   });
 
-  it('withTenant rejects writes for a different tenant via WITH CHECK', async () => {
+  it('withTenant rejects writes for a different tenant via WITH CHECK (RLS policy violation)', async () => {
     const { db, close } = createDbClient({ url: appUrl });
     try {
+      // Pin the actual Postgres RLS error rather than any throw — without
+      // this regex, a wrong-credential failure would also pass and we'd
+      // lose visibility into whether RLS is the line of defense.
       await expect(
         withTenant(db, 9001n, async (tx) => {
           await tx.insert(installationTokens).values({
@@ -138,7 +141,7 @@ describe.skipIf(!appUrl)('postgres RLS (tenant_isolation policy)', () => {
             expiresAt: new Date(Date.now() + 60_000),
           });
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/row-level security|row level security|policy/i);
     } finally {
       await close();
     }

@@ -91,21 +91,23 @@ describe('withRetry', () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
-  it('retries overloaded up to 3 attempts', async () => {
+  it('retries overloaded up to 3 attempts and surfaces the underlying error', async () => {
     const driver = { classifyError: vi.fn(() => ({ kind: 'overloaded' as const })) };
+    const err = new Error('529');
     const fn = vi.fn(async () => {
-      throw new Error('529');
+      throw err;
     });
-    await expect(withRetry(driver, fn, stubDeps())).rejects.toThrow();
+    await expect(withRetry(driver, fn, stubDeps())).rejects.toBe(err);
     expect(fn).toHaveBeenCalledTimes(4);
   });
 
-  it('retries transient up to 3 attempts', async () => {
+  it('retries transient up to 3 attempts and surfaces the underlying error', async () => {
     const driver = { classifyError: vi.fn(() => ({ kind: 'transient' as const })) };
+    const err = new Error('network');
     const fn = vi.fn(async () => {
-      throw new Error('network');
+      throw err;
     });
-    await expect(withRetry(driver, fn, stubDeps())).rejects.toThrow();
+    await expect(withRetry(driver, fn, stubDeps())).rejects.toBe(err);
     expect(fn).toHaveBeenCalledTimes(4);
   });
 });
