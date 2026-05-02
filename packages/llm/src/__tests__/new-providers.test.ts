@@ -25,7 +25,7 @@ const reviewObject = {
 function fakeGenerate() {
   return vi.fn(async () => ({
     object: reviewObject,
-    usage: { promptTokens: 100, completionTokens: 50 },
+    usage: { inputTokens: 100, outputTokens: 50 },
   })) as never;
 }
 

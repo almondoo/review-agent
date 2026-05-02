@@ -39,7 +39,7 @@ function makeDeps(overrides: Partial<AnthropicDriverDeps> = {}): AnthropicDriver
     createClient: vi.fn(() => ((model: string) => ({ id: model })) as never),
     generate: vi.fn(async () => ({
       object: reviewObject,
-      usage: { promptTokens: 1000, completionTokens: 200 },
+      usage: { inputTokens: 1000, outputTokens: 200 },
     })) as never,
     ...overrides,
   };

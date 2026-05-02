@@ -108,7 +108,7 @@ describe('createOpenAIProvider', () => {
   it('generateReview computes cost from usage tokens', async () => {
     const generate = vi.fn().mockResolvedValue({
       object: { comments: [], summary: 'ok' },
-      usage: { promptTokens: 1000, completionTokens: 500 },
+      usage: { inputTokens: 1000, outputTokens: 500 },
     });
     const provider = createOpenAIProvider(
       { type: 'openai', model: 'gpt-4o-mini', apiKey: 'k' },

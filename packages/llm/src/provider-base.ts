@@ -90,14 +90,14 @@ export function createGenericProvider<TModelArg>(
         ],
         temperature: DEFAULT_TEMPERATURE,
       });
-      const usage = (result as { usage?: { promptTokens?: number; completionTokens?: number } })
-        .usage ?? { promptTokens: 0, completionTokens: 0 };
-      const promptTokens = usage.promptTokens ?? 0;
-      const completionTokens = usage.completionTokens ?? 0;
+      const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } })
+        .usage ?? { inputTokens: 0, outputTokens: 0 };
+      const inputTokens = usage.inputTokens ?? 0;
+      const outputTokens = usage.outputTokens ?? 0;
       const price = priceForModel(shape.pricing, model);
       const costUsd =
-        (promptTokens / 1_000_000) * price.inputPerMTok +
-        (completionTokens / 1_000_000) * price.outputPerMTok;
+        (inputTokens / 1_000_000) * price.inputPerMTok +
+        (outputTokens / 1_000_000) * price.outputPerMTok;
       const data = (
         result as {
           object: { comments: ReviewOutput['comments']; summary: string };
@@ -106,7 +106,7 @@ export function createGenericProvider<TModelArg>(
       return {
         comments: data.comments,
         summary: data.summary,
-        tokensUsed: { input: promptTokens, output: completionTokens },
+        tokensUsed: { input: inputTokens, output: outputTokens },
         costUsd,
       };
     },

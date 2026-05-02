@@ -52,10 +52,10 @@ something, surface it as a question rather than inventing an answer (spec §22).
 - **Runtime**: Node.js 24.14.x LTS.
 - **Package manager**: pnpm 10.33.0 workspace monorepo. Lockfile committed.
 - **Lint + format**: Biome 2.x — single tool, no ESLint, no Prettier.
-- **Test**: Vitest 2.x with v8 coverage. Threshold: lines/funcs/stmts 95%, branches 90%.
+- **Test**: Vitest 3.x with v8 coverage. Threshold: lines/funcs/stmts 95%, branches 90%.
 - **Build**: tsup 8.x — ESM + CJS dual output with `.d.ts` per package.
 - **Schema validation**: Zod 3.x for every external/LLM input.
-- **LLM**: Vercel AI SDK (`ai` ^4.x) + `@ai-sdk/anthropic` (default driver).
+- **LLM**: Vercel AI SDK (`ai` ^5.x) + `@ai-sdk/anthropic` (default driver).
   Use `generateObject` with the Zod `ReviewOutputSchema` from `@review-agent/core`.
 - **Versioning**: Changesets, per-package.
 

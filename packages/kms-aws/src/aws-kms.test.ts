@@ -66,4 +66,9 @@ describe('createAwsKmsClient', () => {
     const kms = createAwsKmsClient({ client });
     await expect(() => kms.decryptDataKey(Buffer.from([1]), 'k')).rejects.toThrow(/Decrypt/);
   });
+
+  it('constructs a default KMSClient when no client is injected', () => {
+    expect(() => createAwsKmsClient()).not.toThrow();
+    expect(() => createAwsKmsClient({ clientConfig: { region: 'us-east-1' } })).not.toThrow();
+  });
 });

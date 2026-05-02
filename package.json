@@ -35,8 +35,8 @@
     "@types/node": "24.0.0",
     "tsup": "8.5.1",
     "typescript": "5.6.3",
-    "vitest": "2.1.9",
-    "@vitest/coverage-v8": "2.1.9"
+    "vitest": "3.2.4",
+    "@vitest/coverage-v8": "3.2.4"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -49,7 +49,10 @@
       "fast-xml-parser": ">=5.7.0",
       "esbuild": ">=0.25.0",
       "mathjs": ">=15.2.0",
-      "undici": ">=6.24.0"
+      "undici": ">=6.24.0",
+      "uuid": ">=14.0.0",
+      "jsondiffpatch": ">=0.7.2",
+      "vite": ">=7.3.2 <8"
     }
   }
 }
