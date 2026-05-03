@@ -102,9 +102,16 @@ compose everything. Never import from another package's `src/internal/`.
 
 ## Distribution status
 
-- v0.1: **complete.** All 13 issues (#1–#13) shipped on `main` and closed on
-  GitHub. See `docs/roadmap.md` for the per-issue commit map.
-- v0.2 + v0.3: open, not started.
+- v0.1: **complete.** All 13 issues (#1–#13) shipped on `main` and closed.
+- v0.2: **complete.** All 11 issues (#14–#24) shipped on `main` and closed.
+- v0.3: **complete.** All 13 issues (#25–#37) shipped on `main` and closed.
+  See `docs/roadmap.md` for the per-issue commit map.
+- v1.0: **planning.** 9 issues open (#43–#51) covering UPGRADING.md,
+  third-party security audit, eval baseline measurement, provider parity
+  matrix, bot identity guidance, multi-bot coordination, GHES compatibility,
+  `setup workspace` CLI, and cosign skill attestation tracking. See
+  `docs/roadmap.md` v1.0 section. Spec §22 deferred items resolved in
+  commit `849b6df`.
 
 ## What is NOT used (despite being tempting)
 

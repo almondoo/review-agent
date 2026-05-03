@@ -389,6 +389,7 @@ v0.1 リリース前に解決が必要。番号は実装仕様書 §22 のオー
 9. **複数 review bot 衝突** — `coderabbitai[bot]` 等が同居する場合の重複回避
 10. **OSS テレメトリ opt-in** — 匿名利用統計を出すか? 出すなら何を、どう同意取得するか
 11. **GHES (Enterprise Server) 互換性** — declared support / no-support / "best-effort" のどれか
+    → **v1.0 決定**: `best-effort, no commitment`。CI で GHES を回さず、issues は受けるが PR は受けない。詳細は [`docs/deployment/ghes.md`](../deployment/ghes.md)。
 12. **プロバイダ feature parity matrix の公開** — eval 結果 delta を docs に出すか
 13. **OpenAI 互換エンドポイント preset** — `ollama:llama3:70b` 等の known-good preset を schema に含めるか
 14. **LLM-based injection detector のコスト** — ~$0.001/PR の overhead を mandatory（現状）か opt-out に変更するか
@@ -489,7 +490,7 @@ v0.1 リリース前に解決が必要。番号は実装仕様書 §22 のオー
 - [ ] API 安定性宣言（SemVer に移行、UPGRADING.md 整備）
 - [ ] OSS 公開判断（公開する場合は CODE_OF_CONDUCT.md / GOVERNANCE.md 整備、README/CONTRIBUTING を OSS モードに更新）
 
-**Post-v1.0** — GitLab adapter、Bitbucket adapter、GHES 対応、IDE プレビュー、コミュニティ形成施策（OSS 公開する場合）
+**Post-v1.0** — GitLab adapter、Bitbucket adapter、GHES の declared-support 化（v1.0 では best-effort, no commitment、[`docs/deployment/ghes.md`](../deployment/ghes.md)）、IDE プレビュー、コミュニティ形成施策（OSS 公開する場合）
 
 ---
 

@@ -67,6 +67,19 @@ Adversaries can attempt:
   recommended sandbox boundary. Self-hosted runners must enforce ephemeral
   VMs.
 
+## Pre-release security review
+
+`review-agent` undergoes a structured **internal STRIDE
+walkthrough** before each major release in lieu of a paid third-party
+audit. The walkthrough output is published at
+[`docs/security/threat-model-review-YYYY-MM.md`](./docs/security/audit.md);
+the procedure (and the choice between option a — paid audit — and
+option b — internal review) is documented at
+[`docs/security/audit.md`](./docs/security/audit.md). Adopters
+should treat `review-agent` as having had a structured internal
+review against STRIDE, not an independent paid audit. If your
+deployment requires the latter, commission your own engagement.
+
 ## Out of scope
 
 - Attacks against the GitHub Actions runner platform itself.

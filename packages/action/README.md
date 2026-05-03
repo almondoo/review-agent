@@ -19,6 +19,14 @@ point.
 - `posted-comments` — number of inline comments posted.
 - `cost-usd` — USD cost of this run.
 
+## Bot identity
+
+In Action mode comments are posted by `github-actions[bot]` (the
+identity tied to `secrets.GITHUB_TOKEN`). For multi-repo audit-trail
+uniformity, run the GitHub App (Server mode) instead — see
+[`docs/configuration/bot-identity.md`](../../docs/configuration/bot-identity.md)
+for the per-mode mapping.
+
 ## License
 
 Apache-2.0

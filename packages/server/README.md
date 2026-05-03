@@ -83,6 +83,14 @@ in flight.
 `pg_try_advisory_lock(0xabba0001)` so a multi-worker fleet only deletes
 once per cycle. Use `pg_cron` instead in environments that support it.
 
+## Bot identity
+
+In Server mode comments are posted by `<your-app-name>[bot]`, the
+GitHub App's own actor. Name the App audit-readably (e.g.
+`acme-review` → `acme-review[bot]`). See
+[`docs/configuration/bot-identity.md`](../../docs/configuration/bot-identity.md)
+for the per-mode mapping and audit-trail recommendations.
+
 ## Security
 
 - Signature verification reads the **raw body** before JSON parse and uses
