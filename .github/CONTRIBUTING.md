@@ -25,3 +25,35 @@ require review and maintenance overhead that the author cannot commit to.
 Even though general issues are not accepted, security issues are taken
 seriously. Please contact the repository owner directly rather than opening
 a public issue or PR.
+
+## Changesets (internal — for the maintainer)
+
+Every PR (including internal task tracker PRs) that mutates a
+public-API package must include a changeset. The public-API
+packages and their stability commitments are listed in
+[UPGRADING.md](../UPGRADING.md).
+
+```bash
+pnpm changeset            # interactive: pick packages, bump type, summary
+```
+
+Bump-type rules:
+
+- `patch` — bug fixes, internal refactors, doc-only changes,
+  dependency bumps that don't change the public API.
+- `minor` — backwards-compatible additions to a public surface
+  (new optional config field, new CLI subcommand, new provider).
+- `major` — backwards-incompatible change to a public surface.
+  **Major changesets MUST include a draft `## From X.y → Z.0`
+  migration section in the changeset body.** That section is
+  promoted into [UPGRADING.md](../UPGRADING.md) when the version
+  ships.
+
+Changes that touch only internal-only surfaces (per UPGRADING.md
+"Internal-only surfaces") may use `patch` even when they would
+otherwise look like minor / major changes — the SemVer guarantee
+explicitly excludes those surfaces.
+
+If unsure whether a change is breaking, default to `major` and get
+the migration section drafted. It's cheaper to soft-revert a major
+bump in review than to ship a silent breakage.
