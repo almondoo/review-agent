@@ -225,6 +225,14 @@ Set `llm_provider = "anthropic"`, `terraform apply`, then populate
 `review-agent/anthropic-api-key` per §5.3. The worker reads the env var
 `ANTHROPIC_API_KEY_SECRET_NAME` and fetches the value at boot.
 
+**Recommended onboarding**: run `review-agent setup workspace` (CLI)
+before populating the secret. The command prints a manual checklist
+(workspace creation, ZDR enable, monthly spend cap) with deep links
+to console.anthropic.com, or with `--api` calls the Anthropic Admin
+API directly (requires `ANTHROPIC_ADMIN_KEY` — distinct from the
+inference key). The output includes the `.review-agent.yml` snippet
+and the secret name to wire into Secrets Manager.
+
 ### 7.3 OpenAI / Azure OpenAI / Vertex
 
 Not wired in this Terraform. Add a Secrets Manager entry for the API

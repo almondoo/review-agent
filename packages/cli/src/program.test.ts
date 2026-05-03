@@ -24,16 +24,19 @@ function recordingIo() {
 }
 
 describe('buildProgram', () => {
-  it('exposes the four top-level commands', () => {
+  it('exposes the top-level commands including setup', () => {
     const program = buildProgram({ io: recordingIo(), env: {}, version: 'test' });
     const names = program.commands.map((c) => c.name());
     expect(names).toContain('review');
     expect(names).toContain('config');
     expect(names).toContain('eval');
+    expect(names).toContain('setup');
     const config = program.commands.find((c) => c.name() === 'config');
     const subNames = config?.commands.map((c) => c.name());
     expect(subNames).toContain('validate');
     expect(subNames).toContain('schema');
+    const setup = program.commands.find((c) => c.name() === 'setup');
+    expect(setup?.commands.map((c) => c.name())).toContain('workspace');
   });
 
   it('wires `config schema` to print to stdout', async () => {

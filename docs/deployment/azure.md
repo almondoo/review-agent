@@ -123,6 +123,12 @@ Vault. The worker reads the secret name from
 `ANTHROPIC_API_KEY_SECRET_NAME` env and pulls via the managed
 identity.
 
+**Recommended onboarding**: run `review-agent setup workspace` (CLI)
+before populating the Key Vault secret. The command prints a manual
+checklist (workspace creation, ZDR enable, spend cap), or with
+`--api` calls the Anthropic Admin API directly (requires
+`ANTHROPIC_ADMIN_KEY`, distinct from the inference key).
+
 ### 7.3 OpenAI-compatible endpoints
 
 Not wired in this Terraform. Adapt by setting `LLM_PROVIDER=openai-compatible`
