@@ -110,6 +110,12 @@ permissions in §7.1 are unnecessary in this mode.
 Set `llm_provider = "anthropic"`, `terraform apply`, then populate
 the Anthropic API key secret per §5.3 in the example README.
 
+**Recommended onboarding**: run `review-agent setup workspace` (CLI)
+to create the Workspace, enable ZDR, and set a monthly spend cap
+before populating the secret. Default mode prints a manual
+checklist; `--api` calls the Admin API directly (requires
+`ANTHROPIC_ADMIN_KEY`).
+
 ## 8. Networking
 
 - **Receiver** ingress: `INGRESS_TRAFFIC_ALL` (public). HMAC verify

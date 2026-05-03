@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Per-provider parity numbers consumed by scripts/eval-matrix.ts to regenerate docs/providers/parity-matrix.md. Numeric fields default to null until the operator runs the corresponding `pnpm --filter @review-agent/eval matrix:run` measurement.",
+  "measured_at": null,
+  "anthropic_baseline_model": "claude-sonnet-4-6",
+  "providers": [
+    {
+      "id": "anthropic",
+      "label": "Anthropic (direct)",
+      "default_model": "claude-sonnet-4-6",
+      "features": {
+        "prompt_caching": "yes",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": 0
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "ZDR opt-in per Workspace; default 30-day retention"
+    },
+    {
+      "id": "openai",
+      "label": "OpenAI (direct)",
+      "default_model": "gpt-4o",
+      "features": {
+        "prompt_caching": "no",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "ZDR opt-in for Enterprise tier; default 30-day retention"
+    },
+    {
+      "id": "azure-openai",
+      "label": "Azure OpenAI",
+      "default_model": "gpt-4o",
+      "features": {
+        "prompt_caching": "no",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "no training-data use by default; abuse-monitoring 30 days unless opt-out"
+    },
+    {
+      "id": "google",
+      "label": "Google (Gemini direct)",
+      "default_model": "gemini-2.0-pro",
+      "features": {
+        "prompt_caching": "no",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "paid tier: no training-data use; default retention varies"
+    },
+    {
+      "id": "vertex",
+      "label": "Vertex AI",
+      "default_model": "claude-sonnet-4-6@anthropic",
+      "features": {
+        "prompt_caching": "yes",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "GCP customer data not used for model training"
+    },
+    {
+      "id": "bedrock",
+      "label": "AWS Bedrock",
+      "default_model": "anthropic.claude-sonnet-4-6-v1:0",
+      "features": {
+        "prompt_caching": "yes",
+        "structured_output": "json-schema",
+        "tool_calling": "yes"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "AWS customer data not used for model training; per-region storage"
+    },
+    {
+      "id": "openai-compatible",
+      "label": "OpenAI-compatible (Ollama / vLLM / OpenRouter / LM Studio)",
+      "default_model": "endpoint-dependent",
+      "features": {
+        "prompt_caching": "endpoint-dependent",
+        "structured_output": "endpoint-dependent",
+        "tool_calling": "endpoint-dependent"
+      },
+      "eval": {
+        "known_bug_precision": null,
+        "no_issue_false_positive_rate": null,
+        "noise_rate_delta_vs_baseline": null
+      },
+      "cost": {
+        "median_pr_usd": null,
+        "p95_latency_seconds": null
+      },
+      "data_retention": "endpoint-dependent (often local-only for self-hosted backends)"
+    }
+  ],
+  "footnote": "Numbers measured via the 60-fixture corpus (packages/eval/fixtures/golden/). Re-run via `pnpm --filter @review-agent/eval matrix:run -- <provider>` (one provider at a time so cost is bounded). Estimated full re-measurement cost across all paid providers: $5-8 per regen run."
+}

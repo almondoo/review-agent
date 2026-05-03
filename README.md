@@ -116,6 +116,10 @@ See [`docs/specs/review-agent-spec.md`](./docs/specs/review-agent-spec.md)
 for the full specification and [`docs/roadmap.md`](./docs/roadmap.md) for
 the milestone plan.
 
+For the per-provider feature parity, eval delta, and cost / latency
+trade-offs across the seven supported drivers, see
+[`docs/providers/parity-matrix.md`](./docs/providers/parity-matrix.md).
+
 ## Status
 
 Maintained as a personal project. Code is published under the
@@ -125,6 +129,14 @@ are not accepted.
 - **Pull Requests**: Closed without review. See [CONTRIBUTING.md](./.github/CONTRIBUTING.md).
 - **Issues**: Used for internal task tracking only.
 - **Forks**: Welcome.
+
+### Versioning
+
+From `v1.0.0` onwards `review-agent` follows
+[Semantic Versioning](https://semver.org/). The public API surface,
+internal-only surfaces, and per-version migration steps are in
+[UPGRADING.md](./UPGRADING.md). Pre-v1.0 (`0.x`) releases are not
+SemVer-stable.
 
 ## Security
 

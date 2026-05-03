@@ -75,3 +75,14 @@ treat any break as a §8.6.5 incident (database compromise).
 - **Genesis row**: cycling the table (e.g. for tests) resets the chain.
   Production data must never start from a non-empty table without a
   matching `prev_hash` prefix.
+
+## Actor identity in audit rows
+
+`audit_log` rows do not store the GitHub actor that posted the
+review comment — the actor is determined by the auth method
+(`github-actions[bot]` for the Action, `<app-name>[bot]` for the
+GitHub App, the PAT owner for the CLI). Operators that want a
+uniform actor across the org should run Server mode with a renamed
+GitHub App; see [`../configuration/bot-identity.md`](../configuration/bot-identity.md)
+for the per-mode mapping and the rationale for not exposing actor as a
+config knob.

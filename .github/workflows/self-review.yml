@@ -18,6 +18,8 @@ jobs:
     name: review-agent dogfood
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,6 +39,7 @@ jobs:
       - run: pnpm -r --filter './packages/**' build
 
       - name: Run review-agent
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
         uses: ./packages/action
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -44,3 +47,7 @@ jobs:
           language: en-US
           config-path: .review-agent.yml
           cost-cap-usd: '0.50'
+
+      - name: Skip notice
+        if: ${{ env.ANTHROPIC_API_KEY == '' }}
+        run: echo "ANTHROPIC_API_KEY not set - skipping review-agent dogfood. Add the secret in repo settings to enable per-PR self-review."

@@ -1,12 +1,20 @@
 import { readFile } from 'node:fs/promises';
-import { type Config, defaultConfig, loadConfigFromYaml, mergeWithEnv } from '@review-agent/config';
+import {
+  type Config,
+  defaultConfig,
+  KNOWN_REVIEW_BOT_LOGINS,
+  loadConfigFromYaml,
+  mergeWithEnv,
+} from '@review-agent/config';
 import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createGithubVCS } from '@review-agent/platform-github';
 import {
   buildReviewState,
+  decideCoordination,
   loadSkills,
   type RunnerResult,
+  renderDeferralSummary,
   renderSkillsBlock,
   runReview,
 } from '@review-agent/runner';
@@ -52,6 +60,12 @@ export async function runAction(
 
   const skipReason = decideSkip(pr, config);
   if (skipReason) return { ...NO_RUN, skipReason };
+
+  const coordination = await decideCoordinationForRun(vcs, ctx.ref, config);
+  if (coordination.action === 'defer') {
+    await vcs.postSummary(ctx.ref, renderDeferralSummary(coordination.bot));
+    return { ...NO_RUN, skipReason: `Deferred to '${coordination.bot}' (coordination policy)` };
+  }
 
   const provider = (deps.createProvider ?? ((key, cfg) => buildAnthropicProvider(key, cfg)))(
     inputs.anthropicApiKey ?? '',
@@ -104,6 +118,30 @@ function decideSkip(pr: PR, config: Config): string | null {
     return `Author '${pr.author}' is in ignore_authors`;
   }
   return null;
+}
+
+// Lists existing PR comments and runs the coordination decision so
+// the action defers to another review bot when configured. The VCS
+// adapter's `getExistingComments` returns inline review comments
+// only — bots that post solely a summary PR comment (no inline
+// comments at all) are NOT detected here even when added to
+// `coordination.other_bots_logins`. Extending the VCS adapter to
+// also list `issues.listComments` authors is tracked as a v1.x
+// follow-up. See `docs/configuration/coordination.md`.
+async function decideCoordinationForRun(
+  vcs: VCS,
+  ref: PRRef,
+  config: Config,
+): Promise<ReturnType<typeof decideCoordination>> {
+  if (config.coordination.other_bots === 'ignore') {
+    return { action: 'proceed' };
+  }
+  const existing = await vcs.getExistingComments(ref);
+  return decideCoordination({
+    mode: config.coordination.other_bots,
+    botLogins: [...KNOWN_REVIEW_BOT_LOGINS, ...config.coordination.other_bots_logins],
+    existingCommentAuthors: existing.map((c) => c.author),
+  });
 }
 
 async function loadConfigOrDefault(

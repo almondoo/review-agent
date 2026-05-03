@@ -3,6 +3,7 @@ import { runEvalCommand } from './commands/eval.js';
 import { recoverSyncStateCommand } from './commands/recover.js';
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
+import { setupWorkspaceCommand } from './commands/setup-workspace.js';
 import { validateConfigCommand } from './commands/validate.js';
 import { defaultIo, type ProgramIo } from './io.js';
 
@@ -76,6 +77,28 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.exitCode);
     });
 
+  const setup = program
+    .command('setup')
+    .description('Onboarding helpers (Anthropic Workspace, etc.).');
+
+  setup
+    .command('workspace')
+    .description(
+      'Configure an Anthropic Workspace for review-agent (ZDR + spend cap). Prints a manual checklist by default; --api uses the Admin API.',
+    )
+    .option('--api', 'call the Anthropic Admin API directly (requires ANTHROPIC_ADMIN_KEY)', false)
+    .option('--name <name>', 'workspace name', 'review-agent')
+    .option('--spend-cap-usd <usd>', 'monthly spend cap in USD', (v) => Number.parseFloat(v), 50)
+    .action(async (opts: SetupWorkspaceCliOpts) => {
+      const result = await setupWorkspaceCommand(io, {
+        api: !!opts.api,
+        env,
+        ...(opts.name !== undefined ? { name: opts.name } : {}),
+        ...(opts.spendCapUsd !== undefined ? { spendCapUsd: opts.spendCapUsd } : {}),
+      });
+      io.exit(result.status === 'manual' || result.status === 'api_ok' ? 0 : 1);
+    });
+
   const recover = program
     .command('recover')
     .description('Disaster-recovery commands (spec §8.6.6).');
@@ -117,6 +140,12 @@ type EvalCliOpts = {
 type RecoverSyncStateCliOpts = {
   repo: string;
   installation: bigint;
+};
+
+type SetupWorkspaceCliOpts = {
+  api?: boolean;
+  name?: string;
+  spendCapUsd?: number;
 };
 
 export type { ProgramIo } from './io.js';

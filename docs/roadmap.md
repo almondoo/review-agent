@@ -80,6 +80,29 @@ gh issue view <N> --repo almondoo/review-agent
 
 ---
 
+## v1.0 — Stable: API freeze, security audit, full quality bar (9 issues)
+
+| # | Issue | Title (short) | Depends on |
+|---|---|---|---|
+| 43 | [#43](https://github.com/almondoo/review-agent/issues/43) | docs(repo): UPGRADING.md template + SemVer stability declaration | — |
+| 44 | [#44](https://github.com/almondoo/review-agent/issues/44) | security: third-party security audit or equivalent threat-model review | #36, #37 |
+| 45 | [#45](https://github.com/almondoo/review-agent/issues/45) | feat(eval): record first measured baseline across all providers | #31, #33 |
+| 46 | [#46](https://github.com/almondoo/review-agent/issues/46) | docs(providers): per-provider feature parity matrix | #31, #33, #45 |
+| 47 | [#47](https://github.com/almondoo/review-agent/issues/47) | docs(repo): bot identity guidance for Action vs Server modes | — |
+| 48 | [#48](https://github.com/almondoo/review-agent/issues/48) | feat(runner,config): multi-bot coordination policy | — |
+| 49 | [#49](https://github.com/almondoo/review-agent/issues/49) | docs(repo,platform-github): GHES compatibility statement | — |
+| 50 | [#50](https://github.com/almondoo/review-agent/issues/50) | feat(cli): `review-agent setup workspace` (Anthropic ZDR + spend caps) | #23 |
+| 51 | [#51](https://github.com/almondoo/review-agent/issues/51) | feat(skills,security): cosign attestation for npm-distributed skills (v1.1 tracking) | #7 |
+
+**Suggested execution order**: 43 → 47 / 49 → 45 → 46 → 48 → 50 → 44 → 51. #51
+is a v1.1 tracking ticket and can be closed as wontfix if first-party skill
+publication is not undertaken.
+
+**v1.0 acceptance criteria**: see PRD §12.1. Closing all 9 issues plus
+re-running typecheck / lint / test / eval / build is the v1.0 release gate.
+
+---
+
 ## Status
 
 v0.1 — all 13 issues shipped on `main`:
@@ -108,8 +131,26 @@ v0.2 progress:
 - #19 incremental review (rebase + line shift + state mirror) — `2331ad6`
 - #20 OTel + Langfuse + body redaction — `91e216d`
 - #21 cost ledger + audit HMAC chain — `8d48d9a`
-- #22 AWS Lambda + Terraform + deployment docs — see latest commit
+- #22 AWS Lambda + Terraform + deployment docs — `dcc73cc`
 - #23 review-agent CLI — `7983256`
 - #24 llm OpenAI provider — `3815cea`
 
-v0.3: open, not started.
+v0.3 — all 13 issues shipped on `main`:
+
+- #25 db RLS for multi-tenancy — `c6c82ac`
+- #26 per-installation BYOK with KMS envelope encryption — `4ab1eb1`
+- #27 org central config repository — `faed42a`
+- #28 Helm chart + KEDA autoscaling — `49c2e59`
+- #29 GCP Cloud Run + Terraform + deployment docs — `7e8fa44`
+- #30 Azure Container Apps + Terraform + deployment docs — `9e228ff`
+- #31 full provider matrix (Azure / Google / Vertex / Bedrock / OpenAI-compat) — `20d9414`
+- #32 red-team golden fixtures + CI gate — `0033a5b`
+- #33 prompt eval harness expanded to 50+ PRs — `1a82354`
+- #34 docker-compose self-host example — `413a4a7`
+- #35 cost cap enforcement at runtime — `bc0e5f9`
+- #36 LLM-based injection detector — `071b3a8`
+- #37 incident response runbooks finalized — `774ee4c`
+- spec §22 open questions resolved — `849b6df`
+
+v1.0 — planning. 9 issues open (#43–#51). See the v1.0 table above for the
+per-issue scope and dependencies. None merged yet.

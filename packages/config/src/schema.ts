@@ -80,6 +80,32 @@ const IncrementalSchema = z
   })
   .strict();
 
+// `coordination.other_bots` (§22 #9 / v1.0 #48) controls coexistence with
+// other PR-review bots (`coderabbitai[bot]`, `qodo-merge[bot]`, etc.).
+//
+//   ignore (default)      — review independently; rely on per-finding
+//                           fingerprint dedup to avoid duplicate posts
+//                           against ourselves but make no attempt to
+//                           coordinate across bots.
+//   defer_if_present      — if any author in `other_bots_logins` (plus
+//                           the built-in allowlist in `known-bots.ts`)
+//                           has commented on the PR, post a single
+//                           skip-summary and exit without invoking the
+//                           agent loop. Useful when an org runs multiple
+//                           review bots in parallel and wants to avoid
+//                           comment thrash.
+//
+// `other_bots_logins` *adds to* the built-in list — operators don't lose
+// the defaults by overriding. To shrink the list, set the YAML key to
+// the desired full list and override the defaults at code level (not
+// supported via config).
+const CoordinationSchema = z
+  .object({
+    other_bots: z.enum(['ignore', 'defer_if_present']).default('ignore'),
+    other_bots_logins: z.array(z.string().min(1)).default([]),
+  })
+  .strict();
+
 // `extends: 'org'` (§10.2 layer 3) opts the repo into merging the
 // `<org>/.github/review-agent.yml` central config underneath this
 // file. Without `extends`, the org file is consulted only as a
@@ -101,6 +127,7 @@ export const ConfigSchema = z
     repo: RepoSchema.default({}),
     skills: z.array(z.string().min(1)).default([]),
     incremental: IncrementalSchema.default({}),
+    coordination: CoordinationSchema.default({}),
   })
   .strict();
 

@@ -1,4 +1,12 @@
 export { runReview } from './agent.js';
+export {
+  COORDINATION_MODES,
+  type CoordinationDecision,
+  type CoordinationDecisionInput,
+  type CoordinationMode,
+  decideCoordination,
+  renderDeferralSummary,
+} from './coordination.js';
 export { createCostKillSwitch, type KillSwitchOpts } from './cost-kill-switch.js';
 export {
   assertDailyCapNotExceeded,

@@ -9,6 +9,9 @@
     "eval": "promptfoo eval -c promptfooconfig.yaml",
     "eval:view": "promptfoo view",
     "eval:red-team": "promptfoo eval -c red-team.promptfooconfig.yaml",
+    "matrix": "tsx scripts/eval-matrix.ts",
+    "matrix:write": "tsx scripts/eval-matrix.ts --write",
+    "matrix:check": "tsx scripts/eval-matrix.ts --check",
     "validate:red-team": "tsx scripts/red-team-validate.ts",
     "validate:golden": "tsx scripts/golden-validate.ts",
     "verify:audit": "tsx scripts/verify-audit-chain.ts"
