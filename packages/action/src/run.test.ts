@@ -122,6 +122,104 @@ describe('runAction', () => {
     expect(stateArg?.modelUsed).toBe('claude-sonnet-4-6');
   });
 
+  it('defers when coordination.other_bots is defer_if_present and a known bot has commented', async () => {
+    const vcs = makeVCS({
+      getExistingComments: vi.fn(async () => [
+        {
+          id: 1,
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT' as const,
+          body: 'looks good',
+          author: 'coderabbitai[bot]',
+          createdAt: '',
+        },
+      ]),
+    });
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => 'coordination:\n  other_bots: defer_if_present\n',
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+      },
+    );
+    expect(result.skipped).toBe(true);
+    expect(result.skipReason).toContain('coderabbitai[bot]');
+    // Posts the deferral summary, but no inline review and no state row.
+    expect(vcs.postSummary).toHaveBeenCalledTimes(1);
+    expect(vcs.postReview).not.toHaveBeenCalled();
+    expect(vcs.upsertStateComment).not.toHaveBeenCalled();
+  });
+
+  it('proceeds with the review when coordination.other_bots is ignore even if a known bot has commented', async () => {
+    const vcs = makeVCS({
+      getExistingComments: vi.fn(async () => [
+        {
+          id: 1,
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT' as const,
+          body: 'looks good',
+          author: 'coderabbitai[bot]',
+          createdAt: '',
+        },
+      ]),
+    });
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        // Explicit `ignore` rather than empty YAML so the test fails
+        // if a future change to `defaultConfig` flips the default.
+        readFile: async () => 'coordination:\n  other_bots: ignore\n',
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+    // Short-circuit invariant: ignore mode does not call
+    // getExistingComments, so we don't pay the API call when
+    // coordination is off.
+    expect(vcs.getExistingComments).not.toHaveBeenCalled();
+  });
+
+  it('respects coordination.other_bots_logins for operator-supplied custom bot logins', async () => {
+    const vcs = makeVCS({
+      getExistingComments: vi.fn(async () => [
+        {
+          id: 1,
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT' as const,
+          body: 'looks good',
+          author: 'acme-internal-reviewer[bot]',
+          createdAt: '',
+        },
+      ]),
+    });
+    const yaml = [
+      'coordination:',
+      '  other_bots: defer_if_present',
+      '  other_bots_logins:',
+      '    - acme-internal-reviewer[bot]',
+      '',
+    ].join('\n');
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => yaml,
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+      },
+    );
+    expect(result.skipped).toBe(true);
+    expect(result.skipReason).toContain('acme-internal-reviewer[bot]');
+  });
+
   it('surfaces cost-cap violations as a thrown error and posts no comments', async () => {
     const vcs = makeVCS();
     const provider = makeProvider();

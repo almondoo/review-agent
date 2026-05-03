@@ -64,6 +64,26 @@ describe('loadConfigFromYaml — explicit values', () => {
   it('rejects negative cost cap', () => {
     expect(() => loadConfigFromYaml('cost:\n  max_usd_per_pr: -1\n')).toThrow(ConfigError);
   });
+
+  it('defaults coordination.other_bots to ignore with no operator overrides', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.coordination.other_bots).toBe('ignore');
+    expect(cfg.coordination.other_bots_logins).toEqual([]);
+  });
+
+  it('parses coordination.other_bots: defer_if_present + custom logins', () => {
+    const cfg = loadConfigFromYaml(
+      'coordination:\n  other_bots: defer_if_present\n  other_bots_logins:\n    - my-internal-reviewer[bot]\n',
+    );
+    expect(cfg.coordination.other_bots).toBe('defer_if_present');
+    expect(cfg.coordination.other_bots_logins).toEqual(['my-internal-reviewer[bot]']);
+  });
+
+  it('rejects unknown coordination.other_bots mode', () => {
+    expect(() => loadConfigFromYaml('coordination:\n  other_bots: ask_first\n')).toThrow(
+      ConfigError,
+    );
+  });
 });
 
 describe('defaultConfig', () => {

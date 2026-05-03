@@ -4,6 +4,17 @@
     "ReviewAgentConfig": {
       "type": "object",
       "properties": {
+        "extends": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "org"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "language": {
           "type": "string",
           "enum": [
@@ -239,6 +250,26 @@
             "enabled": {
               "type": "boolean",
               "default": true
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "coordination": {
+          "type": "object",
+          "properties": {
+            "other_bots": {
+              "type": "string",
+              "enum": ["ignore", "defer_if_present"],
+              "default": "ignore"
+            },
+            "other_bots_logins": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "default": []
             }
           },
           "additionalProperties": false,
