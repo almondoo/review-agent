@@ -109,3 +109,9 @@ Three reasons:
   emits malformed JSON, you'll see a `SchemaValidationError` from
   `@review-agent/core` — that's the correct loud failure mode; do
   not silently retry past the configured budget.
+
+## See also
+
+- [`./parity-matrix.md`](./parity-matrix.md) — cross-provider
+  feature / eval / cost matrix; the openai-compatible row is
+  intentionally `endpoint-dependent` for every cell.

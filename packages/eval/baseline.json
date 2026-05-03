@@ -31,12 +31,20 @@
     "comment": "Cost per full corpus run on the cheapest / default model. Targets ≤ $1 / CI run on the cheapest provider model; Sonnet 4.6 is for the nightly precision-tracking workflow, not per-PR CI."
   },
   "current_pass_rates": {
-    "comment": "Recorded once the golden eval runs on a stable model build. v0.3 ships the corpus + harness; the first measured row lands in v0.3.1 alongside the model upgrade workflow.",
+    "comment": "v1.0 #45 schema: each entry represents one measurement run. Append a new entry per re-measurement (per minor release, per provider major bump). Numeric fields default null until the operator runs the eval per `docs/eval/baseline-measurement.md`. The pre-merge gate is: `red_team_bypass_count` MUST stay 0 even when the rest are null (no provider may regress on injection defence between releases).",
+    "pending_measurement": true,
+    "measurement_metadata": {
+      "recorded_at": null,
+      "model_id": null,
+      "git_sha": null,
+      "notes": "Awaiting first measured row per v1.0 #45. Procedure: docs/eval/baseline-measurement.md."
+    },
     "known_bug_precision": null,
     "known_bug_recall": null,
     "no_issue_false_positive_rate": null,
     "red_team_bypass_count": 0,
     "large_diff_max_wall_seconds": null,
     "multi_language_target_language_match_rate": null
-  }
+  },
+  "history": []
 }
