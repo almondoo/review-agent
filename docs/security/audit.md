@@ -76,15 +76,27 @@ understand the depth of review:
 | Deliverable | Location | Status |
 |---|---|---|
 | Procedure / decision rationale (this file) | `docs/security/audit.md` | Authored. |
-| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Drafted by maintainer. **Awaiting unaffiliated reviewer sign-off.** |
-| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | No new surfaces discovered in this round; existing mitigation table stays. |
-| Public summary | bottom of `threat-model-review-2026-05.md` "Summary of findings" section | Drafted; updated if reviewer flags additional findings. |
+| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Drafted by maintainer. AI verification pass on 2026-05-15 surfaced **1 High** finding (T-2 / I-2 gitleaks integration gap) + 4 new informational findings. **Awaiting unaffiliated human reviewer sign-off.** |
+| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | Updated 2026-05-15 to qualify the secret-leakage mitigation row (gitleaks integration pending). |
+| Public summary | bottom of `threat-model-review-2026-05.md` "Summary of findings" section | Updated 2026-05-15. |
 
-The unaffiliated-reviewer gate is the **only blocker** for closing
-issue #44 and tagging v1.0. The maintainer's responsibility is to
-identify a willing reviewer (a peer engineer, security-focused
-collaborator, or hired consultant for scoped review) and incorporate
-their feedback before the v1.0 tag.
+Closing issue #44 and tagging v1.0 now requires **two** gates to
+clear (not one):
+
+1. The High finding (gitleaks integration gap, tracked at #58)
+   is resolved per the "v1.0 blockers" list at the bottom of
+   `threat-model-review-2026-05.md` — either wire the scanner
+   into the agent pipeline or formally retract the claim.
+2. An unaffiliated **human** reviewer signs off in the
+   walkthrough table. The 2026-05-15 AI verification pass is
+   logged for transparency but is **not** a substitute for this
+   gate (it is a maintainer-directed tool, not an external
+   accountability check).
+
+The maintainer's responsibility is to identify a willing human
+reviewer (a peer engineer, security-focused collaborator, or
+hired consultant for scoped review) and incorporate their
+feedback before the v1.0 tag.
 
 If no unaffiliated reviewer is available within a reasonable
 timeframe, the v1.0 tag is gated indefinitely — we do not relax the

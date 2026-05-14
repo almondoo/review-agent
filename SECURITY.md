@@ -47,7 +47,7 @@ Adversaries can attempt:
 | Path traversal | Denylist (`.env*`, `.git/`, `node_modules/`); resolve-and-verify against partial+sparse clone root; symlink refusal | §11.2 |
 | Symlinks | `read_file` rejects symlinks; tool calls rooted at the clone dir | §11.2 |
 | Cost exhaustion | Per-PR `cost-cap-usd` hard cap; cost-guard middleware short-circuits the loop; tool-call budget per turn | §6.2, §11.1 |
-| Secret leakage | `gitleaks` scan on agent text before posting; redaction; review aborts if secrets are present in agent output | §11.3 |
+| Secret leakage | `gitleaks` scanner is implemented (`packages/runner/src/gitleaks.ts`) but the v0.3 / v1.0-baseline agent pipeline does **not** currently invoke it — see the High finding in [`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md) T-2 / I-2 (tracked at #58). Active mitigations today are the system-prompt redaction guidance and the injection detector; treat the documented two-stage scan as **pending integration**. | §11.3 |
 | Container escape | Non-root `agent` user; `REVIEW_AGENT_SANDBOXED=1`; minimal alpine base; no host mounts in the default Action | §15.1 |
 | Bot author abuse | `ignore_authors` defaults skip `dependabot[bot]` / `renovate[bot]` / `github-actions[bot]` | §10 |
 | Cross-tenant data leak | Postgres RLS `tenant_isolation` policy on every tenant-scoped table; fails closed when GUC unset | §16.1 |

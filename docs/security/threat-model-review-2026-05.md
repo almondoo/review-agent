@@ -5,9 +5,13 @@ surface of `review-agent`. Spec reference: PRD §12.1 v1.0 (option
 b: internal threat-model review), v1.0 issue #44, [`./audit.md`](./audit.md).
 
 **Status**: drafted by the project maintainer (almondoo /
-tsubasa.engineer@gmail.com). **Awaiting unaffiliated reviewer
-sign-off** — see "Sign-off" at the bottom. Until that line is
-filled in, this document is a draft and v1.0 tagging is gated.
+tsubasa.engineer@gmail.com); a complementary AI pre-review
+code-verification pass was performed on 2026-05-15 and surfaced
+**1 High finding** (T-2 / I-2 — gitleaks integration gap, see
+below). **Still awaiting unaffiliated reviewer sign-off** — see
+"Sign-off" at the bottom. Until that line is filled in (and the
+High finding is resolved per `audit.md` triage rule), this
+document is a draft and v1.0 tagging is gated.
 
 Scope: every surface listed in the in-scope table below. Out of
 scope: GitHub Actions runner platform itself, LLM provider
@@ -45,7 +49,7 @@ What can an attacker pretend to be that they aren't?
 | # | Attack | Mitigation | Residual risk |
 |---|---|---|---|
 | S-1 | Forged GitHub webhook (no valid HMAC) | `crypto.timingSafeEqual` over the raw body before JSON parse; missing and invalid signatures both 401 with identical body so timing attacks cannot distinguish failure modes. | None at the receiver. Operators must rotate the webhook secret on suspicion (§8.6.3 runbook). |
-| S-2 | Replay of old webhook delivery | Idempotency table on `X-GitHub-Delivery`; duplicate delivery returns `{ deduped: true }` 200. Cleanup sweep removes rows > 7 days. | A window of 7 days where a leaked old signed body could be replayed against a previous receiver instance — but the receiver dedupes, so the worker only runs once. |
+| S-2 | Replay of old webhook delivery | Idempotency table on `X-GitHub-Delivery` (`packages/server/src/middleware/idempotency.ts`); duplicate delivery returns `{ deduped: true }` 200. Cleanup sweep removes rows > 7 days (verified: `packages/server/src/worker.ts:21,74-75` — `DEFAULT_RETENTION_DAYS = 7`, advisory-locked elector). | A window of 7 days where a leaked old signed body could be replayed against a previous receiver instance — but the receiver dedupes, so the worker only runs once. |
 | S-3 | Spoofed Anthropic / OpenAI API responses (intercepted TLS) | Provider SDK uses the underlying TLS stack with default CA bundle. We do not pin certificates. | An attacker with CA-level position could MITM provider calls — out-of-scope per PRD risks §11.2 (provider availability), but operators in regulated environments should consider TLS inspection policy. |
 | S-4 | Spoofed bot author (PR opened by `coderabbitai[bot]` to trigger deference) | `coordination.other_bots: defer_if_present` matches GitHub's `[bot]` actor field which a non-bot account cannot impersonate. | None at the protocol level — actor authenticity is GitHub's responsibility. |
 | S-5 | Forged per-installation BYOK secret | Secrets are envelope-encrypted at rest and the data-key is wrapped under a per-installation CMK. Rotation drops the data-key. | A KMS misconfiguration that grants cross-installation `kms:Decrypt` would breach isolation — KMS policy review is part of `byok.md` runbook. |
@@ -63,13 +67,20 @@ What can an attacker modify in flight or at rest?
 | # | Attack | Mitigation | Residual risk |
 |---|---|---|---|
 | T-1 | Modified PR diff body before agent reads it | Agent fetches the diff via the GitHub API (TLS), not from arbitrary mirrors. Octokit retries on transient failures only — no fallback to plaintext. | None at the protocol level. |
-| T-2 | Tampered agent-output before `gitleaks` post-scan | Gitleaks runs on agent text in-process before posting; output is held in memory until scan completes. There is no intermediate file write that another process could touch. | None — single-process invariant. |
+| T-2 | Tampered agent-output before `gitleaks` post-scan | **Gap identified 2026-05-15 (HIGH).** The gitleaks scanner is implemented and unit-tested (`packages/runner/src/gitleaks.ts`, `gitleaks.test.ts`) and re-exported from `packages/runner/src/index.ts` (lines 18–28), but **no caller invokes it** in v0.3 / v1.0-baseline. `packages/runner/src/agent.ts` runs only `createInjectionGuard` + `createCostGuard` + `dedupComments`; `packages/action/src/run.ts` likewise never calls `scanWorkspaceWithGitleaks` / `quickScanContent` / `shouldAbortReview` (grep returns zero non-test, non-export hits). Until wired, the agent-output post-scan layer of the secret-leakage defense is **not active**. The system prompt's secret-redaction guidance is the only active layer at this surface. | **HIGH** until integration ships. Tracked as v1.0 blocker in #58. Recommended fix: invoke `quickScanContent` over `result.summary` + `result.comments[*].body` in `runReview` before returning; abort review via `shouldAbortReview` when applicable. |
 | T-3 | Modified hidden state comment to skip review (`<!-- review-agent-state: ... -->`) | The runner treats the state comment as a hint, not a security boundary. Modified state can re-trigger a full re-review (worst case: extra cost, capped by `cost-cap-usd`). It cannot bypass the review entirely because `decideSkip` does not consult it. | An attacker can churn the state comment to drive cost — bounded by per-installation daily cap (§17). Acceptable. |
 | T-4 | Audit-log row tampering (DB compromise) | HMAC chain (`hash_n = sha256(prev_hash || canonical_payload_n)`); `recover audit-verify` detects any modification. Verifier runs nightly (recommended). | A tamperer with both DB write and the chain salt could theoretically forge a consistent chain — but the salt is derived from `prev_hash`, not a separate secret, so the forge is computationally bounded by the SHA-256 collision space. Acceptable. |
 | T-5 | Modified skill content in `.review-agent/skills/` | Skill loader strips `<script>` tags and dangerous fenced-code blocks (`bash` / `sh` / `python` / `powershell`). 50 KB max size. Untrusted-content wrapper marks skill body as not instructions. | An LLM might still treat skill content as authoritative even with the wrapper. The `skill-loader.test.ts` covers the strip; the LLM-side trust is mitigated by the injection detector (`runner/src/security/injection-detector.ts`). |
 
-Findings: none `high` or `critical`. T-3 and T-5 have documented
-mitigations and acceptable residual risk.
+Findings: **1 High** (T-2: gitleaks integration gap discovered in
+the 2026-05-15 verification pass — see the T-2 row above). T-3 and
+T-5 have documented mitigations and acceptable residual risk.
+
+Additional informational finding (added 2026-05-15):
+
+| # | Attack | Mitigation | Residual risk |
+|---|---|---|---|
+| T-6 | `review-agent recover sync-state` upserts state recovered from a tampered hidden state comment without first re-verifying the audit-log chain. | The hidden comment is canonical per spec §12.1.1 and recovery is idempotent. An attacker who edited a state comment can only re-trigger a fuller review (T-3 reasoning applies). | Informational — bounded by per-installation daily cap (§17) and by `decideSkip` not consulting the state comment (`packages/action/src/run.ts:113-121` only checks `pr.draft` and `ignore_authors`). |
 
 ---
 
@@ -81,10 +92,17 @@ What actions can an attacker take and then deny?
 |---|---|---|---|
 | R-1 | Operator denies running an expensive prompt | `audit_log` HMAC chain records every cost-incurring event with `installation_id`, `pr_id`, `event`, `model`, `input_tokens`, `output_tokens`. Forward-only with chain replay. | None at the protocol level. The forensic record is regulatory-grade (§8.6.5). |
 | R-2 | Worker process emits a comment then disappears | Server posts the comment via Octokit which logs the operation in the GitHub PR timeline. The Lambda log retains the request. | Comment authorship is tied to the bot identity per [`../configuration/bot-identity.md`](../configuration/bot-identity.md) — per-mode mapping is documented so auditors know which actor maps to which deployment. |
-| R-3 | Tenant denies agreeing to a config policy | Org config is read from `<owner>/.github/review-agent.yml` at job time and the source is recorded in OTel (`metrics.configSourceTotal.add(1, { source })`). | Telemetry is operator-side, not a hard audit row. Acceptable for the org-config trust model. |
+| R-3 | Tenant denies agreeing to a config policy | Org config is read from `<owner>/.github/review-agent.yml` at job time. **Walkthrough correction (2026-05-15)**: the originally claimed `metrics.configSourceTotal.add(1, { source })` OTel emission does **not** exist in code (`grep` across `packages/` returns zero matches; the meter in `packages/server/src/metrics.ts:21-36` exposes `reviews_total`, `comments_posted_total`, `cost_usd_total`, `rate_limit_hits_total`, `prompt_injection_blocked_total`, `incremental_skipped_lines_total` but no `config_source_total`). Audit-log entries (R-1) remain the authoritative record of every cost-incurring event. | Informational — config-source attribution telemetry is a nice-to-have that is currently absent; audit_log still covers the repudiation case. Implement the metric (or formally drop the claim in `SECURITY.md`) as a v1.x follow-up. |
 
-Findings: none. Audit-log + GitHub timeline + OTel cover the
-relevant cases.
+Findings: none `high` or `critical`. R-3 is a walkthrough-accuracy
+correction; the underlying repudiation mitigation (audit-log HMAC
+chain) is unchanged.
+
+Additional informational finding (added 2026-05-15):
+
+| # | Attack | Mitigation | Residual risk |
+|---|---|---|---|
+| R-4 | Audit-log row deletion (vs. modification) by a Postgres superuser with direct DB access | HMAC chain detects modification (`recover audit-verify`). Deletion is detected only by row-count drift against an out-of-band snapshot or chain-replay length. RLS prevents cross-tenant deletes; the migrations-superuser path is the only role that can bypass RLS. | Informational — operator audit responsibility per `byok.md` / `audit-log.md`. Mitigation upgrade (external append-only sink) tracked as v1.x follow-up. |
 
 ---
 
@@ -94,16 +112,20 @@ What sensitive data can an attacker read?
 
 | # | Attack | Mitigation | Residual risk |
 |---|---|---|---|
-| I-1 | Agent reads `.env` / `.git/config` / `node_modules/` lockfiles | Static denylist in `tools.ts`; partial+sparse clone of changed paths only, rooted at the clone dir. Symlinks are refused (`statSync(file).isSymbolicLink()`). | None at the tool layer. An attacker who lands a path in the diff that resolves into a denylisted dir gets refused with `ToolDispatchRefusedError`. |
-| I-2 | Secret in agent reasoning leaks via posted comment | Two-stage gitleaks: diff scan + agent-text scan. Review aborts on positive hit (`shouldAbortReview` returns true). Tested via `runner/src/gitleaks.test.ts`. | A custom secret format not in gitleaks's default rules could slip through — operators add `redact_patterns` in `.review-agent.yml` for org-specific secrets. |
+| I-1 | Agent reads `.env` / `.git/config` / `node_modules/` lockfiles | Static denylist in `packages/runner/src/tools.ts:5-14` (`.env*`, `secrets/`, `private/`, `credentials/`, `.key`, `.pem`, `.p12`, `.pfx`, `credential*.json`, `service-account*.json`, `.aws/credentials`); partial+sparse clone of changed paths only, rooted at the clone dir. Symlinks are refused via `lstat()` semantics (i.e. the **non-following** stat — stricter than the earlier `statSync` text in this row; checked segment-by-segment per path component in `resolveSafePath`, `tools.ts:42-73`). | None at the tool layer. An attacker who lands a path in the diff that resolves into a denylisted dir gets refused with `ToolDispatchRefusedError`. |
+| I-2 | Secret in agent reasoning leaks via posted comment | **Gap identified 2026-05-15 (HIGH — same root cause as T-2).** The two-stage gitleaks design (diff scan + agent-text scan with `shouldAbortReview` short-circuit) exists as code in `packages/runner/src/gitleaks.ts` and is unit-tested, but **no caller invokes it** in v0.3 / v1.0-baseline. The only active layer at this surface is the LLM system-prompt redaction guidance + the injection detector (which classifies blocks but does not pattern-match secrets). Operators relying on the documented two-stage scan should treat it as **not active** until the integration ships. | **HIGH** until integration ships. Operator workaround: review posted comments before merging until v1.0+. Recommended fix: see T-2 row. |
 | I-3 | Cross-tenant data leak via shared Postgres | RLS `tenant_isolation` policy on every tenant-scoped table; `app.current_tenant` GUC is required for read; fails closed when GUC unset. Migrations superuser path is the only RLS-bypass and is gated to migration scripts. | A code path that forgets `SET LOCAL app.current_tenant = '<id>'` would silently return zero rows (fail-closed). Tested in db/src/__tests__/rls.test.ts. |
 | I-4 | Per-installation BYOK secret read by neighbouring installation | Envelope encryption: data-key wrapped under per-installation CMK. Decryption requires both the wrapped data-key and `kms:Decrypt` on the CMK ARN. KMS policy scopes by installation. | Cross-installation `kms:Decrypt` grant is the only way to breach isolation — operator audit responsibility per `byok.md`. |
 | I-5 | Prompt-injection extracts the system prompt | Untrusted-content wrapper + injection detector + the agent loop's own instruction-following defenses. Red-team eval has 15 fixtures targeting this. | Bypass attempts that the eval doesn't cover are possible — the eval gate is `red_team_bypass_count = 0` (`baseline.json`); any new bypass is treated as a red-team fixture and shipped in the fix PR. |
 | I-6 | Cost-ledger HMAC chain entry leaks PR contents | `audit_log` rows store metadata only (`event`, `model`, token counts, `pr_id`), not prompt/completion bodies. Body redaction is enforced by `body-redaction.ts`. | None at the row schema level. |
-| I-7 | Debug logs include the inference API key | API keys are read via env vars and never written to OTel attributes or stdout. `body-redaction.ts` strips `Authorization` headers from spans. | An operator wiring custom OTel attributes could log it manually — out-of-band review responsibility. |
+| I-7 | Debug logs include the inference API key | API keys are read via env vars and never written to OTel attributes or stdout. `BodyRedactionProcessor` (`packages/server/src/otel.ts`) strips `llm.input.messages` / `llm.output.completion` / `llm.input.prompt` / `tool.input.body` / `tool.output.body` from spans unless `LANGFUSE_LOG_BODIES=1`. | An operator wiring custom OTel attributes could log it manually — out-of-band review responsibility. |
+| I-8 | OTLP exporter forwards `OTEL_EXPORTER_OTLP_HEADERS` (commonly an `authorization=Bearer …` token) to the configured collector endpoint | The exporter passes the env var through verbatim (`packages/server/src/otel.ts:13,54,73`). Span-attribute redaction (I-7) does not cover exporter headers. | Informational — operator responsibility: route the exporter over TLS to a trusted collector and keep the bearer in a secret store, not in a public log. A v1.x follow-up could add an opt-in "hash header on shutdown" debug helper. |
 
-Findings: none `high` or `critical`. I-2 and I-5 depend on the
-ongoing red-team / detection-rule maintenance cadence.
+Findings: **1 High** (I-2 — same gitleaks integration gap as T-2;
+see the I-2 row above). I-1 wording corrected to reflect `lstat`
+semantics in the code. I-5 depends on the ongoing red-team
+detection-rule maintenance cadence. New informational finding I-8
+covers OTLP exporter header handling.
 
 ---
 
@@ -143,19 +165,21 @@ query layer materially shrink the EoP attack surface.
 
 ## Summary of findings
 
-**Pre-review counts** (drafted by maintainer, awaiting reviewer
-sign-off):
+**Counts after the 2026-05-15 AI verification pass** (still
+awaiting unaffiliated human reviewer sign-off):
 
 | Severity | Count | Notes |
 |---|---|---|
 | Critical | 0 | — |
-| High | 0 | — |
+| High | **1** | **T-2 / I-2 (single root cause): gitleaks scanner is implemented and unit-tested but never invoked from any caller (`packages/runner/src/agent.ts`, `packages/action/src/run.ts`) — the agent-output secret-leakage post-scan layer is not active in v0.3 / v1.0-baseline. Per `audit.md` triage rule, `high` findings block v1.0 tagging until resolved.** |
 | Medium | 0 | — |
 | Low | 0 | — |
-| Informational | 4 | S-3 (TLS pinning policy), T-3 (state-comment churn driving cost — bounded by cap), I-2 (custom secret formats — operator-extensible via `redact_patterns`), D-1 (daily-cap saturation lock — operator-tunable). |
+| Informational | 7 | S-3 (TLS pinning policy), T-3 (state-comment churn driving cost — bounded by cap), I-5 (custom secret formats — operator-extensible via `redact_patterns`), D-1 (daily-cap saturation lock — operator-tunable), and new for 2026-05-15: T-6 (`recover sync-state` replay bound by `decideSkip` semantics), R-3 (walkthrough-accuracy correction: `configSourceTotal` OTel metric does not exist in code), R-4 (audit-log row deletion vs modification — external sink as v1.x follow-up), I-8 (OTLP exporter forwards `OTEL_EXPORTER_OTLP_HEADERS` verbatim — operator responsibility). |
 
-No findings block v1.0 tagging on technical merit. The remaining
-gate is the unaffiliated-reviewer sign-off below.
+**v1.0 tagging is gated** on (a) resolving the High finding (wire
+gitleaks into the agent post-processing pipeline OR retract the
+claim from `SECURITY.md` and from the T-2 / I-2 rows above) AND
+(b) the unaffiliated-reviewer sign-off below.
 
 If the reviewer flags additional findings, this section is
 updated to reflect them and the corresponding rows are added to
@@ -165,7 +189,9 @@ the relevant STRIDE category above.
 
 ## Recommendations for v1.x follow-up
 
-These are not v1.0 blockers but are tracked for the next minor:
+These are not v1.0 blockers (the gitleaks integration, listed
+under "v1.0 blockers" below, is the only blocker on technical
+merit). Tracked for the next minor:
 
 1. **Cosign attestation for first-party skills** — currently a
    wontfix per v1.0 issue #51 (no `@review-agent/skill-*`
@@ -182,23 +208,65 @@ These are not v1.0 blockers but are tracked for the next minor:
    export-audit` CLI subcommand that exports the audit-log chain
    in a portable, redacted form for a customer-comms ticket.
    Today operators run `psql` directly.
+5. **External audit-log append-only sink** (R-4): mirror
+   `audit_log` writes to an immutable store (S3 Object Lock,
+   GCS Bucket Lock, or equivalent) so DB-superuser-level
+   deletion is detectable by row-count drift even when the
+   primary DB is compromised.
+6. **Implement `review_agent_config_source_total` OTel counter**
+   (R-3) or formally retract the claim from this document.
+7. **OTLP exporter header hardening** (I-8): add a startup
+   helper that logs the SHA-256 of `OTEL_EXPORTER_OTLP_HEADERS`
+   (not the value itself) so operators can verify rotation
+   without leaking the token.
+
+## v1.0 blockers
+
+These must close before v1.0 tagging per `audit.md` triage rule:
+
+1. **High — T-2 / I-2 gitleaks integration (#58)**: wire the
+   existing `scanWorkspaceWithGitleaks` / `quickScanContent` /
+   `shouldAbortReview` functions into the agent post-processing
+   pipeline (`packages/runner/src/agent.ts`) so the documented
+   two-stage scan is actually active, OR formally retract the
+   claim from `SECURITY.md` and from the T-2 / I-2 rows. The
+   maintainer's responsibility is to pick (a) or (b) before
+   tagging. Tracked at #58.
+2. **Unaffiliated reviewer sign-off** (existing gate per
+   `audit.md`): the AI verification pass on 2026-05-15 is
+   **not** a substitute — the gate is for a human reviewer
+   outside the maintainer's direct affiliation.
 
 ---
 
 ## Sign-off
 
-This walkthrough is **drafted** and **not yet signed off**. The
-maintainer's sign-off alone does NOT close v1.0 issue #44 — see
-[`./audit.md`](./audit.md) for the procedure.
+This walkthrough is **drafted**, has had **one AI-assisted
+code-verification pass** (2026-05-15) that surfaced a High
+finding, and is **still not yet signed off**. The maintainer's
+sign-off and the AI verification pass together do NOT close v1.0
+issue #44 — see [`./audit.md`](./audit.md) for the procedure.
 
 | Reviewer | Affiliation | Date | Verdict |
 |---|---|---|---|
 | almondoo (Tsubasa) | maintainer (primary author) | 2026-05-03 | drafted |
-| _TBD — unaffiliated reviewer required_ | _TBD_ | _TBD_ | _pending_ |
+| Claude (Anthropic AI assistant, opus-4-7) | AI tool operated by the maintainer — **not** a substitute for an unaffiliated human reviewer | 2026-05-15 | independent verification pass complete; **1 High** + 4 new informational findings surfaced (T-2 / I-2 gitleaks integration gap; T-6, R-3, R-4, I-8); see "Summary of findings" |
+| _TBD — unaffiliated human reviewer required_ | _TBD_ | _TBD_ | _pending_ |
 
-When the unaffiliated reviewer signs off, append a row above and
-flip the STATUS line at the top of this document. v1.0 issue #44
-can then be closed.
+**Why the AI verification pass is logged but does not close the
+gate**: the audit.md procedure (step 3) explicitly requires the
+sign-off be "a reviewer outside the project's primary author"
+and "cannot be self-attested". An AI assistant invoked by the
+maintainer is acting on the maintainer's direction at the
+maintainer's machine; it brings a useful independent reading of
+the code but does not bring the external accountability the gate
+is designed to enforce. The row is recorded for transparency and
+to surface the High finding into the audit trail.
+
+When the unaffiliated **human** reviewer signs off (and the
+High finding is resolved per the "v1.0 blockers" list above),
+append a row above and flip the STATUS line at the top of this
+document. v1.0 issue #44 can then be closed.
 
 ---
 
