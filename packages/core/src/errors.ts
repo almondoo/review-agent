@@ -3,7 +3,8 @@ export type ReviewAgentErrorKind =
   | 'schema'
   | 'cost-exceeded'
   | 'context-length'
-  | 'tool-dispatch-refused';
+  | 'tool-dispatch-refused'
+  | 'secret-leak-aborted';
 
 export abstract class ReviewAgentError extends Error {
   abstract readonly kind: ReviewAgentErrorKind;
@@ -76,6 +77,31 @@ export class ToolDispatchRefusedError extends ReviewAgentError {
   constructor(toolName: string, reason: string, options?: { cause?: unknown }) {
     super(`Tool '${toolName}' refused: ${reason}`, options);
     this.toolName = toolName;
+    this.reason = reason;
+  }
+}
+
+export const SECRET_LEAK_PHASES = ['diff', 'output'] as const;
+export type SecretLeakPhase = (typeof SECRET_LEAK_PHASES)[number];
+
+export class SecretLeakAbortedError extends ReviewAgentError {
+  readonly kind = 'secret-leak-aborted' as const;
+  readonly phase: SecretLeakPhase;
+  readonly findingsCount: number;
+  readonly ruleIds: ReadonlyArray<string>;
+  readonly reason: string;
+
+  constructor(
+    phase: SecretLeakPhase,
+    findingsCount: number,
+    ruleIds: ReadonlyArray<string>,
+    reason: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`Secret-leak post-scan aborted review (${phase}): ${reason}`, options);
+    this.phase = phase;
+    this.findingsCount = findingsCount;
+    this.ruleIds = ruleIds;
     this.reason = reason;
   }
 }

@@ -1,7 +1,12 @@
-import { CostExceededError, SchemaValidationError } from '@review-agent/core';
+import {
+  CostExceededError,
+  SchemaValidationError,
+  SecretLeakAbortedError,
+} from '@review-agent/core';
 import type { LlmProvider, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
+import type { GitleaksFinding } from './gitleaks.js';
 import type { ReviewJob } from './types.js';
 
 const baseJob: ReviewJob = {
@@ -140,6 +145,130 @@ describe('runReview — cost guard', () => {
     });
     await runReview({ ...baseJob, costCapUsd: 0 }, provider);
     expect(provider.estimateCost).not.toHaveBeenCalled();
+  });
+});
+
+describe('runReview — secret-leak post-scan', () => {
+  const highFinding = (ruleId: string, secret: string): GitleaksFinding => ({
+    ruleId,
+    description: `Built-in rule: ${ruleId}`,
+    file: '',
+    startLine: 1,
+    endLine: 1,
+    match: secret,
+    secret,
+    entropy: 0,
+    tags: ['high'],
+  });
+
+  const mediumFinding = (secret: string): GitleaksFinding => ({
+    ruleId: 'high-entropy',
+    description: 'High-entropy string (4.7)',
+    file: '',
+    startLine: 1,
+    endLine: 1,
+    match: secret,
+    secret,
+    entropy: 4.7,
+    tags: ['medium'],
+  });
+
+  it('passes clean output through untouched when scanner returns no findings', async () => {
+    const provider = makeProvider();
+    const scanContent = vi.fn(() => []);
+    const result = await runReview(baseJob, provider, { scanContent });
+    expect(result.comments).toHaveLength(2);
+    expect(result.summary).toBe('Two findings.');
+    expect(scanContent).toHaveBeenCalled();
+    const scannedText = scanContent.mock.calls.map((call) => call[0]).join('|');
+    expect(scannedText).toContain('Two findings.');
+    expect(scannedText).toContain('Extract to a helper.');
+  });
+
+  it('aborts with SecretLeakAbortedError when output contains a high-confidence finding', async () => {
+    const tainted: ReviewOutput = {
+      ...validOutput,
+      summary: 'Found token AKIAIOSFODNN7EXAMPLE in the diff.',
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => tainted) });
+    const scanContent = vi.fn((text: string) =>
+      text.includes('AKIAIOSFODNN7EXAMPLE')
+        ? [highFinding('aws-access-key', 'AKIAIOSFODNN7EXAMPLE')]
+        : [],
+    );
+    await expect(runReview(baseJob, provider, { scanContent })).rejects.toBeInstanceOf(
+      SecretLeakAbortedError,
+    );
+    await expect(runReview(baseJob, provider, { scanContent })).rejects.toMatchObject({
+      phase: 'output',
+      findingsCount: 1,
+      ruleIds: ['aws-access-key'],
+    });
+  });
+
+  it('aborts when output contains more than 3 findings even with medium tags', async () => {
+    const provider = makeProvider();
+    const scanContent = vi.fn(() => [
+      mediumFinding('alpha'),
+      mediumFinding('beta'),
+      mediumFinding('gamma'),
+      mediumFinding('delta'),
+    ]);
+    await expect(runReview(baseJob, provider, { scanContent })).rejects.toBeInstanceOf(
+      SecretLeakAbortedError,
+    );
+  });
+
+  it('redacts non-aborting findings in the returned summary and comment bodies', async () => {
+    const [first, second] = validOutput.comments;
+    if (!first || !second) throw new Error('fixture missing comments');
+    const tainted: ReviewOutput = {
+      ...validOutput,
+      summary: 'Saw entropy blob alpha7xQ here.',
+      comments: [{ ...first, body: 'Inspect alpha7xQ for safety.' }, second],
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => tainted) });
+    const scanContent = vi.fn(() => [mediumFinding('alpha7xQ')]);
+    const result = await runReview(baseJob, provider, { scanContent });
+    expect(result.summary).toBe('Saw entropy blob [REDACTED:high-entropy] here.');
+    expect(result.comments[0]?.body).toBe('Inspect [REDACTED:high-entropy] for safety.');
+    expect(result.comments[1]?.body).toBe('Use parameterized query.');
+  });
+
+  it('aborts BEFORE invoking the provider when the diff contains a high-confidence finding', async () => {
+    const provider = makeProvider();
+    const scanContent = vi.fn((text: string) =>
+      text.includes('diff --git') ? [highFinding('aws-access-key', 'AKIAIOSFODNN7EXAMPLE')] : [],
+    );
+    await expect(runReview(baseJob, provider, { scanContent })).rejects.toBeInstanceOf(
+      SecretLeakAbortedError,
+    );
+    await expect(runReview(baseJob, provider, { scanContent })).rejects.toMatchObject({
+      phase: 'diff',
+    });
+    expect(provider.generateReview).not.toHaveBeenCalled();
+  });
+
+  it('dedup runs before the scanner so previous-state hits are not re-scanned', async () => {
+    const provider = makeProvider();
+    const firstRun = await runReview(baseJob, provider, { scanContent: () => [] });
+    const fps = firstRun.comments.map((c) => c.fingerprint);
+    const previousState = {
+      schemaVersion: 1 as const,
+      lastReviewedSha: 'old',
+      baseSha: 'b',
+      reviewedAt: 'r',
+      modelUsed: 'm',
+      totalTokens: 0,
+      totalCostUsd: 0,
+      commentFingerprints: fps,
+    };
+    const scanContent = vi.fn(() => []);
+    const secondRun = await runReview({ ...baseJob, previousState }, provider, { scanContent });
+    expect(secondRun.comments).toHaveLength(0);
+    const scannedText = scanContent.mock.calls.map((call) => call[0]).join('|');
+    expect(scannedText).not.toContain('Extract to a helper.');
+    expect(scannedText).not.toContain('Use parameterized query.');
   });
 });
 

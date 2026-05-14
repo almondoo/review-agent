@@ -76,22 +76,21 @@ understand the depth of review:
 | Deliverable | Location | Status |
 |---|---|---|
 | Procedure / decision rationale (this file) | `docs/security/audit.md` | Authored. |
-| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Drafted by maintainer. AI verification pass on 2026-05-15 surfaced **1 High** finding (T-2 / I-2 gitleaks integration gap) + 4 new informational findings. **Awaiting unaffiliated human reviewer sign-off.** |
-| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | Updated 2026-05-15 to qualify the secret-leakage mitigation row (gitleaks integration pending). |
+| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Drafted by maintainer. AI verification pass on 2026-05-15 surfaced 1 High finding (T-2 / I-2 gitleaks integration gap, **resolved same-day in #58**) + 4 new informational findings. **Awaiting unaffiliated human reviewer sign-off.** |
+| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | Updated 2026-05-15: the secret-leakage row now describes the wired two-stage in-process scan (post-#58). |
 | Public summary | bottom of `threat-model-review-2026-05.md` "Summary of findings" section | Updated 2026-05-15. |
 
-Closing issue #44 and tagging v1.0 now requires **two** gates to
-clear (not one):
+Closing issue #44 and tagging v1.0 now requires the
+unaffiliated-reviewer gate. The High finding's code gate (#58) is
+closed:
 
-1. The High finding (gitleaks integration gap, tracked at #58)
-   is resolved per the "v1.0 blockers" list at the bottom of
-   `threat-model-review-2026-05.md` — either wire the scanner
-   into the agent pipeline or formally retract the claim.
-2. An unaffiliated **human** reviewer signs off in the
-   walkthrough table. The 2026-05-15 AI verification pass is
-   logged for transparency but is **not** a substitute for this
-   gate (it is a maintainer-directed tool, not an external
-   accountability check).
+1. ~~The High finding (gitleaks integration gap, #58)~~ — resolved
+   on 2026-05-15. `runReview` now wires `quickScanContent` at both
+   the diff pre-scan and output post-scan surfaces.
+2. An unaffiliated **human** reviewer signs off in the walkthrough
+   table. The 2026-05-15 AI verification pass is logged for
+   transparency but is **not** a substitute for this gate (it is a
+   maintainer-directed tool, not an external accountability check).
 
 The maintainer's responsibility is to identify a willing human
 reviewer (a peer engineer, security-focused collaborator, or

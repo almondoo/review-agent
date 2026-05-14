@@ -27,6 +27,9 @@ export {
   ReviewAgentError,
   type ReviewAgentErrorKind,
   SchemaValidationError,
+  SECRET_LEAK_PHASES,
+  SecretLeakAbortedError,
+  type SecretLeakPhase,
   ToolDispatchRefusedError,
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';

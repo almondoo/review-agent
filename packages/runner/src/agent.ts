@@ -1,5 +1,15 @@
-import { ReviewOutputSchema, SchemaValidationError } from '@review-agent/core';
+import {
+  ReviewOutputSchema,
+  SchemaValidationError,
+  SecretLeakAbortedError,
+} from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
+import {
+  applyRedactions,
+  type GitleaksFinding,
+  quickScanContent,
+  shouldAbortReview,
+} from './gitleaks.js';
 import {
   type CostState,
   createCostGuard,
@@ -25,6 +35,18 @@ export async function runReview(
     language: job.language,
   });
   const fileReader = deps.fileReader ?? (async () => '');
+  const scanContent = deps.scanContent ?? quickScanContent;
+
+  const diffFindings = [...scanContent(job.diffText)];
+  const diffDecision = shouldAbortReview(diffFindings);
+  if (diffDecision.abort) {
+    throw new SecretLeakAbortedError(
+      'diff',
+      diffFindings.length,
+      uniqueRuleIds(diffFindings),
+      diffDecision.reason ?? 'unknown',
+    );
+  }
 
   const baseInput: ReviewInput = {
     systemPrompt,
@@ -60,15 +82,40 @@ export async function runReview(
   const result = await compose(middlewares, ctx, main);
   const dedup = dedupComments(result, { previousState: job.previousState });
 
+  const scannedText = [result.summary, ...dedup.kept.map((c) => c.body)].join('\n\n');
+  const outputFindings = [...scanContent(scannedText)];
+  const outputDecision = shouldAbortReview(outputFindings);
+  if (outputDecision.abort) {
+    throw new SecretLeakAbortedError(
+      'output',
+      outputFindings.length,
+      uniqueRuleIds(outputFindings),
+      outputDecision.reason ?? 'unknown',
+    );
+  }
+
+  const summary =
+    outputFindings.length === 0 ? result.summary : applyRedactions(result.summary, outputFindings);
+  const comments =
+    outputFindings.length === 0
+      ? dedup.kept
+      : dedup.kept.map((c) => ({ ...c, body: applyRedactions(c.body, outputFindings) }));
+
   return {
-    comments: dedup.kept,
-    summary: result.summary,
+    comments,
+    summary,
     costUsd: costState.totalCostUsd,
     tokensUsed: { input: result.tokensUsed.input, output: result.tokensUsed.output },
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
   };
+}
+
+function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<string> {
+  const seen = new Set<string>();
+  for (const f of findings) seen.add(f.ruleId);
+  return [...seen];
 }
 
 function validateOutput(out: ReviewOutput): void {

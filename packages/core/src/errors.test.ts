@@ -6,6 +6,7 @@ import {
   isReviewAgentError,
   ReviewAgentError,
   SchemaValidationError,
+  SecretLeakAbortedError,
   ToolDispatchRefusedError,
 } from './errors.js';
 
@@ -16,6 +17,9 @@ describe('ReviewAgentError hierarchy', () => {
     expect(isReviewAgentError(new CostExceededError(1, 2))).toBe(true);
     expect(isReviewAgentError(new ContextLengthError(100, 200))).toBe(true);
     expect(isReviewAgentError(new ToolDispatchRefusedError('read_file', 'denied'))).toBe(true);
+    expect(
+      isReviewAgentError(new SecretLeakAbortedError('output', 1, ['aws-access-key'], 'r')),
+    ).toBe(true);
   });
 
   it('non-ReviewAgentError values are rejected by the type guard', () => {
@@ -99,5 +103,35 @@ describe('ToolDispatchRefusedError', () => {
     expect(err.reason).toBe('not whitelisted');
     expect(err.message).toContain("'shell_exec'");
     expect(err.message).toContain('not whitelisted');
+  });
+});
+
+describe('SecretLeakAbortedError', () => {
+  it('exposes kind=secret-leak-aborted, phase, count, rule ids, reason', () => {
+    const err = new SecretLeakAbortedError(
+      'output',
+      2,
+      ['aws-access-key', 'anthropic-key'],
+      'high-confidence finding: aws-access-key',
+    );
+    expect(err.kind).toBe('secret-leak-aborted');
+    expect(err.phase).toBe('output');
+    expect(err.findingsCount).toBe(2);
+    expect(err.ruleIds).toEqual(['aws-access-key', 'anthropic-key']);
+    expect(err.reason).toBe('high-confidence finding: aws-access-key');
+    expect(err.message).toContain('output');
+    expect(err.message).toContain('aws-access-key');
+  });
+
+  it('accepts phase=diff for pre-scan aborts', () => {
+    const err = new SecretLeakAbortedError('diff', 4, ['high-entropy'], '4 secret findings (>3)');
+    expect(err.phase).toBe('diff');
+    expect(err.message).toContain('diff');
+  });
+
+  it('preserves cause', () => {
+    const cause = new Error('scanner failure');
+    const err = new SecretLeakAbortedError('output', 1, ['github-pat'], 'r', { cause });
+    expect(err.cause).toBe(cause);
   });
 });

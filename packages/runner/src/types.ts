@@ -1,5 +1,6 @@
 import type { InlineComment, ReviewState, Severity, Side } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
+import type { GitleaksFinding } from './gitleaks.js';
 
 export type ReviewJob = {
   readonly jobId: string;
@@ -41,6 +42,7 @@ export type RunReviewDeps = {
     readonly severity: Severity;
     readonly body: string;
   }) => string;
+  readonly scanContent?: (text: string) => ReadonlyArray<GitleaksFinding>;
 };
 
 export type Middleware = (
