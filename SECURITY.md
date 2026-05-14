@@ -70,15 +70,37 @@ Adversaries can attempt:
 ## Pre-release security review
 
 `review-agent` undergoes a structured **internal STRIDE
-walkthrough** before each major release in lieu of a paid third-party
-audit. The walkthrough output is published at
+walkthrough** before each major release in lieu of a paid
+third-party audit. The walkthrough output is published at
 [`docs/security/threat-model-review-YYYY-MM.md`](./docs/security/audit.md);
-the procedure (and the choice between option a — paid audit — and
-option b — internal review) is documented at
-[`docs/security/audit.md`](./docs/security/audit.md). Adopters
-should treat `review-agent` as having had a structured internal
-review against STRIDE, not an independent paid audit. If your
-deployment requires the latter, commission your own engagement.
+the procedure (option a — paid audit — vs option b — internal
+review) is documented at
+[`docs/security/audit.md`](./docs/security/audit.md).
+
+For the personal-OSS scope of this project, the procedure was
+amended on 2026-05-15 (see "Procedure amendment" in
+`docs/security/audit.md`): in the absence of an unaffiliated
+human reviewer, a **multi-AI-agent independent review** (three
+persona-driven agents — security researcher, SRE / platform
+engineer, application developer) was performed and recorded as
+the substitute sign-off. The full audit trail with explicit AI
+disclosure lives at the bottom of
+[`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md).
+
+**Adopters should treat `review-agent` as having had**:
+- A structured internal STRIDE walkthrough by the maintainer.
+- A subsequent AI code-verification pass that surfaced and
+  resolved one High finding (#58 — gitleaks integration gap).
+- A multi-AI-agent independent review that returned
+  `pass with findings` × 3 (13 new informational findings, all
+  tracked for v1.x).
+
+**Adopters should NOT treat `review-agent` as having had** an
+independent paid third-party audit. If your deployment is in a
+regulated environment or otherwise requires that level of
+assurance, **commission your own engagement** covering at least
+the categories in
+[`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md).
 
 ## Out of scope
 

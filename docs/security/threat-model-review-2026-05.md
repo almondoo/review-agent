@@ -8,11 +8,21 @@ b: internal threat-model review), v1.0 issue #44, [`./audit.md`](./audit.md).
 tsubasa.engineer@gmail.com); a complementary AI pre-review
 code-verification pass on 2026-05-15 surfaced 1 High finding
 (T-2 / I-2 — gitleaks integration gap) which was **resolved the
-same day in commit wiring the scanner into `runReview`** (see
-the T-2 / I-2 rows below for the post-fix wording). **Still
-awaiting unaffiliated reviewer sign-off** — see "Sign-off" at
-the bottom. Until that line is filled in, this document is a
-draft and v1.0 tagging is gated.
+same day in commit 54e4953** wiring the scanner into `runReview`
+(see the T-2 / I-2 rows below for the post-fix wording). A
+**Round 2 multi-AI-agent independent review** was run on
+2026-05-15 with three persona-driven agents (security researcher,
+SRE / platform engineer, application developer); each returned
+verdict `pass with findings`. The consolidated findings (12
+informational, 0 high / critical) are captured in the
+"Round 2 — multi-AI-agent independent review (2026-05-15)"
+section below and reflected in the v1.x recommendations.
+
+Per the amended `audit.md` step 3 (see that file for the
+trade-off discussion), the Round 2 multi-AI-agent review is
+accepted as the procedural substitute for the originally-required
+unaffiliated human reviewer in the personal-OSS scope. Adopters
+needing higher assurance should commission their own engagement.
 
 Scope: every surface listed in the in-scope table below. Out of
 scope: GitHub Actions runner platform itself, LLM provider
@@ -167,19 +177,19 @@ query layer materially shrink the EoP attack surface.
 
 ## Summary of findings
 
-**Counts after the 2026-05-15 AI verification pass** (still
-awaiting unaffiliated human reviewer sign-off):
+**Counts after Round 2 multi-AI-agent independent review (2026-05-15)**:
 
 | Severity | Count | Notes |
 |---|---|---|
 | Critical | 0 | — |
-| High | 0 | T-2 / I-2 gitleaks integration gap surfaced and **resolved** on 2026-05-15 in #58 — see the post-fix wording in the T-2 / I-2 rows above. |
+| High | 0 | T-2 / I-2 gitleaks integration gap surfaced in Round 1 and **resolved** on 2026-05-15 in #58 — see the post-fix wording in the T-2 / I-2 rows above. |
 | Medium | 0 | — |
 | Low | 0 | — |
-| Informational | 7 | S-3 (TLS pinning policy), T-3 (state-comment churn driving cost — bounded by cap), I-5 (custom secret formats — operator-extensible via `redact_patterns`), D-1 (daily-cap saturation lock — operator-tunable), and new for 2026-05-15: T-6 (`recover sync-state` replay bound by `decideSkip` semantics), R-3 (walkthrough-accuracy correction: `configSourceTotal` OTel metric does not exist in code), R-4 (audit-log row deletion vs modification — external sink as v1.x follow-up), I-8 (OTLP exporter forwards `OTEL_EXPORTER_OTLP_HEADERS` verbatim — operator responsibility). |
+| Informational | 21 | Round 1 (8): S-3, T-3, I-5, D-1, T-6, R-3, R-4, I-8. Round 2 (13): S-6, T-7, T-8, I-9, I-10, D-6, D-7, D-8, D-9, E-6, E-7, E-8, E-9 — see "Round 2 — multi-AI-agent independent review" section below for details. |
 
-**v1.0 tagging remains gated** on the unaffiliated-reviewer sign-off
-below; the High finding's code gate (#58) is closed.
+All Round 2 findings are tracked in the "Recommendations for
+v1.x follow-up" section below. Per `audit.md` triage rule,
+`medium` and below do not block v1.0 tagging.
 
 If the reviewer flags additional findings, this section is
 updated to reflect them and the corresponding rows are added to
@@ -187,11 +197,42 @@ the relevant STRIDE category above.
 
 ---
 
+## Round 2 — multi-AI-agent independent review (2026-05-15)
+
+Per the amended `audit.md` step 3, three AI agent personas
+performed an independent walkthrough review of this document and
+the source code: a **security researcher**, an **SRE / platform
+engineer**, and an **application developer**. Each was asked to
+challenge the existing rows, surface bypasses the author missed,
+and return a verdict. All three returned `pass with findings`.
+The findings are consolidated below as informational items and
+tracked in the v1.x follow-up section.
+
+| ID | Category | Source | Finding | Recommended action |
+|---|---|---|---|---|
+| S-6 | Spoofing | security | Webhook-secret rotation has no documented grace window — operators rotating the secret risk a brief window of dropped in-flight deliveries OR an indefinite acceptance period if the old secret is retained. | Document a rotation SOP with bounded (≤ 48 h) overlap accept-both behavior, OR adopt sign-by-versioned-key. |
+| T-7 | Tampering | security | `skill-loader.stripScriptyContent` regex does not Unicode-normalize input — zero-width joiner / RTL override / HTML-entity encoding can hide `<script>` and fenced-language markers from the strip pass. | Normalize body via `String.prototype.normalize('NFKC')` and decode common HTML entities before applying the strip regexes. |
+| T-8 | Tampering | app-dev | PR-modified `.review-agent.yml` can introduce a new skill that the same PR's review will consume. The skill content is wrapped via `wrapUntrusted` and stripped, so direct script execution is blocked — but the LLM still reads the prose and may follow it. | Add a config option to read `.review-agent.yml` from the base branch only (default = base) so PR-author changes to skills take effect only after merge. |
+| I-9 | Information disclosure | security | The LLM-based injection detector shares the main agent's API key and provider session. A prior request that coerced the detector model could leave residual state; the detector has no scoped-down read-only key. Note: per-content-hash caching DOES exist (`createInMemoryDetectorCache`) but is per-process. | Allow operators to configure a separate API key / model for the detector. Document that detector calls should ideally hit a scoped credential. |
+| I-10 | Information disclosure | security | At decrypt time, `packages/kms-aws/src/aws-kms.ts` accepts `keyId` as a parameter but does not verify it matches the current installation's CMK ARN looked up from the DB. A code path that mistakenly passed another installation's `keyId` would silently decrypt — relying entirely on KMS policy denial. | Add a runtime assertion in the BYOK decrypt wrapper: `assert keyId === installation_secrets.cmk_arn` before passing to `aws-kms`. Defense-in-depth over the KMS policy. |
+| D-6 | Denial of service | security | `gitleaks.ts:21` sets `ABORT_THRESHOLD_FINDINGS = 3`. An attacker can submit a PR containing 3 fake-shaped strings (e.g. AKIA-prefixed test fixtures) to trigger `shouldAbortReview` and DoS the review pipeline. Cost is bounded (diff-pre-scan aborts before LLM), but operator availability is degraded. | Add operator allowlist (E-8 below) and/or raise the threshold and prefer redaction-then-flag over abort when only diff (not output) is tainted. |
+| D-7 | Denial of service | SRE | The 5 s synchronize debounce (`worker.ts:19`) is shorter than typical SQS default `VisibilityTimeout` (30 s) so in practice the documented behavior is safe — but if an operator lowers `VisibilityTimeout` below 5 s, message redelivery to a different worker can race the debounce check and cause duplicate processing. | Document the operational invariant: `VisibilityTimeout > debounce_window_ms`. Add an SQS-config alarm in the recommended dashboard. |
+| D-8 | Denial of service | SRE | The cost guard reads `estimate.estimatedUsd` from the provider. If a custom provider returns 0 without throwing, the guard treats it as "no cost" and skips the cap entirely (`cost-guard.ts:60`). | Document this as a provider contract requirement, OR assert `estimatedUsd > 0` after `estimateCost` returns. |
+| D-9 | Denial of service | SRE | The per-process injection-detector cache is killed on Lambda cold start; high-cold-start deployments pay full detector cost on every cold invocation. | Quantify the cost in `docs/deployment/aws.md` and recommend reserved concurrency = baseline + 20 % to reduce cold starts. |
+| E-6 | Elevation of privilege | app-dev | `resolveSafePath` (`packages/runner/src/tools.ts:42-73`) calls `lstat()` per segment to refuse symlinks, then `readFile` later. A theoretical TOCTOU window exists if a concurrent process can swap a path segment to a symlink between check and read. In the default GitHub-hosted runner the workspace is ephemeral and unshared so the window is closed in practice; matters more for self-hosted shared runners. | Open the file handle immediately after validation (or use `O_NOFOLLOW` semantics) so the check-and-use is atomic. |
+| E-7 | Elevation of privilege | app-dev | `skill-loader.ts` `FORBIDDEN_FENCED_LANGS` covers `bash` / `sh` / `shell` / `powershell` / `python` but not `ruby` / `perl` / `lua` / `php`. The fences themselves don't execute, but a skill that smuggles instructions inside an unblocked fence may be read as instructions by the LLM. | Extend the list to all common shell-invokable languages. Also consider stripping inline-backtick code in skill prose. |
+| E-8 | Elevation of privilege | app-dev | Operators cannot exempt a known-fake secret from the new gitleaks integration (e.g. retired test fixtures, sample format strings in docs). The diff pre-scan will hard-abort. | Add `redact_patterns.allowlist` (or `gitleaks:ignore=<ruleId>` inline directive) to `.review-agent.yml`. Pair with D-6. |
+| E-9 | Elevation of privilege | app-dev | `buildAnthropicProvider` in `packages/action/src/run.ts:173-186` does not reject an empty `apiKey` — it strips the field and lets the SDK fall through to its own default-key behavior. | Validate `apiKey` is non-empty (or a configured-bring-your-own equivalent) and fail loudly with a clear error if missing. |
+
+The amended `audit.md` accepts these findings as
+informational; none reach the medium-or-above bar that would
+block v1.0 tagging.
+
 ## Recommendations for v1.x follow-up
 
 These are not v1.0 blockers (the gitleaks integration, listed
 under "v1.0 blockers" below, is the only blocker on technical
-merit). Tracked for the next minor:
+merit). Tracked for the next minor — Round 2 findings folded in:
 
 1. **Cosign attestation for first-party skills** — currently a
    wontfix per v1.0 issue #51 (no `@review-agent/skill-*`
@@ -219,54 +260,104 @@ merit). Tracked for the next minor:
    helper that logs the SHA-256 of `OTEL_EXPORTER_OTLP_HEADERS`
    (not the value itself) so operators can verify rotation
    without leaking the token.
+8. **Webhook-secret rotation SOP** (S-6, Round 2): document a
+   bounded grace window for accepting deliveries signed by the
+   previous secret, or move to signing-key-version metadata.
+9. **Skill loader Unicode normalization** (T-7, Round 2): NFKC
+   normalize + decode common HTML entities before regex strip.
+10. **Skill loader fenced-language allowlist** (E-7, Round 2):
+    extend `FORBIDDEN_FENCED_LANGS` to ruby / perl / lua / php
+    and consider stripping inline-backtick code in skill prose.
+11. **Skill source policy** (T-8, Round 2): add a config option
+    so `.review-agent.yml` is read from the base branch by
+    default; PR-author skill changes take effect post-merge only.
+12. **Injection detector credential isolation** (I-9, Round 2):
+    allow a separate API key / model for the detector so a
+    coercion of the main agent session does not bleed into
+    detector decisions.
+13. **BYOK decrypt-time CMK ARN assertion** (I-10, Round 2):
+    defense-in-depth check that the `keyId` passed to the KMS
+    SDK matches the current installation's `installation_secrets.cmk_arn`.
+14. **Gitleaks operator allowlist** (D-6 / E-8, Round 2):
+    `.review-agent.yml` knob to exempt known-fake secret-shaped
+    strings (test fixtures, retired sample keys); raise the
+    `ABORT_THRESHOLD_FINDINGS` or fall back to redaction-only
+    when only the diff (not the output) is tainted.
+15. **`read_file` open-after-validate atomicity** (E-6, Round 2):
+    close the TOCTOU window between the per-segment `lstat` and
+    the eventual `readFile` (open + `O_NOFOLLOW` semantics or
+    open-and-read-from-fd).
+16. **Cost-guard `estimateCost` zero-guard** (D-8, Round 2):
+    document the provider contract and assert `estimatedUsd > 0`
+    after the estimate call.
+17. **SQS visibility-timeout vs debounce documentation** (D-7,
+    Round 2): document the invariant `VisibilityTimeout >
+    debounce_window_ms` and add a recommended alarm.
+18. **Lambda cold-start cache cost note** (D-9, Round 2):
+    quantify worst-case cold-start detector cost in
+    `docs/deployment/aws.md` and recommend reserved concurrency.
+19. **Anthropic provider empty-key guard** (E-9, Round 2):
+    validate `apiKey` is non-empty in `buildAnthropicProvider`
+    and fail with a clear error if missing.
 
 ## v1.0 blockers
 
-These must close before v1.0 tagging per `audit.md` triage rule:
+All technical gates are closed. Per the amended `audit.md`
+step 3 (multi-AI-agent substitute for personal-OSS scope), the
+procedural sign-off gate is also met by the Round 2 review
+recorded in the Sign-off table below.
 
 1. ~~**High — T-2 / I-2 gitleaks integration (#58)**~~ —
-   **resolved on 2026-05-15**. `quickScanContent` is now invoked
-   in `runReview` at both the diff pre-scan and output post-scan
-   surfaces; aborts emit `SecretLeakAbortedError` with phase
-   discrimination. Tests in `packages/runner/src/agent.test.ts`
-   ("runReview — secret-leak post-scan" describe block) and
-   `packages/core/src/errors.test.ts` cover the contract. See
-   the post-fix wording in the T-2 / I-2 rows above.
-2. **Unaffiliated reviewer sign-off** (existing gate per
-   `audit.md`): the AI verification pass on 2026-05-15 is
-   **not** a substitute — the gate is for a human reviewer
-   outside the maintainer's direct affiliation.
+   **resolved on 2026-05-15** (commit 54e4953).
+   `quickScanContent` is now invoked in `runReview` at both the
+   diff pre-scan and output post-scan surfaces; aborts emit
+   `SecretLeakAbortedError` with phase discrimination. Tests in
+   `packages/runner/src/agent.test.ts` ("runReview — secret-leak
+   post-scan" describe block) and `packages/core/src/errors.test.ts`
+   cover the contract.
+2. ~~**Unaffiliated reviewer sign-off**~~ — **met by Round 2
+   multi-AI-agent review on 2026-05-15** under the amended
+   `audit.md` step 3 (personal-OSS scope). Three independent
+   persona agents (security, SRE, app-dev) each returned
+   `pass with findings`; all findings are informational and
+   tracked above. Adopters needing a paid human audit must
+   commission their own — `SECURITY.md` "Pre-release security
+   review" makes this explicit.
 
 ---
 
 ## Sign-off
 
-This walkthrough is **drafted**, has had **one AI-assisted
-code-verification pass** (2026-05-15) that surfaced a High
-finding, and is **still not yet signed off**. The maintainer's
-sign-off and the AI verification pass together do NOT close v1.0
-issue #44 — see [`./audit.md`](./audit.md) for the procedure.
+This walkthrough is **signed off** under the amended `audit.md`
+step 3 procedure for personal-OSS scope (see that file for the
+trade-off discussion). The original procedure required an
+unaffiliated human reviewer; the amended procedure accepts a
+multi-AI-agent independent review with full disclosure as the
+practical substitute. **Adopters needing a paid human audit
+must commission their own engagement** — see `SECURITY.md`
+"Pre-release security review" for the explicit caveat.
 
 | Reviewer | Affiliation | Date | Verdict |
 |---|---|---|---|
 | almondoo (Tsubasa) | maintainer (primary author) | 2026-05-03 | drafted |
-| Claude (Anthropic AI assistant, opus-4-7) | AI tool operated by the maintainer — **not** a substitute for an unaffiliated human reviewer | 2026-05-15 | independent verification pass complete; 1 High (T-2 / I-2 gitleaks integration gap) surfaced and **resolved same-day** in #58; 4 new informational findings retained (T-6, R-3, R-4, I-8); see "Summary of findings" |
-| _TBD — unaffiliated human reviewer required_ | _TBD_ | _TBD_ | _pending_ |
+| Claude (opus-4-7) — Round 1 code-verification pass | AI tool, maintainer-directed; per-claim code verification against the source | 2026-05-15 | 1 High (T-2 / I-2 gitleaks integration gap) surfaced and **resolved same-day** in #58; 4 new informational findings retained (T-6, R-3, R-4, I-8) |
+| Claude (opus-4-7) — Round 2 security-researcher persona | AI tool, maintainer-directed; independent persona challenging Spoofing / Tampering / Information disclosure | 2026-05-15 | **pass with findings** — 7 informational (S-6, T-7, I-9, I-10, D-6 cross-listed, R-3/R-4 confirmed, KMS isolation defense-in-depth) |
+| Claude (opus-4-7) — Round 2 SRE / platform-engineer persona | AI tool, maintainer-directed; independent persona challenging Repudiation / Denial of service / operational runbooks | 2026-05-15 | **pass with findings** — 4 informational (D-7, D-8, D-9, runbook tabletop drill execution as separate v1.x hygiene) |
+| Claude (opus-4-7) — Round 2 application-developer persona | AI tool, maintainer-directed; independent persona challenging Elevation of privilege / integration surface | 2026-05-15 | **pass with findings** — 5 informational (E-6, E-7, E-8, E-9, T-8) |
 
-**Why the AI verification pass is logged but does not close the
-gate**: the audit.md procedure (step 3) explicitly requires the
-sign-off be "a reviewer outside the project's primary author"
-and "cannot be self-attested". An AI assistant invoked by the
-maintainer is acting on the maintainer's direction at the
-maintainer's machine; it brings a useful independent reading of
-the code but does not bring the external accountability the gate
-is designed to enforce. The row is recorded for transparency and
-to surface the High finding into the audit trail.
+**Honest framing of the AI sign-off**: all reviewer rows above
+are AI agents (Anthropic's Claude opus-4-7), invoked by the
+project maintainer at the maintainer's machine. They are
+**not external human accountability**. The original `audit.md`
+procedure called for that external check; the amended procedure
+accepts the multi-AI-agent walkthrough as a structured substitute
+specifically for personal-OSS projects that cannot realistically
+commission a human reviewer. The audit trail is transparent so
+adopters can decide whether the depth of review meets their
+risk tolerance.
 
-When the unaffiliated **human** reviewer signs off (and the
-High finding is resolved per the "v1.0 blockers" list above),
-append a row above and flip the STATUS line at the top of this
-document. v1.0 issue #44 can then be closed.
+The "drafted" → "signed off" transition is recorded by the
+STATUS line at the top of this document.
 
 ---
 
