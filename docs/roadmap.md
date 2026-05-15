@@ -1,6 +1,6 @@
 # Roadmap
 
-Implementation order and dependency map for v0.1 → v0.3. Each row links to a
+Implementation order and dependency map for v0.1 → v1.0. Each row links to a
 GitHub Issue. Pick up the next unblocked issue in version order.
 
 The full implementation specification is at
@@ -121,7 +121,7 @@ v0.1 — all 13 issues shipped on `main`:
 - #12 docs (README + SECURITY) — `ad3c754`
 - #13 self-review CI workflow — `ad3c754`
 
-v0.2 progress:
+v0.2 — all 11 issues shipped on `main`:
 
 - #14 platform-github GitHub App auth — `2d3bc34`
 - #15 server Hono webhook — `45bb542`
@@ -152,5 +152,18 @@ v0.3 — all 13 issues shipped on `main`:
 - #37 incident response runbooks finalized — `774ee4c`
 - spec §22 open questions resolved — `849b6df`
 
-v1.0 — planning. 9 issues open (#43–#51). See the v1.0 table above for the
-per-issue scope and dependencies. None merged yet.
+v1.0 — all 9 issues (#43–#51) shipped on `main`:
+
+- #43 UPGRADING.md + SemVer stability declaration — `d688f23`
+- #44 STRIDE walkthrough + procedure amendment (multi-AI-agent sign-off) — `9dd245e`, `db75cb0`, `71364d9`
+- #45 baseline measurement (60-fixture corpus) — `44947f7`
+- #46 provider parity matrix — `44947f7`
+- #47 bot identity guidance — `9dd245e`
+- #48 multi-bot coordination policy — `a2e5628`
+- #49 GHES compatibility statement — `9dd245e`
+- #50 `review-agent setup workspace` CLI — `0a2bb2c`
+- #51 cosign skill attestation (v1.1 tracking, wontfix until first first-party skill) — `9dd245e`
+
+v1.0 follow-on:
+
+- #58 wire gitleaks scanner into agent pipeline (surfaced by Round 1 of #44's review) — `54e4953`
