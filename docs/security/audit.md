@@ -95,9 +95,9 @@ understand the depth of review:
 | Deliverable | Location | Status |
 |---|---|---|
 | Procedure / decision rationale (this file) | `docs/security/audit.md` | Authored. |
-| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Drafted by maintainer. AI Round 1 verification pass on 2026-05-15 surfaced 1 High finding (T-2 / I-2 gitleaks integration gap, **resolved same-day in #58**) + 4 new informational findings. AI Round 2 multi-AI-agent review on 2026-05-15 (security / SRE / app-dev personas, see "Procedure amendment" below) returned `pass with findings` × 3 — 13 new informational findings. **Signed off** under amended step 3 (ii). |
-| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | Updated 2026-05-15: the secret-leakage row describes the wired two-stage in-process scan (post-#58); the Pre-release security review section discloses the multi-AI-agent substitute. |
-| Public summary | bottom of `threat-model-review-2026-05.md` "Summary of findings" section | Updated 2026-05-15. |
+| 2026-05 STRIDE walkthrough | [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | **Signed off 2026-05-15** under amended step 3 (ii). Round 1 + Round 2 reviews complete; all findings recorded in that file. |
+| SECURITY.md updates | [`../../SECURITY.md`](../../SECURITY.md) | Updated 2026-05-15 (in sync with the walkthrough). |
+| Public summary | "Summary of findings" section at the bottom of [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md) | Updated 2026-05-15. |
 
 Closing issue #44 and tagging v1.0 (status as of 2026-05-15):
 
@@ -109,54 +109,37 @@ Closing issue #44 and tagging v1.0 (status as of 2026-05-15):
    below. Adopters needing higher assurance must commission their
    own engagement.
 
-## Procedure amendment (2026-05-15)
+## Procedure amendment (2026-05-15) — rationale for form (ii)
 
-The original step 3 of this procedure required "a reviewer
-outside the project's primary author … cannot be self-attested".
-For a personal-OSS project with no external contributors and no
-hosted-tenancy operator funding an audit, this gate is
-structurally unsatisfiable: every available reviewer is either
-the maintainer or an AI tool that the maintainer invokes.
+Step 3 above lists two acceptable reviewer forms. Form (i) — an
+unaffiliated human reviewer — remains the preferred option. Form
+(ii) — a multi-AI-agent independent review — was added on
+2026-05-15 because, for the **personal-OSS scope of this project**
+(no external contributors, no hosted-tenancy operator paying for
+assurance), form (i) is structurally unsatisfiable and the only
+honest alternatives are (ii) or leaving the gate open
+indefinitely. We chose transparency over indefinite open status.
 
-We therefore extended step 3 to accept a **multi-AI-agent
-independent review** as an explicit substitute (form (ii) in the
-procedure list). The amendment is intentionally narrow:
+Form (ii) is intentionally narrow:
 
-- Three AI agent personas (security researcher / SRE / app
-  developer), not a single agent — to reduce single-perspective
-  blind spots.
-- Each agent is given the same walkthrough + source-code access
-  and asked to challenge the assumptions, not confirm them.
-- Each agent records a verdict (`pass` / `pass with findings` /
-  `fail`) and the findings are integrated into the walkthrough.
-- The AI nature is **fully disclosed** in the Sign-off table —
-  adopters reading the walkthrough are not misled into thinking
-  a paid third-party audit was performed.
-- `SECURITY.md` "Pre-release security review" carries the
-  caveat publicly.
+- **Three** agent personas (not a single agent) to reduce
+  single-perspective blind spots: security researcher / SRE /
+  application developer.
+- Each agent reads the same walkthrough + source and is asked to
+  challenge the assumptions, not confirm them.
+- Each records a verdict (`pass` / `pass with findings` / `fail`)
+  and the findings are integrated into the walkthrough.
+- The AI nature is fully disclosed in the Sign-off table — see
+  the walkthrough's "Honest framing" note for the depth-of-review
+  caveat that adopters should carry.
 
-This substitution is honest about its limits: AI agents
-operated by the maintainer at the maintainer's machine do not
-bring the external human accountability the original procedure
-sought. But for a personal-OSS scope, the alternative is leaving
-the gate open indefinitely — which adopters would also see and
-arguably trust less than a transparent multi-agent walkthrough.
-We chose transparency over indefinite open status. Adopters
-requiring a paid human audit are explicitly directed to
-commission their own.
-
-The Round 2 review log lives at the bottom of
-[`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md).
-The annual re-review (step 6) repeats the same procedure;
-single-AI-agent year-over-year drift is mitigated by re-running
-the three persona agents each year.
-
-When a willing human reviewer becomes available (a peer engineer,
-security-focused collaborator, or hired consultant for a scoped
-review), the maintainer should still solicit their feedback and
-append a row to the Sign-off table — the amended procedure does
-not preclude later human review, it only avoids leaving the gate
-open indefinitely when no human is available.
+The Round 2 review log lives in the Sign-off table at the bottom
+of [`./threat-model-review-2026-05.md`](./threat-model-review-2026-05.md).
+Step 6's annual re-review repeats form (ii); single-AI-agent
+year-over-year drift is mitigated by re-running the three persona
+agents each year. When a willing human reviewer becomes available,
+the maintainer should still solicit form (i) review and append a
+row to the Sign-off table — (ii) does not preclude later (i).
 
 ---
 

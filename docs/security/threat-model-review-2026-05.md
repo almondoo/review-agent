@@ -4,25 +4,12 @@ Structured STRIDE walkthrough against the v0.3 / v1.0 attack
 surface of `review-agent`. Spec reference: PRD §12.1 v1.0 (option
 b: internal threat-model review), v1.0 issue #44, [`./audit.md`](./audit.md).
 
-**Status**: drafted by the project maintainer (almondoo /
-tsubasa.engineer@gmail.com); a complementary AI pre-review
-code-verification pass on 2026-05-15 surfaced 1 High finding
-(T-2 / I-2 — gitleaks integration gap) which was **resolved the
-same day in commit 54e4953** wiring the scanner into `runReview`
-(see the T-2 / I-2 rows below for the post-fix wording). A
-**Round 2 multi-AI-agent independent review** was run on
-2026-05-15 with three persona-driven agents (security researcher,
-SRE / platform engineer, application developer); each returned
-verdict `pass with findings`. The consolidated findings (12
-informational, 0 high / critical) are captured in the
-"Round 2 — multi-AI-agent independent review (2026-05-15)"
-section below and reflected in the v1.x recommendations.
-
-Per the amended `audit.md` step 3 (see that file for the
-trade-off discussion), the Round 2 multi-AI-agent review is
-accepted as the procedural substitute for the originally-required
-unaffiliated human reviewer in the personal-OSS scope. Adopters
-needing higher assurance should commission their own engagement.
+**Status**: **signed off 2026-05-15** under amended
+[`./audit.md`](./audit.md) step 3 (ii). See the Sign-off table at
+the bottom for the four reviewer rows (drafted by maintainer,
+Round 1 code-verification, three Round 2 persona reviews) and
+`audit.md` "Procedure amendment" for the depth-of-review
+trade-off.
 
 Scope: every surface listed in the in-scope table below. Out of
 scope: GitHub Actions runner platform itself, LLM provider
@@ -199,14 +186,12 @@ the relevant STRIDE category above.
 
 ## Round 2 — multi-AI-agent independent review (2026-05-15)
 
-Per the amended `audit.md` step 3, three AI agent personas
-performed an independent walkthrough review of this document and
-the source code: a **security researcher**, an **SRE / platform
-engineer**, and an **application developer**. Each was asked to
-challenge the existing rows, surface bypasses the author missed,
-and return a verdict. All three returned `pass with findings`.
-The findings are consolidated below as informational items and
-tracked in the v1.x follow-up section.
+Three persona agents (security researcher / SRE / app developer)
+ran form (ii) of the amended procedure (see
+[`./audit.md`](./audit.md) "Procedure amendment"). All three
+returned `pass with findings`. The findings are consolidated
+below as informational items and folded into the v1.x follow-up
+section.
 
 | ID | Category | Source | Finding | Recommended action |
 |---|---|---|---|---|
@@ -328,36 +313,25 @@ recorded in the Sign-off table below.
 
 ## Sign-off
 
-This walkthrough is **signed off** under the amended `audit.md`
-step 3 procedure for personal-OSS scope (see that file for the
-trade-off discussion). The original procedure required an
-unaffiliated human reviewer; the amended procedure accepts a
-multi-AI-agent independent review with full disclosure as the
-practical substitute. **Adopters needing a paid human audit
-must commission their own engagement** — see `SECURITY.md`
-"Pre-release security review" for the explicit caveat.
+**Signed off** under amended [`./audit.md`](./audit.md) step 3 (ii) on
+2026-05-15. See `audit.md` "Procedure amendment" for the depth-of-review
+trade-off and the adopter caveat (paid human audits are not a substitute
+— commission your own if your environment requires one).
 
 | Reviewer | Affiliation | Date | Verdict |
 |---|---|---|---|
 | almondoo (Tsubasa) | maintainer (primary author) | 2026-05-03 | drafted |
-| Claude (opus-4-7) — Round 1 code-verification pass | AI tool, maintainer-directed; per-claim code verification against the source | 2026-05-15 | 1 High (T-2 / I-2 gitleaks integration gap) surfaced and **resolved same-day** in #58; 4 new informational findings retained (T-6, R-3, R-4, I-8) |
-| Claude (opus-4-7) — Round 2 security-researcher persona | AI tool, maintainer-directed; independent persona challenging Spoofing / Tampering / Information disclosure | 2026-05-15 | **pass with findings** — 7 informational (S-6, T-7, I-9, I-10, D-6 cross-listed, R-3/R-4 confirmed, KMS isolation defense-in-depth) |
-| Claude (opus-4-7) — Round 2 SRE / platform-engineer persona | AI tool, maintainer-directed; independent persona challenging Repudiation / Denial of service / operational runbooks | 2026-05-15 | **pass with findings** — 4 informational (D-7, D-8, D-9, runbook tabletop drill execution as separate v1.x hygiene) |
-| Claude (opus-4-7) — Round 2 application-developer persona | AI tool, maintainer-directed; independent persona challenging Elevation of privilege / integration surface | 2026-05-15 | **pass with findings** — 5 informational (E-6, E-7, E-8, E-9, T-8) |
+| Claude (opus-4-7) — Round 1 code-verification pass | AI agent, maintainer-directed; per-claim code verification | 2026-05-15 | 1 High (T-2 / I-2 gitleaks gap) surfaced and **resolved same-day** in #58; 4 informational retained (T-6, R-3, R-4, I-8) |
+| Claude (opus-4-7) — Round 2 security-researcher persona | AI agent, maintainer-directed; independent S / T / I challenge | 2026-05-15 | **pass with findings** — 4 informational (S-6, T-7, I-9, I-10); D-6 cross-listed |
+| Claude (opus-4-7) — Round 2 SRE / platform-engineer persona | AI agent, maintainer-directed; independent R / D / ops challenge | 2026-05-15 | **pass with findings** — 3 informational (D-7, D-8, D-9) |
+| Claude (opus-4-7) — Round 2 application-developer persona | AI agent, maintainer-directed; independent E / integration challenge | 2026-05-15 | **pass with findings** — 5 informational (E-6, E-7, E-8, E-9, T-8) |
 
-**Honest framing of the AI sign-off**: all reviewer rows above
-are AI agents (Anthropic's Claude opus-4-7), invoked by the
-project maintainer at the maintainer's machine. They are
-**not external human accountability**. The original `audit.md`
-procedure called for that external check; the amended procedure
-accepts the multi-AI-agent walkthrough as a structured substitute
-specifically for personal-OSS projects that cannot realistically
-commission a human reviewer. The audit trail is transparent so
-adopters can decide whether the depth of review meets their
-risk tolerance.
-
-The "drafted" → "signed off" transition is recorded by the
-STATUS line at the top of this document.
+> **Honest framing**: every reviewer row is an AI agent
+> (Anthropic Claude opus-4-7) invoked by the maintainer at the
+> maintainer's machine. This is structurally weaker than external
+> human accountability. We chose this over leaving the gate open
+> indefinitely; full rationale in `audit.md` "Procedure
+> amendment".
 
 ---
 

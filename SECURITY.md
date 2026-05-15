@@ -47,7 +47,7 @@ Adversaries can attempt:
 | Path traversal | Denylist (`.env*`, `.git/`, `node_modules/`); resolve-and-verify against partial+sparse clone root; symlink refusal | §11.2 |
 | Symlinks | `read_file` rejects symlinks; tool calls rooted at the clone dir | §11.2 |
 | Cost exhaustion | Per-PR `cost-cap-usd` hard cap; cost-guard middleware short-circuits the loop; tool-call budget per turn | §6.2, §11.1 |
-| Secret leakage | Two-stage in-process scan via `quickScanContent` (`packages/runner/src/gitleaks.ts`): the agent loop scans the input diff text BEFORE invoking the LLM (diff pre-scan) and scans the combined summary + dedupped comment bodies BEFORE returning (output post-scan). Both stages abort the review (`SecretLeakAbortedError`) when `shouldAbortReview` returns true (any high-confidence rule hit or >3 findings); non-aborting findings are redacted via `applyRedactions`. Operators with a `gitleaks` binary can layer the workspace scan on top — see `docs/security/audit.md`. | §11.3 |
+| Secret leakage | Two-stage in-process scan via `quickScanContent` (`packages/runner/src/gitleaks.ts`): diff pre-scan before the LLM call, output post-scan before posting. Aborts on a high-confidence rule hit or >3 findings (`SecretLeakAbortedError`); non-aborting findings get `applyRedactions`. See [`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md) rows T-2 / I-2 for the implementation contract and tests. | §11.3 |
 | Container escape | Non-root `agent` user; `REVIEW_AGENT_SANDBOXED=1`; minimal alpine base; no host mounts in the default Action | §15.1 |
 | Bot author abuse | `ignore_authors` defaults skip `dependabot[bot]` / `renovate[bot]` / `github-actions[bot]` | §10 |
 | Cross-tenant data leak | Postgres RLS `tenant_isolation` policy on every tenant-scoped table; fails closed when GUC unset | §16.1 |
@@ -71,35 +71,18 @@ Adversaries can attempt:
 
 `review-agent` undergoes a structured **internal STRIDE
 walkthrough** before each major release in lieu of a paid
-third-party audit. The walkthrough output is published at
-[`docs/security/threat-model-review-YYYY-MM.md`](./docs/security/audit.md);
-the procedure (option a — paid audit — vs option b — internal
-review) is documented at
-[`docs/security/audit.md`](./docs/security/audit.md).
-
-For the personal-OSS scope of this project, the procedure was
-amended on 2026-05-15 (see "Procedure amendment" in
-`docs/security/audit.md`): in the absence of an unaffiliated
-human reviewer, a **multi-AI-agent independent review** (three
-persona-driven agents — security researcher, SRE / platform
-engineer, application developer) was performed and recorded as
-the substitute sign-off. The full audit trail with explicit AI
-disclosure lives at the bottom of
+third-party audit. Procedure and the option-(a)-vs-(b)
+trade-off (including the 2026-05-15 amendment that accepts a
+multi-AI-agent review as form (ii) for the personal-OSS scope):
+[`docs/security/audit.md`](./docs/security/audit.md). Findings
+log and Sign-off table:
 [`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md).
 
-**Adopters should treat `review-agent` as having had**:
-- A structured internal STRIDE walkthrough by the maintainer.
-- A subsequent AI code-verification pass that surfaced and
-  resolved one High finding (#58 — gitleaks integration gap).
-- A multi-AI-agent independent review that returned
-  `pass with findings` × 3 (13 new informational findings, all
-  tracked for v1.x).
-
-**Adopters should NOT treat `review-agent` as having had** an
-independent paid third-party audit. If your deployment is in a
-regulated environment or otherwise requires that level of
-assurance, **commission your own engagement** covering at least
-the categories in
+**Adopters should treat this project as having had** a structured
+internal STRIDE walkthrough + a multi-AI-agent independent review,
+NOT a paid third-party audit. If your environment requires the
+latter, **commission your own engagement** covering at least the
+categories in
 [`docs/security/threat-model-review-2026-05.md`](./docs/security/threat-model-review-2026-05.md).
 
 ## Out of scope
@@ -115,8 +98,8 @@ If in doubt, file a Security Advisory rather than guessing scope.
 ## Incident response runbooks
 
 These runbooks are operator-facing playbooks for compromise scenarios in a
-self-hosted multi-tenant deployment. v0.3 ships them as documentation;
-automation hooks are a v0.4 follow-up.
+self-hosted multi-tenant deployment. v0.3 shipped them as documentation;
+automation hooks remain a v1.x follow-up.
 
 Each runbook follows the same shape:
 
