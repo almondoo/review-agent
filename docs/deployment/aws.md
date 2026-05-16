@@ -481,6 +481,68 @@ Additional patterns specific to this narrative:
   manual re-review pass) lives at
   [`docs/operations/codecommit-disaster-recovery.md`](../operations/codecommit-disaster-recovery.md).
 
+### EventBridge → SNS → `/webhook/codecommit`
+
+For CodeCommit installs, the receiver exposes a second endpoint
+`POST /webhook/codecommit` that consumes the SNS HTTPS subscription
+envelope. The intended wiring is:
+
+```
+CodeCommit repo
+   │
+   ▼  (default event bus, source: aws.codecommit)
+EventBridge rule
+   │
+   ▼  (target: SNS topic)
+SNS topic (review-agent-codecommit)
+   │
+   ▼  (HTTPS subscription, signature v2)
+https://<receiver>/webhook/codecommit
+```
+
+The receiver verifies the SNS message signature against the
+`SigningCertURL` (host-allowlisted to `*.amazonaws.com`), confirms
+new subscriptions by fetching the `SubscribeURL`, and dedups on
+`MessageId` using the same `webhook_deliveries` table as the GitHub
+path. PR open / source-branch-update / comment-with-`@review-agent`
+events enqueue a `JobMessage` with `prRef.platform = 'codecommit'`.
+
+Illustrative Terraform sketch (not runnable as-is — wire the actual
+SNS / EventBridge resource names into your stack):
+
+```hcl
+resource "aws_sns_topic" "codecommit" {
+  name = "review-agent-codecommit"
+}
+
+resource "aws_cloudwatch_event_rule" "codecommit_pr" {
+  name        = "review-agent-codecommit-pr"
+  description = "Forward CodeCommit PR + comment events to the review-agent receiver"
+  event_pattern = jsonencode({
+    source        = ["aws.codecommit"]
+    "detail-type" = ["CodeCommit Pull Request State Change", "CodeCommit Comment on Pull Request"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "codecommit_to_sns" {
+  rule = aws_cloudwatch_event_rule.codecommit_pr.name
+  arn  = aws_sns_topic.codecommit.arn
+}
+
+resource "aws_sns_topic_subscription" "receiver" {
+  topic_arn = aws_sns_topic.codecommit.arn
+  protocol  = "https"
+  endpoint  = "https://${var.receiver_host}/webhook/codecommit"
+  # SNS will POST a SubscriptionConfirmation; the receiver auto-confirms
+  # by fetching the SubscribeURL inside the message envelope.
+}
+```
+
+If the receiver runs behind API Gateway HTTP API (the default
+deployment in this doc), no additional auth header is needed: SNS
+signs every envelope and the receiver rejects anything that fails
+verification with `401`.
+
 ## 16. References
 
 - Spec §15.1 — AWS Lambda + Terraform reference deploy.

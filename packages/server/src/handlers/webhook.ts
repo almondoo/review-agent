@@ -1,7 +1,6 @@
 import type { JobMessage, QueueClient } from '@review-agent/core';
 import type { Context } from 'hono';
-
-const COMMAND_PREFIX = '@review-agent';
+import { parseCommand } from '../utils/parse-command.js';
 
 export type WebhookHandlerDeps = {
   readonly queue: QueueClient;
@@ -93,16 +92,6 @@ export async function handleWebhook(
   }
 
   return { kind: 'ignored', reason: `unhandled event '${event}'` };
-}
-
-function parseCommand(commentBody: string): string | null {
-  const lower = commentBody.toLowerCase();
-  const idx = lower.indexOf(COMMAND_PREFIX);
-  if (idx < 0) return null;
-  const after = lower.slice(idx + COMMAND_PREFIX.length).trim();
-  const word = after.split(/\s+/, 1)[0];
-  if (!word) return null;
-  return word.replace(/[^a-z]/g, '');
 }
 
 function buildJobMessage(
