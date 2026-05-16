@@ -1611,8 +1611,9 @@ For CodeCommit:
 - Disaster recovery: if Postgres is destroyed, all CodeCommit reviews
   fall back to "full review" on the next webhook. There is no `recover
   sync-state-from-codecommit` equivalent (cannot reconstruct from comments).
-  Document this limitation in `docs/deployment/aws.md` under the CodeCommit
-  section.
+  The operator-facing recovery procedure lives at
+  [`docs/operations/codecommit-disaster-recovery.md`](../operations/codecommit-disaster-recovery.md);
+  `docs/deployment/aws.md` cross-links it.
 - Backups: RDS automated snapshots (35-day retention) cover state recovery
   for CodeCommit installations.
 

@@ -476,7 +476,10 @@ Additional patterns specific to this narrative:
   CodeCommit lives **only in Postgres** (spec §12.1.1), so the DR story
   becomes critical: there is no equivalent of the GitHub
   `recover sync-state-from-hidden-comment` path. Take regular RDS
-  snapshots and treat the DB as a hard dependency.
+  snapshots and treat the DB as a hard dependency. The full operator
+  procedure (RPO/RTO targets, restore steps, audit-chain reverify,
+  manual re-review pass) lives at
+  [`docs/operations/codecommit-disaster-recovery.md`](../operations/codecommit-disaster-recovery.md).
 
 ## 16. References
 

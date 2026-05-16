@@ -186,6 +186,14 @@ flowchart TD
 | **GitHub Enterprise Server** | Server / CLI | ✅ 対応 | 同じ Octokit 経路を使用。[`docs/deployment/ghes.md`](./deployment/ghes.md) 参照。 |
 | **AWS CodeCommit** (`platform-codecommit`) | CLI / Server（手動トリガー） | ⚠️ 部分対応 | アダプタ実装済みでレビューは投稿可能。自動イベント受信（SNS → SQS）と CLI `--platform codecommit` フラグは [#73](https://github.com/almondoo/review-agent/issues/73) / [#75](https://github.com/almondoo/review-agent/issues/75) で対応中。状態は Postgres canonical（隠しコメントマーカーなし — spec §12.1.1）。 |
 
+> **CodeCommit のデータ耐久性に関する警告**: CodeCommit インストールは
+> レビュー状態を Postgres のみに保存し、プラットフォーム側には canonical
+> なコピーが存在しません。Postgres を失うと、開いている全 PR の次回レビュー
+> はフル再実行になります。本番投入前に RDS PITR / Aurora snapshot で
+> バックアップを計画し、専用 runbook
+> [`docs/operations/codecommit-disaster-recovery.md`](./operations/codecommit-disaster-recovery.md)
+> を参照してください。
+
 GitLab / Bitbucket アダプタは v1.x のスコープ外です（spec §1.2）。
 
 ## リポジトリ構成
