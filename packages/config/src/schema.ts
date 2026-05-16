@@ -1,4 +1,9 @@
-import { CONFIDENCES, REQUEST_CHANGES_THRESHOLDS, WORKSPACE_STRATEGIES } from '@review-agent/core';
+import {
+  CONFIDENCES,
+  isValidGlob,
+  REQUEST_CHANGES_THRESHOLDS,
+  WORKSPACE_STRATEGIES,
+} from '@review-agent/core';
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from './languages.js';
 
@@ -32,10 +37,37 @@ const AutoReviewSchema = z
   })
   .strict();
 
+// Per-instruction auto-fetch options (`reviews.path_instructions[*].auto_fetch`).
+// When the diff touches a file matching the instruction's `path`
+// glob, the runner pre-fetches related files via the workspace
+// tools so the LLM has the right context without spending tool-call
+// budget asking for them. Defaults: tests=true, types=true, siblings=false.
+//
+// Sibling fetch is opt-in because "sibling files" can be a lot of
+// noise on dense directories — operators should turn it on only
+// after a path_instruction proves it actually needs it.
+const AutoFetchSchema = z
+  .object({
+    tests: z.boolean().default(true),
+    types: z.boolean().default(true),
+    siblings: z.boolean().default(false),
+  })
+  .strict();
+
 const PathInstructionSchema = z
   .object({
-    path: z.string().min(1),
+    // The `path` field is a glob pattern. We compile it via
+    // `globToRegExp` (the same compiler the runner's tool dispatcher
+    // uses) so a typo like `src/utils/\*.ts` fails at load time
+    // instead of silently never matching. `.refine` runs after the
+    // base string-length check so the error path is empty-string →
+    // length error, otherwise glob-syntax error.
+    path: z.string().min(1).refine(isValidGlob, {
+      message:
+        'must be a valid glob pattern (`*` within a segment, `**` across segments, no NUL bytes)',
+    }),
     instructions: z.string().min(1),
+    auto_fetch: AutoFetchSchema.optional(),
   })
   .strict();
 

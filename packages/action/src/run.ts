@@ -149,9 +149,11 @@ export async function runAction(
     },
     previousState,
     profile: config.profile,
+    changedPaths: diff.files.map((f) => f.path),
     pathInstructions: config.reviews.path_instructions.map((p) => ({
       pattern: p.path,
       text: p.instructions,
+      ...(p.auto_fetch ? { autoFetch: p.auto_fetch } : {}),
     })),
     skills: skillBlock ? [skillBlock] : [],
     language: config.language,

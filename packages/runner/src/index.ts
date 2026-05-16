@@ -1,5 +1,16 @@
 export { runReview } from './agent.js';
 export {
+  type AutoFetchBudget,
+  type AutoFetchedFile,
+  type AutoFetchOptions,
+  type AutoFetchResult,
+  type CollectAutoFetchInput,
+  collectAutoFetchContext,
+  DEFAULT_AUTO_FETCH_BUDGET,
+  type PathInstructionWithFetch,
+  renderRelatedFiles,
+} from './auto-fetch.js';
+export {
   COORDINATION_MODES,
   type CoordinationDecision,
   type CoordinationDecisionInput,

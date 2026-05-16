@@ -7,6 +7,7 @@ import {
   SecretLeakAbortedError,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
+import { collectAutoFetchContext, renderRelatedFiles } from './auto-fetch.js';
 import {
   applyRedactions,
   type GitleaksFinding,
@@ -84,9 +85,26 @@ export async function runReview(
     },
   });
 
+  // Auto-fetch related files (per path_instructions[*].autoFetch)
+  // before the LLM call so the model has the test / type / sibling
+  // context inline without spending a tool-call round-trip on each.
+  // No-op when `workspaceDir` is empty (Server mode with
+  // `workspace_strategy: 'none'`) or no instruction has autoFetch
+  // enabled. Bounded by `DEFAULT_AUTO_FETCH_BUDGET` (5 files /
+  // 50 KB each / 250 KB total).
+  const autoFetch = await collectAutoFetchContext({
+    changedPaths: job.changedPaths ?? [],
+    pathInstructions: job.pathInstructions,
+    workspaceDir: job.workspaceDir,
+  });
+  const relatedBlock = renderRelatedFiles(autoFetch);
+  const diffPayload = relatedBlock
+    ? `${wrapUntrusted(job.prMetadata)}\n\n${relatedBlock}\n\n${job.diffText}`
+    : `${wrapUntrusted(job.prMetadata)}\n\n${job.diffText}`;
+
   const baseInput: ReviewInput = {
     systemPrompt,
-    diffText: `${wrapUntrusted(job.prMetadata)}\n\n${job.diffText}`,
+    diffText: diffPayload,
     prMetadata: job.prMetadata,
     fileReader,
     language: job.language,

@@ -14,6 +14,14 @@ export type ReviewJob = {
   readonly jobId: string;
   readonly workspaceDir: string;
   readonly diffText: string;
+  /**
+   * Paths of files touched by the diff (relative to repo root).
+   * When supplied, the runner drives `path_instructions[*].autoFetch`
+   * against this list to prefetch related files (tests / types /
+   * siblings) into the LLM prompt. Optional for back-compat: callers
+   * that don't supply it get no auto-fetch.
+   */
+  readonly changedPaths?: ReadonlyArray<string>;
   readonly prMetadata: {
     readonly title: string;
     readonly body: string;
@@ -41,7 +49,22 @@ export type ReviewJob = {
   };
   readonly previousState: ReviewState | null;
   readonly profile: string;
-  readonly pathInstructions: ReadonlyArray<{ readonly pattern: string; readonly text: string }>;
+  readonly pathInstructions: ReadonlyArray<{
+    readonly pattern: string;
+    readonly text: string;
+    /**
+     * When set, the runner auto-prefetches related files for every
+     * changed file matching `pattern` and threads their content into
+     * the LLM prompt as a `<related_files>` block. Per-fetch and
+     * total-payload caps are enforced by the runner; see
+     * `runner/src/auto-fetch.ts`.
+     */
+    readonly autoFetch?: {
+      readonly tests?: boolean;
+      readonly types?: boolean;
+      readonly siblings?: boolean;
+    };
+  }>;
   readonly skills: ReadonlyArray<string>;
   readonly language: string;
   readonly costCapUsd: number;

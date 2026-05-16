@@ -34,6 +34,7 @@ export {
   ToolDispatchRefusedError,
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
+export { globToRegExp, isValidGlob } from './glob.js';
 export {
   type ApplyLineShiftInput,
   type ComputeDiffStrategyDeps,
