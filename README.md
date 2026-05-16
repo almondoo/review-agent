@@ -108,18 +108,52 @@ IDE autocomplete via:
 { "yaml.schemas": { "./schema/v1.json": [".review-agent.yml"] } }
 ```
 
-## How a review runs
+## How it works
 
-1. Action loads `.review-agent.yml`, reads PR metadata, and decides skip
-   rules (drafts / ignored authors).
-2. Diff and previous review state are pulled from GitHub.
-3. The runner spins up the LLM agent loop with middleware
-   (`injectionGuard` → `costGuard` → `main` → `dedup`) and tools
-   (`read_file` / `glob` / `grep`) restricted to a partial+sparse clone.
-4. Findings are fingerprinted, deduplicated against the previous review,
-   gitleaks-scanned, and posted as inline comments + a summary.
-5. The hidden state comment is upserted with model, token usage, cost,
-   head/base SHAs, and live fingerprints.
+Each review goes through a fixed pipeline: GitHub fires a PR event,
+the Action loads config + previous state, the runner composes a
+prompt and drives the LLM through a middleware chain, and the
+post-processed output is posted back as inline comments + a summary +
+a hidden state comment for the next push to diff against.
+
+```mermaid
+flowchart TD
+  PR[GitHub PR<br/>open / synchronize] --> ACT[Action loads<br/>.review-agent.yml + state comment]
+  ACT --> DIFF{computeDiffStrategy}
+  DIFF -- first run / rebase --> FULL[Full diff via vcs.getDiff]
+  DIFF -- reachable since --> INC[Incremental diff<br/>vcs.getDiff sinceSha]
+  FULL --> WS[Sparse clone + denylist]
+  INC --> WS
+  WS --> PROMPT[Compose prompt<br/>system + skills + path_instructions<br/>+ untrusted PR meta / commits / labels<br/>+ optional auto-fetched related files]
+  PROMPT --> AGENT([Agent loop])
+  AGENT --> MW
+  subgraph MW[middleware chain]
+    direction TB
+    IG[injectionGuard<br/>LLM-based, fail-closed] --> CG[costGuard<br/>per-PR cap + daily cap]
+    CG --> MAIN[generateText with tools<br/>read_file / glob / grep<br/>MAX_TOOL_CALLS = 20]
+    MAIN --> DED[dedup vs state.fingerprints<br/>+ min_confidence filter]
+  end
+  MW --> GL[gitleaks scan<br/>diff + LLM output]
+  GL --> EV[computeReviewEvent<br/>severity → COMMENT / REQUEST_CHANGES]
+  EV --> POST[vcs.postReview event<br/>+ vcs.upsertStateComment<br/>retry on 429 / 5xx, fail-loud]
+```
+
+What each block does:
+
+- **Action** (`packages/action/src/run.ts`) — entry point in the workflow runner. Loads config, fetches PR metadata, decides skip rules (drafts / ignored authors / labels), and seeds the workspace.
+- **`computeDiffStrategy`** (`packages/core/src/incremental.ts`) — picks between **full** review (first run, force-push, or unreachable `lastReviewedSha`) and **incremental** review (delta against the previous head). Saves the LLM cost of re-reviewing the whole PR on every push.
+- **Workspace** (`packages/runner/src/tools.ts`) — partial + sparse clone of just the changed paths. Denylist (`.env*`, `.git/`, `node_modules/`, `.aws/credentials`, secret stores) enforced at the provisioner AND the tool dispatcher.
+- **Prompt composition** (`packages/runner/src/prompts/`) — system prompt (severity rubric, what-NOT-to-flag, category / confidence / ruleId guidance) + skills + path_instructions + a single `<untrusted>` envelope containing PR title / body / author / labels / base branch / commit messages + optional `<related_files>` block from `path_instructions[i].auto_fetch`. Everything user-supplied is inside the envelope; closing-tag substrings are escaped.
+- **Middleware chain** (`packages/runner/src/agent.ts`):
+  - `injectionGuard` — LLM-based prompt-injection classifier; fail-closed on uncertain verdicts.
+  - `costGuard` — short-circuits the agent loop if the per-PR `cost-cap-usd` or installation daily cap is reached.
+  - `main` — `generateText({ tools, stopWhen: stepCountIs(MAX_TOOL_CALLS), experimental_output: Output.object({ schema: ReviewOutputSchema }) })`. The LLM may invoke `read_file` / `glob` / `grep` against the workspace.
+  - `dedup` — drops findings whose `(path, line, ruleId, suggestionType)` fingerprint is already in the hidden state comment; also applies the `reviews.min_confidence` floor.
+- **gitleaks** (`packages/runner/src/gitleaks.ts`) — scans both the diff and the LLM's generated output; aborts the review on secret leakage in agent output.
+- **`computeReviewEvent`** (`packages/core/src/review.ts`) — maps the kept comment list to `COMMENT` / `REQUEST_CHANGES` per `reviews.request_changes_on` (default: `critical`).
+- **Post + state** (`packages/platform-github/src/adapter.ts`) — `postReview` carries the chosen event (so branch protection can require "no request-changes" reviews); `upsertStateComment` writes the new fingerprint set + head/base SHAs for the next push to diff against. Both calls are wrapped in retry on 429 / 5xx with exp-backoff; state-write exhaustion fails the action loud.
+
+In **Server mode** (Hono webhook → SQS → worker) the same runner is invoked from `packages/server/src/worker.ts`. The worker provisions a per-job ephemeral workspace via `provisionWorkspace` (strategy: `contents-api` for Lambda, `sparse-clone` when `git` is available); everything downstream of "Workspace" in the diagram is identical.
 
 ## Repo layout
 
