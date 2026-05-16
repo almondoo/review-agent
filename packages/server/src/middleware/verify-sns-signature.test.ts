@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import { Hono } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  _clearSnsCertCache,
   buildSnsCanonicalString,
   type SnsMessage,
   type VerifySnsEnv,
@@ -40,6 +41,14 @@ function makeSubscriptionConfirmation(overrides: Partial<SnsMessage> = {}): SnsM
   };
 }
 
+beforeEach(() => {
+  _clearSnsCertCache();
+});
+
+afterEach(() => {
+  _clearSnsCertCache();
+});
+
 describe('buildSnsCanonicalString', () => {
   it('produces the documented canonical string for a Notification with Subject', () => {
     const msg = makeNotification();
@@ -76,10 +85,21 @@ describe('verifySnsMessage', () => {
     expect(ok).toBe(false);
   });
 
-  it('rejects a cert URL not under amazonaws.com', async () => {
+  it('rejects a cert URL not under sns.<region>.amazonaws.com (SEC-7)', async () => {
     const ok = await verifySnsMessage({
       ...makeNotification(),
       SigningCertURL: 'https://evil.example.com/cert.pem',
+    });
+    expect(ok).toBe(false);
+  });
+
+  it('rejects a cert URL on a non-sns AWS host (SEC-7 tightening)', async () => {
+    // The pre-fix code accepted any `*.amazonaws.com` host. After
+    // tightening to `sns.<region>.amazonaws.com`, `s3.amazonaws.com`
+    // (or any other AWS service host) must be rejected.
+    const ok = await verifySnsMessage({
+      ...makeNotification(),
+      SigningCertURL: 'https://s3.amazonaws.com/some-bucket/cert.pem',
     });
     expect(ok).toBe(false);
   });
@@ -143,8 +163,13 @@ describe('verifySnsMessage', () => {
     });
     expect(ok).toBe(true);
 
-    // And a tampered canonical string fails.
-    const tampered: SnsMessage = { ...signed, Message: 'tampered' };
+    // And a tampered canonical string fails. Use a *different* cert
+    // URL so the cache (populated by the first call) is not consulted.
+    const tampered: SnsMessage = {
+      ...signed,
+      Message: 'tampered',
+      SigningCertURL: 'https://sns.us-east-2.amazonaws.com/cert.pem',
+    };
     const okBad = await verifySnsMessage(tampered, { fetchCert: async () => publicPem });
     expect(okBad).toBe(false);
   });
@@ -156,6 +181,145 @@ describe('verifySnsMessage', () => {
       },
     }).catch(() => false);
     expect(ok).toBe(false);
+  });
+
+  describe('cert cache (SEC-2)', () => {
+    it('serves a cached PEM on the second verification with the same URL', async () => {
+      const fetchCert = vi.fn().mockResolvedValue('PEM');
+      const verifier = vi.fn().mockReturnValue(true);
+      const msg = makeNotification();
+
+      await verifySnsMessage(msg, { fetchCert, verifySignature: verifier });
+      await verifySnsMessage(msg, { fetchCert, verifySignature: verifier });
+
+      expect(fetchCert).toHaveBeenCalledTimes(1);
+      expect(verifier).toHaveBeenCalledTimes(2);
+    });
+
+    it('caches independently per SigningCertURL', async () => {
+      const fetchCert = vi.fn().mockResolvedValue('PEM');
+      const verifier = vi.fn().mockReturnValue(true);
+      const a = makeNotification({
+        SigningCertURL: 'https://sns.us-east-1.amazonaws.com/cert-a.pem',
+      });
+      const b = makeNotification({
+        SigningCertURL: 'https://sns.us-east-2.amazonaws.com/cert-b.pem',
+      });
+
+      await verifySnsMessage(a, { fetchCert, verifySignature: verifier });
+      await verifySnsMessage(b, { fetchCert, verifySignature: verifier });
+      await verifySnsMessage(a, { fetchCert, verifySignature: verifier });
+
+      expect(fetchCert).toHaveBeenCalledTimes(2);
+    });
+
+    it('re-fetches after TTL expires (24h)', async () => {
+      vi.useFakeTimers();
+      try {
+        const fetchCert = vi.fn().mockResolvedValue('PEM');
+        const verifier = vi.fn().mockReturnValue(true);
+        const msg = makeNotification();
+
+        await verifySnsMessage(msg, { fetchCert, verifySignature: verifier });
+        // Advance 24h + 1 ms — entry should be expired.
+        vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1_000 + 1);
+        await verifySnsMessage(msg, { fetchCert, verifySignature: verifier });
+
+        expect(fetchCert).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('evicts the oldest entry past the LRU bound', async () => {
+      const fetchCert = vi.fn().mockResolvedValue('PEM');
+      const verifier = vi.fn().mockReturnValue(true);
+
+      // Fill cache with 64 distinct URLs.
+      for (let i = 0; i < 64; i++) {
+        await verifySnsMessage(
+          makeNotification({
+            SigningCertURL: `https://sns.us-east-1.amazonaws.com/cert-${i}.pem`,
+          }),
+          { fetchCert, verifySignature: verifier },
+        );
+      }
+      expect(fetchCert).toHaveBeenCalledTimes(64);
+
+      // 65th distinct URL should evict cert-0.
+      await verifySnsMessage(
+        makeNotification({
+          SigningCertURL: 'https://sns.us-east-1.amazonaws.com/cert-99.pem',
+        }),
+        { fetchCert, verifySignature: verifier },
+      );
+      expect(fetchCert).toHaveBeenCalledTimes(65);
+
+      // cert-0 should now miss and re-fetch.
+      await verifySnsMessage(
+        makeNotification({
+          SigningCertURL: 'https://sns.us-east-1.amazonaws.com/cert-0.pem',
+        }),
+        { fetchCert, verifySignature: verifier },
+      );
+      expect(fetchCert).toHaveBeenCalledTimes(66);
+    });
+  });
+
+  describe('default fetchCert timeout (SEC-2)', () => {
+    it('passes an AbortSignal with a 5s timeout to fetch()', async () => {
+      const mockFetch = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValue(new Response('PEM', { status: 200 }));
+      try {
+        const ok = await verifySnsMessage(makeNotification(), {
+          // omit fetchCert → exercises the default path.
+          verifySignature: () => true,
+        });
+        expect(ok).toBe(true);
+        const call = mockFetch.mock.calls[0];
+        expect(call).toBeDefined();
+        const init = call?.[1];
+        expect(init).toBeDefined();
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+      } finally {
+        mockFetch.mockRestore();
+      }
+    });
+
+    it('returns false when the default fetch is aborted by an already-aborted signal', async () => {
+      // Stub fetch to honour the AbortSignal — if it is already
+      // aborted at call time, reject immediately. This avoids
+      // sleeping for the real 5s timeout while still proving the
+      // signal wires through end-to-end.
+      const mockFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+        const signal = (init as RequestInit | undefined)?.signal;
+        if (signal?.aborted) throw new Error('aborted');
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        });
+      });
+      // Patch AbortSignal.timeout to return an already-aborted signal.
+      const origTimeout = AbortSignal.timeout;
+      AbortSignal.timeout = () => {
+        const ctrl = new AbortController();
+        ctrl.abort();
+        return ctrl.signal;
+      };
+      try {
+        const ok = await verifySnsMessage(
+          {
+            ...makeNotification(),
+            SigningCertURL: 'https://sns.us-east-1.amazonaws.com/timeout.pem',
+          },
+          { verifySignature: () => true },
+        ).catch(() => false);
+        expect(ok).toBe(false);
+      } finally {
+        AbortSignal.timeout = origTimeout;
+        mockFetch.mockRestore();
+      }
+    });
   });
 });
 

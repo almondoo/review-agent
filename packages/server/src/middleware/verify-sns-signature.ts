@@ -7,7 +7,7 @@ import { createMiddleware } from 'hono/factory';
  * SNS delivers signed JSON envelopes over HTTP(S). Each envelope contains
  * a `Signature` (base64), a `SignatureVersion` (`1` = SHA1, `2` = SHA256),
  * and a `SigningCertURL` pointing at an AWS-hosted X.509 certificate
- * (`*.amazonaws.com`). To verify:
+ * (`sns.<region>.amazonaws.com`). To verify:
  *
  * 1. Build a canonical string from a fixed, version-specific subset of
  *    fields in fixed order, each followed by `\n`.
@@ -64,7 +64,8 @@ export type VerifyFn = (params: {
 export type VerifySnsSignatureOpts = {
   /**
    * Custom certificate fetcher. Defaults to `fetch(url).then(r => r.text())`
-   * but is overridden in tests to a static map.
+   * with a 5-second `AbortSignal.timeout`; overridden in tests to a static
+   * map.
    */
   readonly fetchCert?: FetchCert;
   /**
@@ -73,15 +74,89 @@ export type VerifySnsSignatureOpts = {
    */
   readonly verifySignature?: VerifyFn;
   /**
-   * Allowlist for the certificate host. AWS publishes signing certs only
-   * from `*.amazonaws.com`. We default to that suffix to prevent
-   * spoofing the cert URL to attacker-controlled hosts. Tests can
-   * pass an empty array to disable the check; production should not.
+   * Allowlist regex for the certificate host. AWS publishes signing certs
+   * only from `sns.<region>.amazonaws.com`. The default tightened regex
+   * (per SEC-7 audit) rejects any other `*.amazonaws.com` host so that
+   * e.g. `s3.amazonaws.com/anything` cannot host a cert. Tests can pass
+   * a wider pattern to disable the check; production should not.
    */
-  readonly allowedCertHostSuffixes?: ReadonlyArray<string>;
+  readonly allowedCertHostPattern?: RegExp;
 };
 
-const DEFAULT_CERT_HOST_SUFFIXES: ReadonlyArray<string> = ['.amazonaws.com'];
+/**
+ * Tightened host allowlist: only `sns.<region>.amazonaws.com`.
+ *
+ * Prior to the SEC-7 audit fix this was a generic `*.amazonaws.com`
+ * suffix match, which would have accepted certs hosted on unrelated
+ * AWS service domains.
+ */
+const DEFAULT_CERT_HOST_PATTERN = /^sns\.[a-z0-9-]+\.amazonaws\.com$/;
+
+const DEFAULT_CERT_FETCH_TIMEOUT_MS = 5_000;
+
+/**
+ * In-memory LRU + TTL cache for `SigningCertURL` → PEM lookups.
+ *
+ * AWS rotates SNS signing certificates infrequently (months to years),
+ * so caching them aggressively per receiver process avoids a `fetch()`
+ * on every webhook delivery — without that cache, a sustained spike in
+ * SNS deliveries would issue a corresponding spike in egress traffic
+ * to `sns.<region>.amazonaws.com` and noticeably inflate worst-case
+ * verification latency. SEC-2 audit fix.
+ *
+ * Cache is process-local (Lambda warm-container scope). TTL is 24 hours
+ * so a slowly-rotated cert is picked up within a day even without a
+ * restart. Maximum entry count is small because we only ever expect
+ * a handful of distinct cert URLs in practice (one per region, with
+ * occasional rotation), but bound it anyway as a memory-safety floor.
+ */
+const CERT_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
+const CERT_CACHE_MAX_ENTRIES = 64;
+
+type CertCacheEntry = {
+  readonly pem: string;
+  readonly expiresAt: number;
+};
+
+const certCache = new Map<string, CertCacheEntry>();
+
+function nowMs(): number {
+  return Date.now();
+}
+
+/**
+ * Reset the in-memory cert cache. Intended for tests.
+ */
+export function _clearSnsCertCache(): void {
+  certCache.clear();
+}
+
+/**
+ * Returns the cached PEM for `url` if it is fresh; otherwise `null`.
+ * Side-effect: refreshes the entry's recency (LRU promotion) when a
+ * cache hit occurs. Expired entries are evicted on read.
+ */
+function getCachedCert(url: string): string | null {
+  const hit = certCache.get(url);
+  if (!hit) return null;
+  if (hit.expiresAt <= nowMs()) {
+    certCache.delete(url);
+    return null;
+  }
+  // LRU touch: re-insert to move to the tail of the Map's insertion order.
+  certCache.delete(url);
+  certCache.set(url, hit);
+  return hit.pem;
+}
+
+function setCachedCert(url: string, pem: string): void {
+  if (certCache.size >= CERT_CACHE_MAX_ENTRIES && !certCache.has(url)) {
+    // Evict the oldest entry (Map iteration order = insertion order).
+    const oldest = certCache.keys().next().value;
+    if (oldest !== undefined) certCache.delete(oldest);
+  }
+  certCache.set(url, { pem, expiresAt: nowMs() + CERT_CACHE_TTL_MS });
+}
 
 /**
  * Builds the canonical string-to-sign for SNS message verification.
@@ -109,7 +184,7 @@ export function buildSnsCanonicalString(msg: SnsMessage): string {
 }
 
 const defaultFetchCert: FetchCert = async (url) => {
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(DEFAULT_CERT_FETCH_TIMEOUT_MS) });
   if (!res.ok) {
     throw new Error(`SNS cert fetch failed: ${res.status}`);
   }
@@ -142,22 +217,24 @@ export async function verifySnsMessage(
   if (msg.SignatureVersion !== '1' && msg.SignatureVersion !== '2') {
     return false;
   }
-  const allow = opts.allowedCertHostSuffixes ?? DEFAULT_CERT_HOST_SUFFIXES;
-  if (allow.length > 0) {
-    let parsed: URL;
-    try {
-      parsed = new URL(msg.SigningCertURL);
-    } catch {
-      return false;
-    }
-    if (parsed.protocol !== 'https:') return false;
-    const host = parsed.hostname;
-    const ok = allow.some((s) => host === s.replace(/^\./, '') || host.endsWith(s));
-    if (!ok) return false;
+  const pattern = opts.allowedCertHostPattern ?? DEFAULT_CERT_HOST_PATTERN;
+  let parsed: URL;
+  try {
+    parsed = new URL(msg.SigningCertURL);
+  } catch {
+    return false;
   }
+  if (parsed.protocol !== 'https:') return false;
+  if (!pattern.test(parsed.hostname)) return false;
+
   const fetcher = opts.fetchCert ?? defaultFetchCert;
   const verifier = opts.verifySignature ?? defaultVerifySignature;
-  const cert = await fetcher(msg.SigningCertURL);
+
+  let cert = getCachedCert(msg.SigningCertURL);
+  if (cert === null) {
+    cert = await fetcher(msg.SigningCertURL);
+    setCachedCert(msg.SigningCertURL, cert);
+  }
   const canonical = buildSnsCanonicalString(msg);
   return verifier({
     canonical,
