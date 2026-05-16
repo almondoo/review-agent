@@ -1,0 +1,109 @@
+# Retention policy — `audit_log` and `cost_ledger`
+
+Both `audit_log` and `cost_ledger` are append-only Postgres tables. Neither
+has a hard-coded retention period — the operator decides, documents, and
+enforces it. This page describes the recommended baseline, the operational
+mechanics for enforcing it, and the constraints unique to the HMAC-chained
+`audit_log`.
+
+## Recommended baseline
+
+| Table         | Minimum                | Notes                                            |
+|---------------|------------------------|--------------------------------------------------|
+| `audit_log`   | ≥ 1 year (SOC2 evidence) | Regulatory evidence; archive before pruning.    |
+| `cost_ledger` | ≥ 1 year (SOC2 evidence) | Used for billing reconciliation and forecasting. |
+
+SOC2 (CC4, CC7) treats both tables as evidence: `audit_log` covers
+trust-boundary events (review starts, completions, secret-leak aborts,
+cost-cap exceeded), and `cost_ledger` covers per-LLM-call spend by
+installation. ISO 27001 Annex A.12.4.1 (event logging) reads similarly.
+
+Operators may keep longer if their regulatory regime requires it (HIPAA:
+6 years, PCI: 1 year, etc.). The CLI does not enforce a maximum.
+
+You **must** write your chosen retention period into your `SECURITY.md` /
+runbook and have it reviewed alongside any access-control change.
+
+## Operational mechanics
+
+### Step 1 — export
+
+```sh
+review-agent audit export \
+  --installation 12345 \
+  --since 2025-01-01 \
+  --until 2025-12-31 \
+  --output ./audit-2025.jsonl.gz
+```
+
+- Filters by `installation_id` + `ts` range.
+- Emits gzipped JSONL with discriminated rows (`{ "kind": "audit", … }` and
+  `{ "kind": "cost", … }`).
+- Verifies the `audit_log` chain segment **before writing** — a tainted
+  archive is worse than no archive, so a chain break aborts the export.
+
+Archive the resulting `.jsonl.gz` to cold storage (S3 Glacier, GCS
+Archive, etc.) before pruning anything. The export is the only thing
+proving what was in the row before deletion.
+
+### Step 2 — prune (dry run)
+
+```sh
+review-agent audit prune --before 2025-01-01
+```
+
+Without `--confirm`, the CLI reports what would be deleted without
+touching the table. Treat this as the equivalent of `terraform plan` —
+read the output before proceeding.
+
+### Step 3 — prune (commit)
+
+```sh
+review-agent audit prune --before 2025-01-01 --confirm
+```
+
+Deletes rows from both tables. For `audit_log`, the most-recent row
+with `ts < --before` is **kept as the new anchor** so the surviving tail
+still chains correctly via that row's `hash`. After delete, the CLI
+re-verifies the chain segment; a verification failure exits non-zero.
+`cost_ledger` has no chain; every row before the boundary is deleted.
+
+### Step 4 — verify
+
+```sh
+DATABASE_URL=postgres://... pnpm --filter @review-agent/eval verify:audit
+```
+
+Run the standalone chain verifier (segment mode) after every prune.
+Page on non-zero exit; treat a break as a §8.6.5 incident.
+
+## What the prune is not
+
+- It is **not** per-installation. The chain is global across the whole
+  table (each row's `prev_hash` references the previous row by hash, not
+  scoped by `installation_id`), so per-tenant pruning would leave gaps the
+  verifier can't follow. If a tenant requests deletion under a data-rights
+  regime (GDPR Art. 17, etc.), the right tool is a redaction event — see
+  `docs/security/audit-log.md` for the redaction-vs-deletion split.
+- It is **not** a substitute for backups. Take the export, ship it to
+  cold storage, **then** prune.
+- It is **not** retroactive on `webhook_deliveries` — that table has its
+  own 7-day sweep in `packages/server/src/worker.ts` and is not part of
+  this command.
+
+## CI / scheduled enforcement
+
+Wire `review-agent audit prune --before <90-days-ago> --confirm` into a
+nightly cron (e.g. EventBridge → Lambda → CLI binary, or a GitHub
+Actions schedule). Page on non-zero exit. Track the run via the chain
+verifier the morning after to detect a silent failure mode.
+
+## Recovery
+
+If a prune accidentally deletes too much:
+
+1. Stop further appends (kill the Server worker / pause the Action).
+2. Restore the table from the last RDS snapshot to a separate database.
+3. Replay the missing rows via the audit appender against the production
+   DB — `audit_log` is append-only by design and replays cleanly.
+4. Re-verify the chain segment end-to-end before resuming appends.

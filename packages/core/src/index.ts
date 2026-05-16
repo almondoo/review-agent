@@ -8,6 +8,7 @@ export {
   canonicalPayload,
   computeAuditHash,
   verifyAuditChain,
+  verifyAuditChainSegment,
 } from './audit.js';
 export {
   COST_THRESHOLDS,

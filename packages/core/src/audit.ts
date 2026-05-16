@@ -71,6 +71,30 @@ export function verifyAuditChain(rows: ReadonlyArray<ChainLink>): {
   return { ok: breaks.length === 0, breaks };
 }
 
+// Verify a sub-chain whose head row may not be the genesis row (e.g. after
+// pruning older rows out of audit_log). The first row's declared `prevHash`
+// is trusted — its own hash is verified against that declared prev, and
+// every subsequent row's hash is verified against its predecessor's hash.
+// This proves the surviving segment is internally consistent without
+// requiring the deleted predecessors to still exist.
+export function verifyAuditChainSegment(rows: ReadonlyArray<ChainLink>): {
+  readonly ok: boolean;
+  readonly breaks: ReadonlyArray<ChainBreak>;
+} {
+  if (rows.length === 0) return { ok: true, breaks: [] };
+  const breaks: ChainBreak[] = [];
+  const head = rows[0];
+  let prev = head?.prevHash ?? AUDIT_GENESIS_HASH;
+  rows.forEach((row, index) => {
+    const expected = computeAuditHash(prev, row, row.ts);
+    if (row.hash !== expected) {
+      breaks.push({ index, expected, actual: row.hash, row });
+    }
+    prev = row.hash;
+  });
+  return { ok: breaks.length === 0, breaks };
+}
+
 export function appendAuditRow(prevHash: string | null, ev: AuditEvent, now: () => Date): AuditRow {
   const ts = ev.ts ?? now();
   const usePrev = prevHash ?? AUDIT_GENESIS_HASH;

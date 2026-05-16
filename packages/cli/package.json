@@ -30,6 +30,7 @@
     "@octokit/rest": "21.0.2",
     "@review-agent/config": "workspace:*",
     "@review-agent/core": "workspace:*",
+    "@review-agent/db": "workspace:*",
     "@review-agent/llm": "workspace:*",
     "@review-agent/platform-github": "workspace:*",
     "@review-agent/runner": "workspace:*",

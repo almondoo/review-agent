@@ -93,6 +93,9 @@ importers:
       '@review-agent/core':
         specifier: workspace:*
         version: link:../core
+      '@review-agent/db':
+        specifier: workspace:*
+        version: link:../db
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm

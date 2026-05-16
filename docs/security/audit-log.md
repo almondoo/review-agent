@@ -65,10 +65,17 @@ treat any break as a §8.6.5 incident (database compromise).
 - **Forward-only**: never `UPDATE` an existing row's payload. If business
   logic needs to correct a value, append a new row of `event = 'correction'`
   pointing at the original `id` in the payload.
-- **Pruning**: `audit_log` grows unbounded. Operators may archive rows
-  older than the retention requirement, but the prune script must export
-  the chain to cold storage **before** delete, otherwise the verifier's
-  next run will report a break at the new low-water mark.
+- **Pruning**: `audit_log` grows unbounded. Use `review-agent audit
+  export` to archive a date range to gzipped JSONL (chain segment is
+  verified pre-export), then `review-agent audit prune --before <date>
+  --confirm` to delete rows older than the boundary. The prune keeps
+  the most-recent row before the boundary as the new anchor so the
+  surviving tail still chains correctly; the CLI re-verifies the chain
+  segment post-prune and exits non-zero if it cannot. SOC2 recommends
+  retaining at least 1 year of evidence — operators must decide and
+  document their own policy. See
+  [`../operations/retention.md`](../operations/retention.md) for the
+  end-to-end runbook.
 - **Backups**: RDS automated snapshots cover this table. Do not skip the
   table in any backup policy you write — the audit log is regulatory
   evidence in the SOC2 / ISO 27001 sense.
