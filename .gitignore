@@ -39,3 +39,6 @@ Thumbs.db
 
 # local-run scratch files (keep .example.json committed)
 examples/local-run/event.json
+
+# Lead/dev scratch dir (patches, temp captures, debug dumps)
+tmp/
