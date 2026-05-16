@@ -99,6 +99,9 @@ importers:
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm
+      '@review-agent/platform-codecommit':
+        specifier: workspace:*
+        version: link:../platform-codecommit
       '@review-agent/platform-github':
         specifier: workspace:*
         version: link:../platform-github

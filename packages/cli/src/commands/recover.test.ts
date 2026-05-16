@@ -145,6 +145,19 @@ describe('recoverSyncStateCommand', () => {
     expect(upsertState).not.toHaveBeenCalled();
   });
 
+  it('short-circuits on --platform codecommit with informative stderr', async () => {
+    const io = recordingIo();
+    const result = await recoverSyncStateCommand(io, {
+      repo: 'demo',
+      installationId: 1n,
+      env: {} as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+    });
+    expect(result).toEqual({ status: 'ok', recovered: 0, missing: [] });
+    expect(io.err.join('')).toContain('recover sync-state is GitHub-only');
+    expect(io.err.join('')).toContain('codecommit-disaster-recovery');
+  });
+
   it('handles an empty repo (no open PRs)', async () => {
     const io = recordingIo();
     const upsertState = vi.fn(async () => undefined);

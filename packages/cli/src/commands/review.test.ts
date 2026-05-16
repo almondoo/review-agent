@@ -269,6 +269,64 @@ describe('runReviewCommand', () => {
     expect(result.status).toBe('reviewed');
   });
 
+  it('runs codecommit happy path without a GH token', async () => {
+    const io = recordingIo();
+    const ccVcs: VCS = {
+      ...fakeVcs(),
+      platform: 'codecommit',
+      capabilities: {
+        clone: false,
+        stateComment: 'postgres-only',
+        approvalEvent: 'codecommit',
+        commitMessages: false,
+      },
+      getPR: async () =>
+        fakePR({ ref: { platform: 'codecommit', owner: '', repo: 'demo', number: 42 } }),
+    };
+    const result = await runReviewCommand(io, {
+      repo: 'demo',
+      pr: 42,
+      configPath: 'missing.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => ccVcs,
+      createProvider: () => fakeProvider({ summary: 'ok' }),
+    });
+    expect(result.status).toBe('reviewed');
+  });
+
+  it('reports auth_failed when --platform codecommit is used without --repo', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 42,
+      configPath: 'missing.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+    });
+    expect(result.status).toBe('auth_failed');
+    expect(io.err.join('')).toContain('Missing required --repo for --platform codecommit');
+  });
+
+  it('rejects malformed codecommit --repo (contains slash)', async () => {
+    const io = recordingIo();
+    await expect(() =>
+      runReviewCommand(io, {
+        repo: 'owner/repo',
+        pr: 1,
+        configPath: 'missing.yml',
+        post: false,
+        platform: 'codecommit',
+        env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/codecommit/);
+  });
+
   it('skips when author is in ignore_authors', async () => {
     const io = recordingIo();
     const yaml = 'reviews:\n  ignore_authors: ["alice"]\n';
