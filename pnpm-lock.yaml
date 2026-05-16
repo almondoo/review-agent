@@ -402,6 +402,9 @@ importers:
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm
+      ai:
+        specifier: 5.0.183
+        version: 5.0.183(zod@3.25.76)
       zod:
         specifier: 3.25.76
         version: 3.25.76

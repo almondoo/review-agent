@@ -31,6 +31,13 @@ export type RunnerResult = {
   readonly model: string;
   readonly provider: string;
   readonly droppedDuplicates: number;
+  /**
+   * Number of tool calls (`read_file` / `glob` / `grep`) that the
+   * LLM made during this review. Surfaced for cost-guard accounting
+   * (§spec 6.2) and for the eval harness so regressions in tool use
+   * are detectable.
+   */
+  readonly toolCalls: number;
 };
 
 export type RunReviewDeps = {

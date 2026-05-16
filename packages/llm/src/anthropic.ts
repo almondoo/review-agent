@@ -1,7 +1,8 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { ReviewOutputSchema } from '@review-agent/core';
-import { generateObject } from 'ai';
+import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { ANTHROPIC_PRICING, priceForModel } from './pricing.js';
+import { countToolCalls } from './provider-base.js';
 import type {
   ErrorClassification,
   LlmProvider,
@@ -12,13 +13,18 @@ import type {
 
 const DEFAULT_TEMPERATURE = 0.2;
 const FALLBACK_CHARS_PER_TOKEN = 4;
+/**
+ * Default upper bound on agent-loop steps when `ReviewInput.maxToolCalls`
+ * is not set. Mirrors `MAX_TOOL_CALLS` in `@review-agent/runner`.
+ */
+const DEFAULT_MAX_TOOL_CALLS = 20;
 
 type AnthropicClient = ReturnType<typeof createAnthropic>;
-type GenerateObject = typeof generateObject;
+type GenerateText = typeof generateText;
 
 export type AnthropicDriverDeps = {
   readonly createClient?: typeof createAnthropic;
-  readonly generate?: GenerateObject;
+  readonly generate?: GenerateText;
   readonly tokenize?: (text: string) => number;
 };
 
@@ -98,7 +104,7 @@ export function createAnthropicProvider(
 
   const createClient = deps.createClient ?? createAnthropic;
   const client: AnthropicClient = createClient({ apiKey });
-  const doGenerate = deps.generate ?? generateObject;
+  const doGenerate = deps.generate ?? generateText;
   const tokenize = deps.tokenize ?? approximateTokens;
   const cacheControl = config.anthropicCacheControl !== false;
 
@@ -110,30 +116,38 @@ export function createAnthropicProvider(
   const generateReview = async (input: ReviewInput): Promise<ReviewOutput> => {
     const userPrompt = composeUserPrompt(input);
     const messages = composeMessages(input.systemPrompt, userPrompt, cacheControl);
+    const tools = (input.tools ?? {}) as ToolSet;
+    const maxSteps = input.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     const result = await doGenerate({
       model: client(config.model),
-      schema: ReviewOutputSchema,
+      tools,
+      stopWhen: stepCountIs(maxSteps),
+      experimental_output: Output.object({ schema: ReviewOutputSchema }),
       // biome-ignore lint/suspicious/noExplicitAny: AI SDK message typing differs across providers; we hand-shape the array to spec.
       messages: messages as any,
       temperature: DEFAULT_TEMPERATURE,
     });
-    const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage ?? {
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    const usage =
+      (result as { totalUsage?: { inputTokens?: number; outputTokens?: number } }).totalUsage ??
+      (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage ??
+      {};
     const inputTokens = usage.inputTokens ?? 0;
     const outputTokens = usage.outputTokens ?? 0;
     const price = priceForModel(ANTHROPIC_PRICING, config.model);
     const costUsd =
       (inputTokens / 1_000_000) * price.inputPerMTok +
       (outputTokens / 1_000_000) * price.outputPerMTok;
-    const data = (result as { object: { comments: ReviewOutput['comments']; summary: string } })
-      .object;
+    const data = (
+      result as {
+        experimental_output: { comments: ReviewOutput['comments']; summary: string };
+      }
+    ).experimental_output;
     return {
       comments: data.comments,
       summary: data.summary,
       tokensUsed: { input: inputTokens, output: outputTokens },
       costUsd,
+      toolCalls: countToolCalls(result),
     };
   };
 

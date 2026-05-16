@@ -51,8 +51,9 @@ export {
 export {
   classifyHttpStyleError,
   composeUserPrompt,
+  countToolCalls,
   createGenericProvider,
-  type GenerateObjectFn,
+  type GenerateTextFn,
   type ProviderDriverDeps,
   type ProviderPricing,
   type ProviderShape,

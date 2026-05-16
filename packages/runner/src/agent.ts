@@ -18,6 +18,7 @@ import {
 } from './middleware/index.js';
 import { composeSystemPrompt } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
+import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
 import type { Middleware, MiddlewareCtx, ReviewJob, RunnerResult, RunReviewDeps } from './types.js';
 
 const RETRY_PROMPT_SUFFIX =
@@ -48,12 +49,27 @@ export async function runReview(
     );
   }
 
+  // Counter shared with the AI-SDK tool wrappers so we can attribute
+  // tool calls to the agent step that initiated them. The provider
+  // also reports `toolCalls` derived from the AI-SDK step results;
+  // we take the larger of the two so refused-before-dispatch calls
+  // still show up in the cost-guard accounting.
+  let toolCallCounter = 0;
+  const tools = createAiSdkToolset({
+    workspace: job.workspaceDir,
+    onCall: (_name: ToolName) => {
+      toolCallCounter += 1;
+    },
+  });
+
   const baseInput: ReviewInput = {
     systemPrompt,
     diffText: `${wrapUntrusted(job.prMetadata)}\n\n${job.diffText}`,
     prMetadata: job.prMetadata,
     fileReader,
     language: job.language,
+    tools,
+    maxToolCalls: MAX_TOOL_CALLS,
   };
 
   const costState: CostState = { totalCostUsd: 0 };
@@ -101,6 +117,14 @@ export async function runReview(
       ? dedup.kept
       : dedup.kept.map((c) => ({ ...c, body: applyRedactions(c.body, outputFindings) }));
 
+  // Prefer the provider-reported tool-call count (sourced from the
+  // AI-SDK step results) when it's non-zero, otherwise fall back to
+  // the local counter. They typically agree; the divergence path
+  // covers test doubles that don't populate steps, and tool calls
+  // refused before dispatch (which our counter still increments).
+  const providerToolCalls = result.toolCalls ?? 0;
+  const toolCalls = providerToolCalls > 0 ? providerToolCalls : toolCallCounter;
+
   return {
     comments,
     summary,
@@ -109,6 +133,7 @@ export async function runReview(
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
+    toolCalls,
   };
 }
 

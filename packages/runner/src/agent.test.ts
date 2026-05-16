@@ -3,10 +3,11 @@ import {
   SchemaValidationError,
   SecretLeakAbortedError,
 } from '@review-agent/core';
-import type { LlmProvider, ReviewOutput } from '@review-agent/llm';
+import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
 import type { GitleaksFinding } from './gitleaks.js';
+import { MAX_TOOL_CALLS } from './tools.js';
 import type { ReviewJob } from './types.js';
 
 const baseJob: ReviewJob = {
@@ -290,5 +291,61 @@ describe('runReview — dedup against previousState', () => {
     const secondRun = await runReview({ ...baseJob, previousState }, provider);
     expect(secondRun.comments).toHaveLength(0);
     expect(secondRun.droppedDuplicates).toBe(2);
+  });
+});
+
+describe('runReview — tool exposure (#59)', () => {
+  it('passes an AI-SDK tool set with read_file / glob / grep to the provider', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    await runReview(baseJob, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.tools).toBeDefined();
+    const names = Object.keys(callArgs?.tools ?? {});
+    expect(names).toEqual(expect.arrayContaining(['read_file', 'glob', 'grep']));
+  });
+
+  it('bounds tool calls per review via maxToolCalls = MAX_TOOL_CALLS', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    await runReview(baseJob, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.maxToolCalls).toBe(MAX_TOOL_CALLS);
+  });
+
+  it('counts at least one read_file tool call when the LLM invokes it during the review', async () => {
+    // Integration scenario: the diff references a function defined
+    // elsewhere; a tool-using LLM looks it up via read_file before
+    // producing the final review. The fake provider mimics that by
+    // calling the wired-in tool through its `execute` hook.
+    const diffText =
+      'diff --git a/src/caller.ts b/src/caller.ts\n@@ -1 +1 @@\n+import { helper } from "./helper";\n+helper();';
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async (input: ReviewInput) => {
+      const readFile = (input.tools as Record<string, { execute: (args: unknown) => unknown }>)
+        ?.read_file;
+      // Exercise the AI-SDK tool surface end-to-end: the provider
+      // would normally drive these calls; here the fake provider
+      // does so directly so the assertion below holds without a
+      // real model in the loop.
+      try {
+        await readFile?.execute({ path: 'src/helper.ts' });
+      } catch {
+        // The default tools.read_file resolves against the
+        // workspace dir which is a non-existent tmp path in this
+        // test; we don't need the read to succeed, only to be
+        // *attempted*. The onCall hook fires before any fs IO.
+      }
+      return validOutput;
+    });
+    const provider = makeProvider({ generateReview });
+    const result = await runReview({ ...baseJob, diffText }, provider);
+    expect(result.toolCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reports zero tool calls when the LLM produces output without using tools', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(result.toolCalls).toBe(0);
   });
 });

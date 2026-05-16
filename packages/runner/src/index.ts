@@ -74,8 +74,12 @@ export {
 } from './skill-loader.js';
 export { type BuildStateInput, buildReviewState } from './state-builder.js';
 export {
+  type AiSdkToolSet,
+  type AiSdkToolsOptions,
+  createAiSdkToolset,
   createTools,
   dispatchTool,
+  MAX_TOOL_CALLS,
   TOOL_NAMES,
   type ToolDeps,
   type ToolName,

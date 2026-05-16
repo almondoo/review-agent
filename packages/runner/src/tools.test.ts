@@ -1,6 +1,6 @@
 import { ToolDispatchRefusedError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
-import { createTools, dispatchTool } from './tools.js';
+import { createAiSdkToolset, createTools, dispatchTool, MAX_TOOL_CALLS } from './tools.js';
 
 type DirentLike = {
   name: string;
@@ -160,6 +160,64 @@ describe('dispatchTool', () => {
   it('refuses non-object args', async () => {
     const tools = createTools(WORKSPACE, makeDeps({}));
     await expect(dispatchTool('read_file', null, tools)).rejects.toThrow(/invalid args/);
+  });
+});
+
+describe('createAiSdkToolset', () => {
+  it('exposes the three whitelisted tools (read_file / glob / grep)', () => {
+    const set = createAiSdkToolset({ workspace: WORKSPACE });
+    expect(Object.keys(set).sort()).toEqual(['glob', 'grep', 'read_file']);
+  });
+
+  it('describes inputs with a Zod schema for the AI SDK', () => {
+    const set = createAiSdkToolset({ workspace: WORKSPACE });
+    expect(set.read_file?.inputSchema).toBeDefined();
+    expect(set.glob?.inputSchema).toBeDefined();
+    expect(set.grep?.inputSchema).toBeDefined();
+  });
+
+  it('fires onCall once per dispatched tool invocation', async () => {
+    const onCall = vi.fn();
+    const deps = makeDeps({
+      files: { '/work/src/a.ts': 'hi' },
+      tree: { '/work': [dirent('src', 'dir')], '/work/src': [dirent('a.ts', 'file')] },
+    });
+    const set = createAiSdkToolset({ workspace: WORKSPACE, toolDeps: deps, onCall });
+    const readExec = set.read_file?.execute as (args: unknown, opts: unknown) => Promise<string>;
+    const globExec = set.glob?.execute as (args: unknown, opts: unknown) => Promise<unknown>;
+    const grepExec = set.grep?.execute as (args: unknown, opts: unknown) => Promise<unknown>;
+    await readExec({ path: 'src/a.ts' }, {});
+    await globExec({ pattern: 'src/*.ts' }, {});
+    await grepExec({ pattern: 'hi' }, {});
+    expect(onCall).toHaveBeenCalledTimes(3);
+    expect(onCall.mock.calls.map((c) => c[0])).toEqual(['read_file', 'glob', 'grep']);
+  });
+
+  it('refuses deny-listed paths even through the AI-SDK wrapper', async () => {
+    const set = createAiSdkToolset({ workspace: WORKSPACE, toolDeps: makeDeps({}) });
+    const readExec = set.read_file?.execute as (args: unknown, opts: unknown) => Promise<string>;
+    await expect(readExec({ path: '.env' }, {})).rejects.toBeInstanceOf(ToolDispatchRefusedError);
+  });
+
+  it('forwards optional grep path without injecting an undefined property', async () => {
+    const deps = makeDeps({
+      files: { '/work/sub/a.ts': 'foo' },
+      tree: {
+        '/work': [dirent('sub', 'dir')],
+        '/work/sub': [dirent('a.ts', 'file')],
+      },
+    });
+    const set = createAiSdkToolset({ workspace: WORKSPACE, toolDeps: deps });
+    const grepExec = set.grep?.execute as (args: unknown, opts: unknown) => Promise<string[]>;
+    // No `path` field — exercises the optional-arg branch where
+    // exactOptionalPropertyTypes forbids forwarding `undefined`.
+    const out = await grepExec({ pattern: 'foo' }, {});
+    expect(out).toEqual(['sub/a.ts:1: foo']);
+  });
+
+  it('exposes MAX_TOOL_CALLS as a non-zero positive integer', () => {
+    expect(Number.isInteger(MAX_TOOL_CALLS)).toBe(true);
+    expect(MAX_TOOL_CALLS).toBeGreaterThan(0);
   });
 });
 

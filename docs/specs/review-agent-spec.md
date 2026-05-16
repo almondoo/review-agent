@@ -77,7 +77,7 @@ Build a self-hostable, OSS, AI code review agent that:
 | License | Apache 2.0 | Same as PR-Agent. |
 | Default deploy example | AWS Lambda + Terraform | Plus docker-compose for self-host. |
 | Sandbox | Docker container only | No gVisor / Firecracker. Tool whitelist enforced in our runner; LLM cannot invoke tools outside `read_file` / `glob` / `grep`. |
-| LLM client | Vercel AI SDK (`ai`) ^4.x | Provider-agnostic. Used for `generateObject` (structured output), `generateText`, tool use. |
+| LLM client | Vercel AI SDK (`ai`) ^5.x | Provider-agnostic. Agent loop calls `generateText({ tools, stopWhen: stepCountIs(MAX_TOOL_CALLS), experimental_output: Output.object({ schema: ReviewOutputSchema }) })` so the LLM can invoke `read_file` / `glob` / `grep` and still emit Zod-validated structured output (§11.2, §7.3). |
 | Provider drivers | `@ai-sdk/anthropic` ^1.x, `@ai-sdk/openai` ^1.x, `@ai-sdk/google` ^1.x, `@ai-sdk/azure` ^1.x | Plus `@ai-sdk/openai-compatible` for Ollama/vLLM/OpenRouter/LM Studio. |
 | Default provider | `anthropic` | User-configurable in `.review-agent.yml`. |
 | Default model (per provider) | Claude: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Azure OpenAI: configured deployment name. Google: `gemini-2.0-pro`. Vertex: `gemini-2.0-pro`. OpenAI-compatible: required user input. | Configurable. Fallback chain (intent: availability/rate-limit, not cost): provider-specific. See §2.1. |
@@ -219,10 +219,22 @@ startup.
 1. Compose system prompt: profile + skills + path_instructions + language directive.
 2. Compose user prompt: PR metadata wrapped in `<untrusted>...</untrusted>` +
    diff (with `[REDACTED]` blocks if gitleaks matched).
-3. Call `generateObject` with a Zod-defined `ReviewOutputSchema`.
-4. If the model needs to read files, the schema includes a `tool_calls` field;
-   handle locally in `packages/runner/src/tools.ts` (only `read_file`, `glob`,
-   `grep` exposed; arguments validated; results fed back).
+3. Call `generateText({ model, tools, stopWhen: stepCountIs(MAX_TOOL_CALLS),
+   experimental_output: Output.object({ schema: ReviewOutputSchema }), messages })`.
+   The AI SDK drives the tool-use loop: at each step the model may invoke
+   `read_file` / `glob` / `grep`, the runner's tool wrappers execute the
+   call against the workspace, and the result is fed back into the next
+   step. The final step emits a Zod-validated structured object via
+   `experimental_output`. `MAX_TOOL_CALLS = 20` (`packages/runner/src/tools.ts`)
+   bounds the step count both as a cost guard and as a DoS hardening against
+   runaway tool use; the total tool-call count is surfaced on the
+   `ReviewOutput.toolCalls` field for cost-guard accounting.
+4. Tools are constructed by `createAiSdkToolset({ workspace, onCall })` in
+   `packages/runner/src/tools.ts`. The wrappers delegate to the underlying
+   `createTools` dispatcher so every call still runs the path-validation,
+   deny-list, symlink, and ReDoS guards described in §7.3 / §7.4. The
+   AI-SDK driver never sees tool names outside the `{read_file, glob, grep}`
+   whitelist.
 5. Validate output. Retry once on schema violation with corrective prompt.
 6. Apply dedup, post comments, update state.
 
@@ -559,7 +571,10 @@ project decision). Can be added later if contributors request it.
                    │ - skills composed as        │
                    │   prompt fragments          │
                    │ - Zod-validated structured  │
-                   │   output (generateObject)   │
+                   │   output via generateText   │
+                   │   experimental_output       │
+                   │ - stopWhen stepCountIs(20)  │
+                   │   bounds tool-call steps    │
                    └─────────────────────────────┘
                             │
                             ▼ (9) Post
@@ -821,6 +836,18 @@ content. Treat injection as inevitable and design for damage containment.
    subprocess, and shell execution are not exposed. The runner's tool dispatcher
    refuses any tool name not in the whitelist, regardless of what the LLM
    requests. This is provider-agnostic.
+
+   The AI-SDK call shape is fixed (`packages/llm/src/provider-base.ts` and the
+   bespoke `anthropic.ts` / `openai.ts` drivers): every provider invokes
+   `generateText({ model, tools: createAiSdkToolset({...}),
+   stopWhen: stepCountIs(MAX_TOOL_CALLS), experimental_output:
+   Output.object({ schema: ReviewOutputSchema }), messages })`. Each tool
+   wrapper's `execute` delegates to the underlying `createTools` dispatcher,
+   so the path-validation / deny-list / symlink / ReDoS guards run before
+   any data is handed back to the LLM. `MAX_TOOL_CALLS` (default 20) bounds
+   the agent-loop step count both as a cost guard and as a DoS hardening
+   against runaway tool use; the total tool-call count is surfaced on
+   `ReviewOutput.toolCalls` for cost-guard accounting.
 
 2. **Input wrapping (mandatory).** Before composing the user prompt, wrap PR
    metadata (title, body, existing review comments, commit messages) in

@@ -1,8 +1,9 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { ReviewOutputSchema } from '@review-agent/core';
-import { generateObject } from 'ai';
+import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { getEncoding } from 'js-tiktoken';
 import { OPENAI_PRICING, priceForModel } from './pricing.js';
+import { countToolCalls } from './provider-base.js';
 import type {
   ErrorClassification,
   LlmProvider,
@@ -13,14 +14,19 @@ import type {
 
 const DEFAULT_TEMPERATURE = 0.2;
 const FALLBACK_CHARS_PER_TOKEN = 4;
+/**
+ * Default upper bound on agent-loop steps when `ReviewInput.maxToolCalls`
+ * is not set. Mirrors `MAX_TOOL_CALLS` in `@review-agent/runner`.
+ */
+const DEFAULT_MAX_TOOL_CALLS = 20;
 
 type OpenAIClient = ReturnType<typeof createOpenAI>;
-type GenerateObject = typeof generateObject;
+type GenerateText = typeof generateText;
 type Tokenizer = (text: string) => number;
 
 export type OpenAIDriverDeps = {
   readonly createClient?: typeof createOpenAI;
-  readonly generate?: GenerateObject;
+  readonly generate?: GenerateText;
   readonly tokenize?: Tokenizer;
 };
 
@@ -135,7 +141,7 @@ export function createOpenAIProvider(
   const clientOpts: { apiKey: string; baseURL?: string } = { apiKey };
   if (config.baseUrl) clientOpts.baseURL = config.baseUrl;
   const client: OpenAIClient = createClient(clientOpts);
-  const doGenerate = deps.generate ?? generateObject;
+  const doGenerate = deps.generate ?? generateText;
   const tokenize = deps.tokenize ?? tryLoadTiktoken() ?? approximateTokens;
 
   const pricePerMillionTokens = (): { input: number; output: number } => {
@@ -145,32 +151,40 @@ export function createOpenAIProvider(
 
   const generateReview = async (input: ReviewInput): Promise<ReviewOutput> => {
     const userPrompt = composeUserPrompt(input);
+    const tools = (input.tools ?? {}) as ToolSet;
+    const maxSteps = input.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
     const result = await doGenerate({
       model: client(config.model),
-      schema: ReviewOutputSchema,
+      tools,
+      stopWhen: stepCountIs(maxSteps),
+      experimental_output: Output.object({ schema: ReviewOutputSchema }),
       messages: [
         { role: 'system', content: input.systemPrompt },
         { role: 'user', content: userPrompt },
       ],
       temperature: DEFAULT_TEMPERATURE,
     });
-    const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage ?? {
-      inputTokens: 0,
-      outputTokens: 0,
-    };
+    const usage =
+      (result as { totalUsage?: { inputTokens?: number; outputTokens?: number } }).totalUsage ??
+      (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage ??
+      {};
     const inputTokens = usage.inputTokens ?? 0;
     const outputTokens = usage.outputTokens ?? 0;
     const price = priceForModel(OPENAI_PRICING, config.model);
     const costUsd =
       (inputTokens / 1_000_000) * price.inputPerMTok +
       (outputTokens / 1_000_000) * price.outputPerMTok;
-    const data = (result as { object: { comments: ReviewOutput['comments']; summary: string } })
-      .object;
+    const data = (
+      result as {
+        experimental_output: { comments: ReviewOutput['comments']; summary: string };
+      }
+    ).experimental_output;
     return {
       comments: data.comments,
       summary: data.summary,
       tokensUsed: { input: inputTokens, output: outputTokens },
       costUsd,
+      toolCalls: countToolCalls(result),
     };
   };
 
