@@ -1,0 +1,15 @@
+{
+  "category": "edge-encoding",
+  "platform": "codecommit",
+  "language": "ts",
+  "edge_cases": [
+    "empty_body",
+    "unicode_title",
+    "unicode_author",
+    "unicode_existing_comment",
+    "emoji"
+  ],
+  "expected_findings": [],
+  "must_not_contain": ["mojibake", "?????", "\\u3053\\u3093"],
+  "rationale": "PR body is empty; title, author, existing-comment body, and the diff itself all contain non-ASCII (Japanese + emoji). The adapter and promptfoo wiring must preserve UTF-8 end-to-end. The diff itself is benign (typo fix + new translation entries) so no findings are expected."
+}

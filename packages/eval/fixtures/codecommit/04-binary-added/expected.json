@@ -1,0 +1,20 @@
+{
+  "category": "binary-added",
+  "platform": "codecommit",
+  "file_changes": [
+    {
+      "path": "assets/icons/logo.png",
+      "status": "added",
+      "additions": 0,
+      "deletions": 0,
+      "patch": null
+    },
+    {
+      "path": "README.md",
+      "status": "modified"
+    }
+  ],
+  "expected_comments": 0,
+  "must_not_contain": ["logo.png contents", "PNG signature", "base64"],
+  "rationale": "Binary files cannot be reviewed line-by-line. The adapter's toDiffFile sets additions=0, deletions=0, patch=null for binary diffs. The agent must skip line-level commentary on assets/icons/logo.png and confine itself to the README markdown change (which is fine)."
+}

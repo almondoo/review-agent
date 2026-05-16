@@ -1,0 +1,11 @@
+{
+  "platform": "codecommit",
+  "owner": "",
+  "repo": "design-system",
+  "number": "2c4e6a80-1b3d-5f70-89ab-cdef12345678",
+  "title": "icons: codegen — switch SVG components to React.FC typing",
+  "body": "Auto-generated rewrite of 55 icon components to use `React.FC<...>` typing instead of the inferred-return style. Mechanical, no behavioural change. Verifies the CodeCommit adapter + runner handle large diffs without exploding prompt size.",
+  "author": "codegen-bot",
+  "baseSha": "0123456789abcdef0123456789abcdef01234567",
+  "headSha": "fedcba9876543210fedcba9876543210fedcba98"
+}

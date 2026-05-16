@@ -1,0 +1,8 @@
+{
+  "category": "no-issue",
+  "platform": "codecommit",
+  "language": "Go",
+  "expected_findings": [],
+  "must_not_contain": ["nil pointer", "deadlock", "data race"],
+  "rationale": "Small, well-contained change: adds the new `status` column to Order + SELECT + Scan, plus maps `sql.ErrNoRows` to ErrNotFound (with a corresponding test). No behavioural regression; at most one minor nit (e.g. note that other callers of FindByID may now need to handle ErrNotFound)."
+}

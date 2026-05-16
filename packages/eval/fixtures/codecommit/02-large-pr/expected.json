@@ -1,0 +1,10 @@
+{
+  "category": "large-diff",
+  "platform": "codecommit",
+  "subtype": "codegen-rewrite",
+  "file_count": 55,
+  "expected_comments": 0,
+  "must_complete_within_seconds": 60,
+  "must_not_contain": ["Icon001", "Icon055"],
+  "rationale": "55-file mechanical codegen rewrite. The agent must not enumerate per-file findings; at most a single summary-level note about the typing change. Verifies large-diff prompt budgeting on the CodeCommit path."
+}

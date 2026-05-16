@@ -1,0 +1,11 @@
+{
+  "platform": "codecommit",
+  "owner": "",
+  "repo": "billing-platform",
+  "number": "abcdef01-2345-6789-abcd-ef0123456789",
+  "title": "billing: rename UserService -> AccountService (domain alignment) + cache TTL",
+  "body": "Renames `UserService` to `AccountService` to align with the v2 billing-domain vocabulary, and adds an explicit 60s TTL to the cache.set call. Exercises the CodeCommit adapter's rename detection path (changeType A/D pair -> status: 'renamed').",
+  "author": "bob",
+  "baseSha": "1111222233334444555566667777888899990000",
+  "headSha": "aaaabbbbccccddddeeeeffff0000111122223333"
+}
