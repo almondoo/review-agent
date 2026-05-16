@@ -24,6 +24,16 @@ Operators may keep longer if their regulatory regime requires it (HIPAA:
 You **must** write your chosen retention period into your `SECURITY.md` /
 runbook and have it reviewed alongside any access-control change.
 
+## Required DB role
+
+Run the CLI with a `DATABASE_URL` that connects via an RLS-bypassing
+role (the same role used by migration scripts, or a dedicated
+`review_agent_admin` role). The CLI does not wrap its queries in
+`withTenant(...)`, so an `appRole` connection will silently return zero
+rows (RLS fail-closed) and the prune will be a no-op. The CLI is the
+second sanctioned RLS bypass alongside migrations — keep it scoped to
+operators with the same trust posture as the migrations runner.
+
 ## Operational mechanics
 
 ### Step 1 — export
@@ -79,11 +89,21 @@ Page on non-zero exit; treat a break as a §8.6.5 incident.
 
 ## What the prune is not
 
-- It is **not** per-installation. The chain is global across the whole
-  table (each row's `prev_hash` references the previous row by hash, not
-  scoped by `installation_id`), so per-tenant pruning would leave gaps the
-  verifier can't follow. If a tenant requests deletion under a data-rights
-  regime (GDPR Art. 17, etc.), the right tool is a redaction event — see
+- The chain is **per-tenant under the production RLS configuration** —
+  the appender's `prev_hash` lookup
+  (`SELECT hash FROM audit_log ORDER BY id DESC LIMIT 1`) is scoped to
+  the current installation by the `tenant_isolation` policy on
+  `audit_log`. The CLI must therefore run with an RLS-bypass DB role
+  (the migrations superuser or equivalent — see "Required DB role"
+  above) so its global anchor query and verifier observe every
+  tenant's chain. With an `appRole` connection, the CLI sees zero rows
+  (RLS fail-closed) and is a no-op. Under the bypass role, the
+  CLI's prune walks the union of every tenant's chain in a single
+  pass — operators who need a per-tenant retention policy must apply
+  the prune boundary per `installation_id` themselves; the global
+  `--before` here trims all tenants symmetrically. If a single tenant
+  requests deletion under a data-rights regime (GDPR Art. 17, etc.),
+  the right tool is a redaction event — see
   `docs/security/audit-log.md` for the redaction-vs-deletion split.
 - It is **not** a substitute for backups. Take the export, ship it to
   cold storage, **then** prune.
