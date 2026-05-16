@@ -1,4 +1,12 @@
-import type { Confidence, InlineComment, ReviewState, Severity, Side } from '@review-agent/core';
+import type {
+  Confidence,
+  InlineComment,
+  RequestChangesThreshold,
+  ReviewEvent,
+  ReviewState,
+  Severity,
+  Side,
+} from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
 
@@ -57,6 +65,14 @@ export type ReviewJob = {
    * a confidence field are treated as `'high'`.
    */
   readonly minConfidence?: Confidence;
+  /**
+   * Operator-configured threshold at which the GitHub adapter posts
+   * `REQUEST_CHANGES` instead of `COMMENT` (`.review-agent.yml`
+   * `reviews.request_changes_on`). Defaults to `'critical'` when
+   * omitted — matches the v0.1-conservative "block on critical only"
+   * semantic. `'never'` disables the mapping (always `COMMENT`).
+   */
+  readonly requestChangesOn?: RequestChangesThreshold;
 };
 
 export type FinalizedComment = InlineComment & {
@@ -78,6 +94,15 @@ export type RunnerResult = {
    * are detectable.
    */
   readonly toolCalls: number;
+  /**
+   * GitHub review event computed from the kept comment list +
+   * `job.requestChangesOn`. The caller passes this through into
+   * `ReviewPayload.event` when calling `vcs.postReview`. Adapters
+   * that do not have a native review-event concept (CodeCommit)
+   * ignore the field; the GitHub adapter uses it to switch the
+   * underlying `pulls.createReview` event.
+   */
+  readonly reviewEvent: ReviewEvent;
 };
 
 export type RunReviewDeps = {

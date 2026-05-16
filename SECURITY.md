@@ -67,6 +67,58 @@ Adversaries can attempt:
   recommended sandbox boundary. Self-hosted runners must enforce ephemeral
   VMs.
 
+### Blocking merges on critical findings
+
+Starting in v1.1, the GitHub adapter switches the underlying
+`pulls.createReview` event from `COMMENT` to `REQUEST_CHANGES` when
+the review contains a finding at or above the configured severity
+threshold (`.review-agent.yml` → `reviews.request_changes_on`,
+default `critical`). To turn this into a hard merge block:
+
+1. Set the threshold in `.review-agent.yml`:
+
+   ```yaml
+   reviews:
+     request_changes_on: critical   # or: major | never (default: critical)
+   ```
+
+2. In your GitHub repo settings, configure a branch-protection rule
+   on the target branch (typically `main`):
+
+   - **Settings → Branches → Branch protection rules → Add rule**.
+   - **Branch name pattern**: `main` (or your release branch).
+   - Enable **Require a pull request before merging**.
+   - Under **Require a pull request before merging**, enable
+     **Require approvals** (set the count to your team norm).
+   - Enable **Dismiss stale pull request approvals when new commits
+     are pushed**. This is what makes the bot's `REQUEST_CHANGES`
+     stick across the next push instead of being silently superseded.
+   - Enable **Require review from Code Owners** only if your repo
+     uses `CODEOWNERS`; otherwise skip.
+
+   `REQUEST_CHANGES` from review-agent will then count as an
+   outstanding "changes requested" review, and merging is blocked
+   until either the next bot run posts `COMMENT` (no critical
+   findings on the new diff) or a human reviewer dismisses the
+   bot's review.
+
+3. **Caveat on threshold choice**: `request_changes_on: critical`
+   is conservative and tuned to avoid blocking on hunches. Setting
+   the threshold to `major` will block on a much wider class of
+   findings, including some that depend on context the model
+   cannot fully see (missing-await, off-by-one). On busy repos,
+   start at `critical` for one milestone before tightening.
+
+4. **Caveat on bypass**: branch-protection rules can be bypassed by
+   repo admins with the **Allow administrators to bypass** option.
+   For OSS repos that require an external audit trail, **disable**
+   that option so the bot's `REQUEST_CHANGES` applies uniformly.
+
+CodeCommit has no equivalent merge-blocking review state on the
+comment API. Operators wanting the same behavior on CodeCommit must
+wire it via approval rules in CodeCommit itself; the adapter
+intentionally drops `event` on that platform.
+
 ## Pre-release security review
 
 `review-agent` undergoes a structured **internal STRIDE

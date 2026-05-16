@@ -1,6 +1,7 @@
 import {
   CONFIDENCES,
   type Confidence,
+  computeReviewEvent,
   ReviewOutputSchema,
   SchemaValidationError,
   SecretLeakAbortedError,
@@ -160,6 +161,13 @@ export async function runReview(
   const providerToolCalls = result.toolCalls ?? 0;
   const toolCalls = Math.max(providerToolCalls, toolCallCounter);
 
+  // Map severity → GitHub review event so a critical finding can
+  // drive `REQUEST_CHANGES` (and operators can wire that into a
+  // branch-protection rule). Computed against the *kept* comments
+  // (post-dedup, post-confidence-filter, post-redaction) so we don't
+  // request changes on findings that aren't actually being posted.
+  const reviewEvent = computeReviewEvent(comments, job.requestChangesOn ?? 'critical');
+
   return {
     comments,
     summary,
@@ -169,6 +177,7 @@ export async function runReview(
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
     toolCalls,
+    reviewEvent,
   };
 }
 

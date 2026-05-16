@@ -210,11 +210,17 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       side: c.side,
       body: c.body,
     }));
+    // `event` is optional on ReviewPayload so callers that haven't
+    // been updated (or third-party adapters via the VCS interface)
+    // still get the v0.1 `COMMENT` behavior. Wiring the runner
+    // through computeReviewEvent is what unlocks `REQUEST_CHANGES`
+    // on critical findings.
+    const event = review.event ?? 'COMMENT';
     await octokit.rest.pulls.createReview({
       owner: ref.owner,
       repo: ref.repo,
       pull_number: ref.number,
-      event: 'COMMENT',
+      event,
       body: summaryWithState,
       comments,
     });

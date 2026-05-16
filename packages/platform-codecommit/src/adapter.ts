@@ -154,6 +154,11 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
 
   const postReview = async (ref: PRRef, review: ReviewPayload): Promise<void> => {
     ensureCodeCommit(ref);
+    // `review.event` is honored by the GitHub adapter to drive
+    // `REQUEST_CHANGES`; CodeCommit has no equivalent merge-blocking
+    // review state on the comment API, so we intentionally drop it
+    // here. Operators wanting merge-blocking on CodeCommit must wire
+    // it via approval rules in CodeCommit itself.
     const pr = await getPR(ref);
     if (review.summary) {
       await client.send(

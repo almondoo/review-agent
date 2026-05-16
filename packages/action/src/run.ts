@@ -157,6 +157,7 @@ export async function runAction(
     language: config.language,
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
+    requestChangesOn: config.reviews.request_changes_on,
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;
@@ -305,6 +306,7 @@ async function postOrUpdate(
         comments: result.comments,
         summary: result.summary,
         state,
+        event: result.reviewEvent,
       }),
     {
       attempts: totalAttempts,

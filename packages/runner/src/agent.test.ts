@@ -405,3 +405,113 @@ describe('runReview — tool exposure (#59)', () => {
     expect(result.toolCalls).toBe(0);
   });
 });
+
+describe('runReview — reviewEvent mapping (#65)', () => {
+  const criticalOutput: ReviewOutput = {
+    summary: 'Critical finding.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'SQL injection on req.params.id',
+        severity: 'critical',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+  const majorOnlyOutput: ReviewOutput = {
+    summary: 'One major.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'Missing await.',
+        severity: 'major',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+  const minorOnlyOutput: ReviewOutput = {
+    summary: 'Style only.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'Unused import.',
+        severity: 'minor',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+
+  it('defaults to threshold=critical when job.requestChangesOn is not set', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const result = await runReview(baseJob, provider);
+    expect(result.reviewEvent).toBe('REQUEST_CHANGES');
+  });
+
+  it('emits COMMENT when comments contain only majors at threshold=critical', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => majorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'critical' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('emits REQUEST_CHANGES when comments contain a major at threshold=major', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => majorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'major' }, provider);
+    expect(result.reviewEvent).toBe('REQUEST_CHANGES');
+  });
+
+  it('emits COMMENT at threshold=never even with a critical present', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'never' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('emits COMMENT when all comments are minor', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => minorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'critical' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('computes against the *kept* comment list (post-dedup), not the LLM output', async () => {
+    // First run posts both critical + minor; second run with previousState
+    // containing both fingerprints drops everything → reviewEvent must
+    // be COMMENT (no critical left to request changes on).
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const firstRun = await runReview(baseJob, provider);
+    expect(firstRun.reviewEvent).toBe('REQUEST_CHANGES');
+
+    const previousState = {
+      schemaVersion: 1 as const,
+      lastReviewedSha: 'old',
+      baseSha: 'b',
+      reviewedAt: 'r',
+      modelUsed: 'm',
+      totalTokens: 0,
+      totalCostUsd: 0,
+      commentFingerprints: firstRun.comments.map((c) => c.fingerprint),
+    };
+    const secondRun = await runReview({ ...baseJob, previousState }, provider);
+    expect(secondRun.comments).toHaveLength(0);
+    expect(secondRun.reviewEvent).toBe('COMMENT');
+  });
+});

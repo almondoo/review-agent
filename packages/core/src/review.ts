@@ -81,10 +81,77 @@ export type ReviewState = {
   readonly commentFingerprints: ReadonlyArray<string>;
 };
 
+/**
+ * Pull-request review event the VCS adapter posts alongside the
+ * inline review. Mirrors GitHub's `event` parameter on the
+ * `pulls.createReview` API.
+ *
+ * - `COMMENT`         — informational; does not block merge.
+ * - `REQUEST_CHANGES` — blocks merge when the repo has the matching
+ *                       branch-protection rule wired up.
+ * - `APPROVE`         — never emitted by the agent (the agent does
+ *                       not approve PRs; reserved for human reviewers).
+ *
+ * The type intentionally includes `APPROVE` so adapter implementations
+ * can carry the full surface area; `computeReviewEvent` will never
+ * select it.
+ */
+export const REVIEW_EVENTS = ['COMMENT', 'REQUEST_CHANGES', 'APPROVE'] as const;
+export type ReviewEvent = (typeof REVIEW_EVENTS)[number];
+
+/**
+ * Operator-configured threshold that decides which severity triggers
+ * `REQUEST_CHANGES`. Default is `'critical'` (most conservative —
+ * matches the "block on critical only" semantic).
+ *
+ * - `'critical'` — only `severity: 'critical'` triggers `REQUEST_CHANGES`.
+ * - `'major'`    — both `'critical'` and `'major'` trigger.
+ * - `'never'`    — disable the mapping; always post `COMMENT`.
+ */
+export const REQUEST_CHANGES_THRESHOLDS = ['critical', 'major', 'never'] as const;
+export type RequestChangesThreshold = (typeof REQUEST_CHANGES_THRESHOLDS)[number];
+
+const SEVERITY_RANK: Readonly<Record<Severity, number>> = {
+  critical: 3,
+  major: 2,
+  minor: 1,
+  info: 0,
+};
+
+/**
+ * Decide the GitHub review event from the comment list + operator
+ * threshold. Pure function — no I/O. Never returns `APPROVE`.
+ *
+ * Algorithm:
+ * - threshold `'never'` → always `COMMENT`.
+ * - otherwise: `REQUEST_CHANGES` if any comment's severity is at or
+ *   above the threshold rank; otherwise `COMMENT`. An empty comment
+ *   list yields `COMMENT` (no findings, nothing to request changes on).
+ */
+export function computeReviewEvent(
+  comments: ReadonlyArray<Pick<InlineComment, 'severity'>>,
+  threshold: RequestChangesThreshold,
+): ReviewEvent {
+  if (threshold === 'never') return 'COMMENT';
+  const floor = SEVERITY_RANK[threshold];
+  for (const c of comments) {
+    if (SEVERITY_RANK[c.severity] >= floor) return 'REQUEST_CHANGES';
+  }
+  return 'COMMENT';
+}
+
 export type ReviewPayload = {
   readonly comments: ReadonlyArray<InlineComment>;
   readonly summary: string;
   readonly state: ReviewState;
+  /**
+   * GitHub review event. Optional for back-compat: when omitted, the
+   * GitHub adapter falls back to `'COMMENT'` (the v0.1 behavior).
+   * Other adapters (e.g. CodeCommit) ignore the field — CodeCommit
+   * does not have an equivalent merge-blocking review state on the
+   * comment API.
+   */
+  readonly event?: ReviewEvent;
 };
 
 /**

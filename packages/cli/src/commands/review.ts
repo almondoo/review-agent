@@ -99,6 +99,7 @@ export async function runReviewCommand(
       language: config.language,
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
       minConfidence: config.reviews.min_confidence,
+      requestChangesOn: config.reviews.request_changes_on,
     },
     provider,
   );
@@ -233,6 +234,7 @@ async function postOrUpdate(
     comments: result.comments,
     summary: result.summary,
     state,
+    event: result.reviewEvent,
   });
   await vcs.upsertStateComment(ref, state);
 }

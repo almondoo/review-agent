@@ -1,4 +1,4 @@
-import { CONFIDENCES } from '@review-agent/core';
+import { CONFIDENCES, REQUEST_CHANGES_THRESHOLDS } from '@review-agent/core';
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from './languages.js';
 
@@ -55,6 +55,14 @@ const ReviewsSchema = z
     // post only the model's strongest findings. Comments emitted
     // without a confidence field are treated as `'high'`.
     min_confidence: z.enum(CONFIDENCES).default('low'),
+    // Severity threshold at which the GitHub adapter switches the
+    // review event from `COMMENT` to `REQUEST_CHANGES`. Default
+    // `'critical'` matches the conservative "block on critical only"
+    // semantic. Set to `'major'` to also block on `major` findings
+    // (e.g. when wiring this into a branch-protection rule on a
+    // release branch), or `'never'` to disable the mapping entirely
+    // (every review posts `COMMENT`, regardless of severity).
+    request_changes_on: z.enum(REQUEST_CHANGES_THRESHOLDS).default('critical'),
   })
   .strict();
 

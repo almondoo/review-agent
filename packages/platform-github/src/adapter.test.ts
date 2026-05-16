@@ -259,7 +259,7 @@ describe('getFile', () => {
 });
 
 describe('postReview', () => {
-  it('uses bulk createReview with state-bearing summary', async () => {
+  it('uses bulk createReview with state-bearing summary, defaulting to event=COMMENT when none supplied', async () => {
     const createReview = vi.fn(async () => ({ data: { id: 1 } }));
     const vcs = createGithubVCS({
       token: 't',
@@ -290,6 +290,48 @@ describe('postReview', () => {
     expect(args.body).toContain('<!-- review-agent-state:');
     expect(args.comments).toHaveLength(1);
     expect(args.comments[0]?.line).toBe(1);
+  });
+
+  it('forwards `REQUEST_CHANGES` to createReview when the runner sets it on the payload', async () => {
+    const createReview = vi.fn(async () => ({ data: { id: 2 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 'Found critical issues.',
+      comments: [
+        {
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'SQL injection',
+          severity: 'critical',
+          fingerprint: 'fp2',
+        },
+      ],
+      state: validState,
+      event: 'REQUEST_CHANGES',
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { event: string };
+    expect(args.event).toBe('REQUEST_CHANGES');
+  });
+
+  it('falls back to COMMENT when payload.event is explicitly undefined (back-compat)', async () => {
+    const createReview = vi.fn(async () => ({ data: { id: 3 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 's',
+      comments: [],
+      state: validState,
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { event: string };
+    expect(args.event).toBe('COMMENT');
   });
 });
 
