@@ -1,0 +1,10 @@
+--- a/src/api/throttle.ts
++++ b/src/api/throttle.ts
+@@ -1,7 +1,7 @@
+ export function shouldThrottle(requestCount: number): boolean {
+-  return requestCount > MAX_REQUESTS_PER_MINUTE;
++  return requestCount > 60;
+ }
+
+-const MAX_REQUESTS_PER_MINUTE = 60;
++const MAX_REQUESTS_PER_MINUTE_DEPRECATED = 60;

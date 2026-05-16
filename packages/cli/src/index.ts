@@ -1,3 +1,13 @@
+export {
+  type AuditExportOpts,
+  type AuditExportResult,
+  auditExportCommand,
+} from './commands/audit-export.js';
+export {
+  type AuditPruneOpts,
+  type AuditPruneResult,
+  auditPruneCommand,
+} from './commands/audit-prune.js';
 export { type RunEvalOpts, type RunEvalResult, runEvalCommand } from './commands/eval.js';
 export {
   type RecoverSyncStateOpts,

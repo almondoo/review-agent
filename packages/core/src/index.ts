@@ -8,6 +8,7 @@ export {
   canonicalPayload,
   computeAuditHash,
   verifyAuditChain,
+  verifyAuditChainSegment,
 } from './audit.js';
 export {
   COST_THRESHOLDS,
@@ -33,6 +34,7 @@ export {
   ToolDispatchRefusedError,
 } from './errors.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
+export { globToRegExp, isValidGlob } from './glob.js';
 export {
   type ApplyLineShiftInput,
   type ComputeDiffStrategyDeps,
@@ -59,24 +61,39 @@ export {
   type QueueClient,
 } from './queue.js';
 export {
+  CATEGORIES,
+  type Category,
+  CONFIDENCES,
   COST_LEDGER_PHASES,
   COST_LEDGER_STATUSES,
+  type Confidence,
   type CostLedgerPhase,
   type CostLedgerRow,
   type CostLedgerStatus,
+  computeReviewEvent,
+  formatCategoryRollup,
   type InlineComment,
+  REQUEST_CHANGES_THRESHOLDS,
+  REVIEW_EVENTS,
+  type RequestChangesThreshold,
+  type ReviewEvent,
   type ReviewPayload,
   type ReviewState,
   SEVERITIES,
   type Severity,
   SIDES,
   type Side,
+  WORKSPACE_STRATEGIES,
+  type WorkspaceStrategy,
 } from './review.js';
 export {
   type InlineCommentInput,
   InlineCommentSchema,
+  REVIEW_STATE_SCHEMA_VERSION,
   type ReviewOutputInput,
   ReviewOutputSchema,
+  type ReviewStateInput,
+  ReviewStateSchema,
 } from './schemas.js';
 export type {
   CloneOpts,

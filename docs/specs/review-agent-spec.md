@@ -77,7 +77,7 @@ Build a self-hostable, OSS, AI code review agent that:
 | License | Apache 2.0 | Same as PR-Agent. |
 | Default deploy example | AWS Lambda + Terraform | Plus docker-compose for self-host. |
 | Sandbox | Docker container only | No gVisor / Firecracker. Tool whitelist enforced in our runner; LLM cannot invoke tools outside `read_file` / `glob` / `grep`. |
-| LLM client | Vercel AI SDK (`ai`) ^4.x | Provider-agnostic. Used for `generateObject` (structured output), `generateText`, tool use. |
+| LLM client | Vercel AI SDK (`ai`) ^5.x | Provider-agnostic. Agent loop calls `generateText({ tools, stopWhen: stepCountIs(MAX_TOOL_CALLS), experimental_output: Output.object({ schema: ReviewOutputSchema }) })` so the LLM can invoke `read_file` / `glob` / `grep` and still emit Zod-validated structured output (§11.2, §7.3). |
 | Provider drivers | `@ai-sdk/anthropic` ^1.x, `@ai-sdk/openai` ^1.x, `@ai-sdk/google` ^1.x, `@ai-sdk/azure` ^1.x | Plus `@ai-sdk/openai-compatible` for Ollama/vLLM/OpenRouter/LM Studio. |
 | Default provider | `anthropic` | User-configurable in `.review-agent.yml`. |
 | Default model (per provider) | Claude: `claude-sonnet-4-6`. OpenAI: `gpt-4o`. Azure OpenAI: configured deployment name. Google: `gemini-2.0-pro`. Vertex: `gemini-2.0-pro`. OpenAI-compatible: required user input. | Configurable. Fallback chain (intent: availability/rate-limit, not cost): provider-specific. See §2.1. |
@@ -219,10 +219,22 @@ startup.
 1. Compose system prompt: profile + skills + path_instructions + language directive.
 2. Compose user prompt: PR metadata wrapped in `<untrusted>...</untrusted>` +
    diff (with `[REDACTED]` blocks if gitleaks matched).
-3. Call `generateObject` with a Zod-defined `ReviewOutputSchema`.
-4. If the model needs to read files, the schema includes a `tool_calls` field;
-   handle locally in `packages/runner/src/tools.ts` (only `read_file`, `glob`,
-   `grep` exposed; arguments validated; results fed back).
+3. Call `generateText({ model, tools, stopWhen: stepCountIs(MAX_TOOL_CALLS),
+   experimental_output: Output.object({ schema: ReviewOutputSchema }), messages })`.
+   The AI SDK drives the tool-use loop: at each step the model may invoke
+   `read_file` / `glob` / `grep`, the runner's tool wrappers execute the
+   call against the workspace, and the result is fed back into the next
+   step. The final step emits a Zod-validated structured object via
+   `experimental_output`. `MAX_TOOL_CALLS = 20` (`packages/runner/src/tools.ts`)
+   bounds the step count both as a cost guard and as a DoS hardening against
+   runaway tool use; the total tool-call count is surfaced on the
+   `ReviewOutput.toolCalls` field for cost-guard accounting.
+4. Tools are constructed by `createAiSdkToolset({ workspace, onCall })` in
+   `packages/runner/src/tools.ts`. The wrappers delegate to the underlying
+   `createTools` dispatcher so every call still runs the path-validation,
+   deny-list, symlink, and ReDoS guards described in §7.3 / §7.4. The
+   AI-SDK driver never sees tool names outside the `{read_file, glob, grep}`
+   whitelist.
 5. Validate output. Retry once on schema violation with corrective prompt.
 6. Apply dedup, post comments, update state.
 
@@ -317,6 +329,24 @@ Enforced via Biome import restrictions (`organizeImports` + custom rule).
 - Verifies signature (§7), enqueues to SQS, returns 2xx within 10s.
 - Worker process: separate Lambda function or separate Node process. Polls SQS,
   runs review, posts comments.
+- **Workspace provisioning (v1.1)**: the worker calls
+  `provisionWorkspace({ strategy, vcs, diff, ref })` before
+  `runReview` to materialise a per-job ephemeral tmpdir whose layout
+  matches the runner's `read_file` / `glob` / `grep` tool root. Three
+  strategies (operator-selected via `server.workspace_strategy`):
+  - `'none'` — preserves v0.2 / v1.0 behaviour (diff-only review, no
+    file tools usable in Server mode).
+  - `'contents-api'` — pure Octokit; fetches each changed file via
+    `vcs.getFile` and mirrors into tmpdir. Lambda-friendly (no `git`
+    binary required).
+  - `'sparse-clone'` — `git clone --depth 1 --filter=blob:none
+    --sparse` scoped to changed-path parent dirs. Requires `git` in
+    the image; highest fidelity for multi-file tool use.
+  The provisioner applies the same denylist as the runner's tool
+  dispatcher (8 patterns including `.env*`, `secrets/`, `*.pem`,
+  `.aws/credentials`) BEFORE bytes hit disk; cleanup is idempotent
+  with `rm -rf` semantics in a `try/finally`. See `docs/deployment/aws.md`
+  §8.1 for the trade-off table.
 
 ### 4.3 CLI (`packages/cli`)
 
@@ -559,7 +589,10 @@ project decision). Can be added later if contributors request it.
                    │ - skills composed as        │
                    │   prompt fragments          │
                    │ - Zod-validated structured  │
-                   │   output (generateObject)   │
+                   │   output via generateText   │
+                   │   experimental_output       │
+                   │ - stopWhen stepCountIs(20)  │
+                   │   bounds tool-call steps    │
                    └─────────────────────────────┘
                             │
                             ▼ (9) Post
@@ -822,6 +855,18 @@ content. Treat injection as inevitable and design for damage containment.
    refuses any tool name not in the whitelist, regardless of what the LLM
    requests. This is provider-agnostic.
 
+   The AI-SDK call shape is fixed (`packages/llm/src/provider-base.ts` and the
+   bespoke `anthropic.ts` / `openai.ts` drivers): every provider invokes
+   `generateText({ model, tools: createAiSdkToolset({...}),
+   stopWhen: stepCountIs(MAX_TOOL_CALLS), experimental_output:
+   Output.object({ schema: ReviewOutputSchema }), messages })`. Each tool
+   wrapper's `execute` delegates to the underlying `createTools` dispatcher,
+   so the path-validation / deny-list / symlink / ReDoS guards run before
+   any data is handed back to the LLM. `MAX_TOOL_CALLS` (default 20) bounds
+   the agent-loop step count both as a cost guard and as a DoS hardening
+   against runaway tool use; the total tool-call count is surfaced on
+   `ReviewOutput.toolCalls` for cost-guard accounting.
+
 2. **Input wrapping (mandatory).** Before composing the user prompt, wrap PR
    metadata (title, body, existing review comments, commit messages) in
    `<untrusted>...</untrusted>` tags. The system prompt includes:
@@ -1013,8 +1058,51 @@ export const ReviewOutputSchema = z.object({
 });
 ```
 
-Anything failing validation is dropped with a Langfuse error span. The agent retries
-once with a "your previous output was malformed; produce valid output" prompt.
+#### 7.7.1 v1.1 schema extensions (additive, all optional)
+
+The v1.1 wave (`develop`, 2026-05-16) added three optional fields to
+`InlineCommentSchema` and a Zod schema for the hidden state comment:
+
+- `category?: 'bug' | 'security' | 'performance' | 'maintainability' | 'style' | 'docs' | 'test'` — operator-facing taxonomy.
+- `confidence?: 'high' | 'medium' | 'low'` — model self-assessment. Operators set a floor via `reviews.min_confidence`; comments strictly below are dropped after dedup. Unset defaults to `'high'`.
+- `ruleId?: string` (`/^[a-z][a-z0-9-]+$/`, max 64 chars) — stable identifier used as the dedup-fingerprint key in preference to severity. Fixes the same-line-same-severity collision the pre-v1.1 fingerprint had.
+
+The schema enforces one cross-field invariant via `.refine`:
+**`category: 'style'` must use at most `severity: 'minor'`**. The same
+rule is repeated in the system prompt for the model, but the Zod
+schema is the hard backstop.
+
+`ReviewStateSchema` (new, exported from `@review-agent/core`)
+validates the hidden state comment with refined types: schemaVersion
+literal, 40-hex SHA regexes on `lastReviewedSha` / `baseSha`,
+non-negative tokens/cost, 16-hex regex on each `commentFingerprints`
+entry, `reviewedAt` as ISO 8601 datetime, `modelUsed` length 1..128.
+On any validation failure the parser returns `null` (drops previous
+state, forces full re-review) and emits a `StateParseEvent` callback
+so the action / CLI layer can wire `state_schema_mismatch` audit
+events without coupling `platform-github` to `db`.
+
+Anything failing the output validation is dropped with a Langfuse error
+span. The agent retries once with a "your previous output was
+malformed; produce valid output" prompt.
+
+#### 7.7.2 Severity → review event mapping (v1.1)
+
+`computeReviewEvent(comments, threshold)` in `@review-agent/core` is
+the pure function that derives the GitHub review event from the
+**post-dedup, post-confidence-filter, post-redaction** comment list:
+
+| `reviews.request_changes_on` | Effect |
+|---|---|
+| `'critical'` (default) | Any `severity: 'critical'` → `REQUEST_CHANGES`. Otherwise `COMMENT`. |
+| `'major'` | Any `severity: 'critical'` or `'major'` → `REQUEST_CHANGES`. Otherwise `COMMENT`. |
+| `'never'` | Always `COMMENT`. |
+
+The function never returns `'APPROVE'` — the agent does not approve
+PRs. The GitHub adapter's `postReview` reads `payload.event` (defaults
+to `'COMMENT'` when unset for back-compat); CodeCommit drops the field
+because it has no native merge-blocking review state. Branch-protection
+wiring instructions are in `SECURITY.md`.
 
 ---
 
@@ -1288,11 +1376,17 @@ reviews:
   path_instructions:                   # per-path agent instructions
     - path: "**/*.go"
       instructions: "errors are checked, defer for cleanup, t.Helper() in test helpers"
+      auto_fetch:                      # v1.1; budget = 5 files / 50 KB each / 250 KB total
+        tests: true                    # default true
+        types: true                    # default true
+        siblings: false                # default false (opt-in; high noise on dense dirs)
     - path: "**/*.tsx"
       instructions: "no any, prefer type imports, hooks rules"
   max_files: 50
   max_diff_lines: 3000
   ignore_authors: ["dependabot[bot]", "renovate[bot]"]
+  min_confidence: low                  # v1.1; high | medium | low (default: low - post everything)
+  request_changes_on: critical         # v1.1; critical | major | never (default: critical)
 
 cost:
   max_usd_per_pr: 1.0
@@ -1319,6 +1413,9 @@ skills:
 
 incremental:
   enabled: true                        # default. Set false to always full-review.
+
+server:                                # v1.1; Server / CLI mode only
+  workspace_strategy: none             # none | contents-api | sparse-clone (default: none)
 ```
 
 ### 10.2 Precedence (highest → lowest)
@@ -1523,6 +1620,44 @@ export async function computeDiffStrategy(
 ```
 
 Then `git diff <since>..<headSha>` gives the incremental scope.
+
+#### 12.2.1 Wiring (action / server / cli)
+
+Every call site that drives a review (currently `packages/action/src/run.ts`
+in v0.1 GitHub-Action mode; `packages/cli/src/commands/review.ts` and a
+future `packages/server/*` worker handler in v0.2+) MUST gate the
+`vcs.getDiff` call on the result of `computeDiffStrategy`:
+
+```ts
+const previousState = await vcs.getStateComment(ref);
+const strategy = await computeDiffStrategy(workspaceDir, previousState, {
+  baseSha: pr.baseSha,
+  headSha: pr.headSha,
+});
+const incremental = strategy !== 'full';
+
+if (previousState && strategy === 'full') {
+  // merge-base shifted or lastReviewedSha unreachable: rebase / force-push.
+  log('rebase detected', { previousSha: previousState.lastReviewedSha, ... });
+}
+
+const diff = incremental
+  ? await vcs.getDiff(ref, { sinceSha: strategy.since })
+  : await vcs.getDiff(ref);
+```
+
+When `incremental` is true, the runner also receives `incrementalContext: true`
++ `incrementalSinceSha` on `ReviewJob`, which `composeSystemPrompt` then
+materializes as an `## Incremental review` section instructing the LLM to
+scope its review to the new commits only. The previous review's
+`commentFingerprints` flow through `previousState` into a
+`## Previously raised findings` section so the LLM has the prior coverage
+signal in addition to the dedup post-filter (§12.3).
+
+On rebase fallback (previous state exists but `computeDiffStrategy` returns
+`'full'`), call sites emit a `'rebase detected'` log line with the previous
+and current heads. GitHub-Action mode writes to stdout (visible in the run
+log); server mode routes through OTel + `audit_log` (§§ 13, 16.4).
 
 ### 12.3 Dedup of repeated findings
 

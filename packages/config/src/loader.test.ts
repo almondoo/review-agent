@@ -61,6 +61,59 @@ describe('loadConfigFromYaml — explicit values', () => {
     expect(cfg.reviews.path_instructions[0]?.path).toBe('**/*.go');
   });
 
+  it('rejects a path_instructions entry whose `path` is not a valid glob', () => {
+    // `src/utils/\*.ts` has an unbalanced escape inside the glob — the
+    // runner's tool dispatcher and the config schema share the same
+    // tiny glob compiler, so the typo should fail at config load
+    // time rather than silently never match at runtime. The current
+    // glob compiler is permissive on most strings, so we use a NUL
+    // byte to trip the "must not contain a NUL byte" branch as a
+    // robust signal that the validator is actually running.
+    const NUL = String.fromCharCode(0);
+    const yaml = `reviews:\n  path_instructions:\n    - path: "src/${NUL}.ts"\n      instructions: "ok"\n`;
+    expect(() => loadConfigFromYaml(yaml)).toThrow(ConfigError);
+  });
+
+  it('rejects an empty `path` on path_instructions', () => {
+    expect(() =>
+      loadConfigFromYaml(
+        'reviews:\n  path_instructions:\n    - path: ""\n      instructions: "ok"\n',
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it('parses path_instructions[*].auto_fetch with explicit fields', () => {
+    const cfg = loadConfigFromYaml(
+      [
+        'reviews:',
+        '  path_instructions:',
+        '    - path: "src/**/*.ts"',
+        '      instructions: "strict types"',
+        '      auto_fetch:',
+        '        tests: true',
+        '        types: false',
+        '        siblings: true',
+        '',
+      ].join('\n'),
+    );
+    expect(cfg.reviews.path_instructions[0]?.auto_fetch).toEqual({
+      tests: true,
+      types: false,
+      siblings: true,
+    });
+  });
+
+  it('omits auto_fetch when not supplied (no default object is injected)', () => {
+    const cfg = loadConfigFromYaml(
+      'reviews:\n  path_instructions:\n    - path: "**/*.go"\n      instructions: "x"\n',
+    );
+    // auto_fetch is intentionally optional (`undefined`) rather than
+    // a default object — operators who don't set it get the runner's
+    // built-in defaults, not a Zod-defaulted shape that locks in a
+    // schema-versioned representation.
+    expect(cfg.reviews.path_instructions[0]?.auto_fetch).toBeUndefined();
+  });
+
   it('rejects negative cost cap', () => {
     expect(() => loadConfigFromYaml('cost:\n  max_usd_per_pr: -1\n')).toThrow(ConfigError);
   });
@@ -69,6 +122,25 @@ describe('loadConfigFromYaml — explicit values', () => {
     const cfg = loadConfigFromYaml('');
     expect(cfg.coordination.other_bots).toBe('ignore');
     expect(cfg.coordination.other_bots_logins).toEqual([]);
+  });
+
+  it("defaults reviews.min_confidence to 'low' (post everything)", () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.reviews.min_confidence).toBe('low');
+  });
+
+  it("parses reviews.min_confidence: 'medium'", () => {
+    const cfg = loadConfigFromYaml('reviews:\n  min_confidence: medium\n');
+    expect(cfg.reviews.min_confidence).toBe('medium');
+  });
+
+  it("parses reviews.min_confidence: 'high'", () => {
+    const cfg = loadConfigFromYaml('reviews:\n  min_confidence: high\n');
+    expect(cfg.reviews.min_confidence).toBe('high');
+  });
+
+  it('rejects an unknown reviews.min_confidence value', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  min_confidence: certain\n')).toThrow(ConfigError);
   });
 
   it('parses coordination.other_bots: defer_if_present + custom logins', () => {
@@ -81,6 +153,27 @@ describe('loadConfigFromYaml — explicit values', () => {
 
   it('rejects unknown coordination.other_bots mode', () => {
     expect(() => loadConfigFromYaml('coordination:\n  other_bots: ask_first\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it("defaults server.workspace_strategy to 'none' (v0.2 behavior)", () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.server.workspace_strategy).toBe('none');
+  });
+
+  it("parses server.workspace_strategy: 'contents-api'", () => {
+    const cfg = loadConfigFromYaml('server:\n  workspace_strategy: contents-api\n');
+    expect(cfg.server.workspace_strategy).toBe('contents-api');
+  });
+
+  it("parses server.workspace_strategy: 'sparse-clone'", () => {
+    const cfg = loadConfigFromYaml('server:\n  workspace_strategy: sparse-clone\n');
+    expect(cfg.server.workspace_strategy).toBe('sparse-clone');
+  });
+
+  it('rejects an unknown server.workspace_strategy value', () => {
+    expect(() => loadConfigFromYaml('server:\n  workspace_strategy: docker\n')).toThrow(
       ConfigError,
     );
   });

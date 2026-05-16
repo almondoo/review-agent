@@ -18,6 +18,15 @@ export type PR = {
   readonly headRef: string;
   readonly draft: boolean;
   readonly labels: ReadonlyArray<string>;
+  /**
+   * Latest commit messages on the PR head, oldest → newest. Surfaced
+   * to the LLM via `<commits>` in the `<untrusted>` wrapper so it
+   * can read author intent across a multi-commit PR. Adapters MUST
+   * cap the list (head-N latest commits, each ≤ N KB) to bound
+   * prompt cost on rebased PRs with hundreds of commits.
+   * Empty array when the platform does not expose commit listings.
+   */
+  readonly commitMessages: ReadonlyArray<{ readonly sha: string; readonly message: string }>;
   readonly createdAt: string;
   readonly updatedAt: string;
 };

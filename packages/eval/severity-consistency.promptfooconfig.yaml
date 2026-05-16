@@ -1,0 +1,132 @@
+description: review-agent severity-consistency evaluation (#68)
+
+prompts:
+  - file://prompts/review-system.md
+
+providers:
+  - id: anthropic:messages:claude-sonnet-4-6
+    config:
+      apiKey: ${ANTHROPIC_API_KEY}
+      temperature: 0.0
+
+# Each fixture is run 3 times so the post-processor can compute a modal
+# severity + stability score. promptfoo's `repeat` invokes the same test
+# block N times against the same provider+prompt; the run-level results
+# end up in the JSON output that `scripts/severity-consistency.ts`
+# consumes.
+defaultTest:
+  vars:
+    profile: chill
+  options:
+    repeat: 3
+
+# For each fixture we run the agent and assert (per-run) that:
+#   - the response is valid review JSON (parse succeeds)
+#   - at least one comment is emitted (silent runs fail the per-fixture
+#     check in the scoring post-processor)
+#   - the highest-severity comment's severity is within the fixture's
+#     [severity_min, severity_max] band
+# The cross-run stability check + aggregate score is computed by
+# `pnpm score:severity-consistency`.
+tests:
+  - description: "01 — SQL injection (expect: critical, range major..critical)"
+    vars:
+      diff: file://fixtures/severity-calibration/01-sql-injection-critical/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['major', 'critical']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const max = comments.reduce((acc, c) => {
+              const order = ['info', 'minor', 'major', 'critical'];
+              return order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc;
+            }, comments[0].severity);
+            return allowed.has(max);
+          })()
+
+  - description: "02 — path traversal (expect: critical, range major..critical)"
+    vars:
+      diff: file://fixtures/severity-calibration/02-path-traversal-critical/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['major', 'critical']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const order = ['info', 'minor', 'major', 'critical'];
+            const max = comments.reduce((acc, c) =>
+              order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc,
+              comments[0].severity);
+            return allowed.has(max);
+          })()
+
+  - description: "03 — missing await (expect: major, range minor..major)"
+    vars:
+      diff: file://fixtures/severity-calibration/03-missing-await-major/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['minor', 'major']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const order = ['info', 'minor', 'major', 'critical'];
+            const max = comments.reduce((acc, c) =>
+              order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc,
+              comments[0].severity);
+            return allowed.has(max);
+          })()
+
+  - description: "04 — off-by-one (expect: major, range minor..major)"
+    vars:
+      diff: file://fixtures/severity-calibration/04-off-by-one-major/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['minor', 'major']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const order = ['info', 'minor', 'major', 'critical'];
+            const max = comments.reduce((acc, c) =>
+              order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc,
+              comments[0].severity);
+            return allowed.has(max);
+          })()
+
+  - description: "05 — magic number (expect: minor, range info..minor)"
+    vars:
+      diff: file://fixtures/severity-calibration/05-magic-number-minor/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['info', 'minor']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const order = ['info', 'minor', 'major', 'critical'];
+            const max = comments.reduce((acc, c) =>
+              order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc,
+              comments[0].severity);
+            return allowed.has(max);
+          })()
+
+  - description: "06 — debug-log leftover (expect: info, range info..minor)"
+    vars:
+      diff: file://fixtures/severity-calibration/06-debug-log-info/diff.txt
+    assert:
+      - type: javascript
+        value: |
+          (function () {
+            const allowed = new Set(['info', 'minor']);
+            const comments = (output && output.comments) || [];
+            if (comments.length === 0) return false;
+            const order = ['info', 'minor', 'major', 'critical'];
+            const max = comments.reduce((acc, c) =>
+              order.indexOf(c.severity) > order.indexOf(acc) ? c.severity : acc,
+              comments[0].severity);
+            return allowed.has(max);
+          })()

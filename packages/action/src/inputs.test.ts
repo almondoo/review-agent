@@ -39,4 +39,35 @@ describe('parseInputs', () => {
       parseInputs({ 'github-token': 't', 'anthropic-api-key': '' }).anthropicApiKey,
     ).toBeNull();
   });
+
+  it('defaults state-write-retries to 3', () => {
+    expect(parseInputs({ 'github-token': 't' }).stateWriteRetries).toBe(3);
+  });
+
+  it('parses an explicit state-write-retries within [0, 5]', () => {
+    expect(parseInputs({ 'github-token': 't', 'state-write-retries': '0' }).stateWriteRetries).toBe(
+      0,
+    );
+    expect(parseInputs({ 'github-token': 't', 'state-write-retries': '5' }).stateWriteRetries).toBe(
+      5,
+    );
+  });
+
+  it('rejects state-write-retries outside [0, 5]', () => {
+    expect(() => parseInputs({ 'github-token': 't', 'state-write-retries': '-1' })).toThrow(
+      /state-write-retries/,
+    );
+    expect(() => parseInputs({ 'github-token': 't', 'state-write-retries': '6' })).toThrow(
+      /state-write-retries/,
+    );
+  });
+
+  it('rejects non-integer state-write-retries', () => {
+    expect(() => parseInputs({ 'github-token': 't', 'state-write-retries': '2.5' })).toThrow(
+      /state-write-retries/,
+    );
+    expect(() => parseInputs({ 'github-token': 't', 'state-write-retries': 'abc' })).toThrow(
+      /state-write-retries/,
+    );
+  });
 });

@@ -184,6 +184,114 @@ ambitious gets a dedicated `docs/migrations/<topic>.md`.
 
 ---
 
+## From 1.0 → 1.1
+
+v1.1 is a **minor** bump — every change below is backwards-compatible.
+Existing `.review-agent.yml` files keep working byte-for-byte; existing
+`runReview` / `wrapUntrusted` / `postReview` call sites continue to
+compile without arg changes (the new parameters are optional). Operators
+who want the new behaviour opt in via the config keys / action inputs /
+CLI subcommands listed below.
+
+Includes v1.0.1 (#59, #60) — both architectural gaps from the v1.0
+multi-agent audit landed in the same wave as v1.1 features; there is no
+separate v1.0.1 release-line.
+
+### 1. New optional config keys (`.review-agent.yml` v1)
+
+| Key | Default | Section |
+|---|---|---|
+| `reviews.min_confidence` | `'low'` (post everything) | `'high'` / `'medium'` / `'low'` — drops comments strictly below the floor. Comments without a `confidence` field are treated as `'high'`. See [`docs/configuration/review-output.md`](docs/configuration/review-output.md). |
+| `reviews.request_changes_on` | `'critical'` | `'critical'` / `'major'` / `'never'` — chooses the severity floor at which the GitHub review event flips from `COMMENT` to `REQUEST_CHANGES`. Wiring instructions for branch protection are in [`SECURITY.md`](SECURITY.md). |
+| `reviews.path_instructions[i].auto_fetch` | unset (no auto-fetch) | `{ tests?: bool; types?: bool; siblings?: bool }` — pre-fetches related files when a changed path matches the instruction's `path` glob. Defaults if the key is present: `tests=true, types=true, siblings=false`. Budgeted at 5 files / 50 KB each / 250 KB total. See [`docs/configuration/path-instructions.md`](docs/configuration/path-instructions.md). |
+| `server.workspace_strategy` | `'none'` (preserves v0.2 / v1.0 behaviour) | `'none'` / `'contents-api'` / `'sparse-clone'` — provisions a per-job ephemeral workspace in Server mode so the LLM's file tools have files to read. See [`docs/deployment/aws.md`](docs/deployment/aws.md) §8.1. |
+
+`reviews.path_instructions[i].path` is now validated as a glob at config
+load — typos like `src/utils/\*.ts` are rejected with a clear error
+instead of silently never matching.
+
+### 2. New GitHub Action input
+
+| Input | Default | Description |
+|---|---|---|
+| `state-write-retries` | `'3'` | Integer in `[0, 5]`. Retries on 429 + 5xx of `vcs.postReview` and `vcs.upsertStateComment` with exp-backoff 1s / 3s / 9s; non-429 4xx is not retried. `0` = fail-fast (single attempt). On exhaustion of the state-comment write the action fails with `State comment write failed after N retries; next review will be a full re-review.` so the next push doesn't silently re-review the whole PR. |
+
+### 3. New CLI subcommands
+
+| Subcommand | Purpose |
+|---|---|
+| `review-agent audit export --installation N --since YYYY-MM-DD [--until ...] --output file.jsonl.gz` | Gzipped JSONL export of `audit_log` + `cost_ledger` for the installation. Pre-export verifies the HMAC chain; refuses to write a tainted archive. |
+| `review-agent audit prune --before YYYY-MM-DD [--confirm]` | Dry-run by default; `--confirm` actually deletes rows older than the boundary. Keeps the most-recent row before the boundary as the new chain anchor; re-verifies the segment post-delete and exits non-zero on chain break. |
+
+**Required DB role**: the audit CLI does not wrap its queries in
+`withTenant(...)`. Run it under an RLS-bypass role (the migrations
+superuser or a dedicated `review_agent_admin`); an `appRole`
+connection silently returns zero rows. Documented in
+[`docs/operations/retention.md`](docs/operations/retention.md).
+
+### 4. Schema additions (backwards-compatible)
+
+| Schema | Added | Notes |
+|---|---|---|
+| `InlineCommentSchema` (`@review-agent/core`) | `category?` (enum), `confidence?` (`'high'`/`'medium'`/`'low'`), `ruleId?` (kebab-case, ≤ 64 chars) | All optional; old reviews validate unchanged. `.refine` enforces the cross-field invariant `category='style'` → `severity` ≤ `'minor'`. |
+| `ReviewStateSchema` (`@review-agent/core`, new export) | Replaces the shallow `isReviewState` type guard. SHA / fingerprint regexes, nonnegative tokens / cost, datetime validation. | Corrupted state comments now log + drop instead of silently feeding stale baseSha into dedup. |
+| `PR.commitMessages` (`@review-agent/core`) | `ReadonlyArray<{ sha; message }>` | GitHub adapter populates via `pulls.listCommits` (last page only — single API call on typical PRs, max 2). CodeCommit returns `[]`. Bounded at 20 commits × 5000 chars per message. |
+| `ReviewPayload.event?` (`@review-agent/core`) | `'COMMENT' \| 'REQUEST_CHANGES' \| 'APPROVE'` | Optional; defaults to `'COMMENT'` for back-compat. `postReview` honours it on GitHub; CodeCommit drops it. |
+
+### 5. New public exports
+
+The following identifiers are now part of the SemVer-stable public API
+surface:
+
+- `@review-agent/core`: `computeReviewEvent`, `REVIEW_EVENTS`,
+  `ReviewEvent`, `REQUEST_CHANGES_THRESHOLDS`, `RequestChangesThreshold`,
+  `CATEGORIES`, `Category`, `CONFIDENCES`, `Confidence`,
+  `formatCategoryRollup`, `ReviewStateSchema`,
+  `REVIEW_STATE_SCHEMA_VERSION`, `WORKSPACE_STRATEGIES`,
+  `WorkspaceStrategy`, `verifyAuditChainSegment`,
+  `globToRegExp`, `isValidGlob`.
+- `@review-agent/runner`: `MAX_TOOL_CALLS`, `createAiSdkToolset`,
+  `collectAutoFetchContext`. The `renderRelatedFiles` helper that
+  briefly existed during the wave was removed before release —
+  callers should pass auto-fetched files to `wrapUntrusted(meta,
+  relatedFiles)` instead, which places `<related_files>` inside the
+  trust envelope.
+- `@review-agent/server`: `provisionWorkspace`,
+  `ProvisionWorkspaceDeps`, `ProvisionWorkspaceInput`,
+  `WorkspaceHandle`, `WorkspaceStrategy`.
+
+### 6. Behaviour changes operators may notice
+
+- **The 2nd+ review of a PR sends only the incremental diff** to the
+  LLM (issue #60). The action now logs `'incremental review'` /
+  `'rebase detected'` lines so operators can see which path each
+  review took.
+- **The LLM may call `read_file` / `glob` / `grep` during review**
+  (issue #59), bounded by `MAX_TOOL_CALLS = 20` and the existing
+  deny-list. Cost-guard accounting now includes tool calls; expect
+  modestly higher `result.tokensUsed` on PRs that benefit from
+  multi-file context.
+- **The `<untrusted>` wrapper now includes `<base_branch>`,
+  `<labels>`, and `<commits>`** alongside title/body/author. The
+  system prompt instructs the model that labels are operator hints
+  (never directives) and commit messages must never be executed as
+  instructions.
+- **Server mode**: with `workspace_strategy: 'none'` (default), Server
+  reviews continue to see only the diff text. Opt into
+  `'contents-api'` (pure Octokit, Lambda-friendly) or `'sparse-clone'`
+  (requires `git` binary in the image) to materialise a per-job
+  ephemeral workspace.
+
+### 7. Detection
+
+Most additions are silent opt-ins. The one detection point: if your
+operator has an `.review-agent.yml` linter pinned to v1.0's JSON
+Schema, it will reject new keys until you regenerate the schema via
+`pnpm --filter @review-agent/config generate-schema` (or simply pull
+the latest `schema/v1.json`).
+
+---
+
 ## From 0.x → 1.0
 
 _v1.0 is the first SemVer-stable release. There is no source

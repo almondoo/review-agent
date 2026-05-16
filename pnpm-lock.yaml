@@ -93,6 +93,9 @@ importers:
       '@review-agent/core':
         specifier: workspace:*
         version: link:../core
+      '@review-agent/db':
+        specifier: workspace:*
+        version: link:../db
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm
@@ -230,12 +233,24 @@ importers:
         specifier: 3.25.76
         version: 3.25.76
     devDependencies:
+      '@types/node':
+        specifier: 24.0.0
+        version: 24.0.0
+      '@vitest/coverage-v8':
+        specifier: 3.2.4
+        version: 3.2.4(vitest@3.2.4(@types/debug@4.1.13)(@types/node@24.0.0)(lightningcss@1.32.0)(tsx@4.19.2)(yaml@2.8.3))
       promptfoo:
         specifier: 0.96.0
         version: 0.96.0(65ac2384f62ca551c116b06e93f351b3)
       tsx:
         specifier: 4.19.2
         version: 4.19.2
+      typescript:
+        specifier: 5.6.3
+        version: 5.6.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@24.0.0)(lightningcss@1.32.0)(tsx@4.19.2)(yaml@2.8.3)
 
   packages/kms-aws:
     dependencies:
@@ -402,6 +417,9 @@ importers:
       '@review-agent/llm':
         specifier: workspace:*
         version: link:../llm
+      ai:
+        specifier: 5.0.183
+        version: 5.0.183(zod@3.25.76)
       zod:
         specifier: 3.25.76
         version: 3.25.76

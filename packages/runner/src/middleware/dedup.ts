@@ -38,7 +38,13 @@ export function dedupComments(result: ReviewOutput, opts: DedupOptions = {}): De
 }
 
 function ruleIdFor(c: ReviewOutputComment): string {
-  return c.severity;
+  // Prefer the model-supplied ruleId when present — it's the stable
+  // taxonomy id (e.g. `sql-injection`, `null-deref`) that distinguishes
+  // two findings on the same line at the same severity. Fall back to
+  // severity for back-compat with reviews emitted before ruleId existed:
+  // collisions are still possible in the fallback path, but no worse
+  // than the prior behavior.
+  return c.ruleId ?? c.severity;
 }
 
 function defaultSuggestionType(c: ReviewOutputComment): string {

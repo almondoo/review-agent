@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { InlineCommentSchema, ReviewOutputSchema } from './schemas.js';
+import {
+  InlineCommentSchema,
+  REVIEW_STATE_SCHEMA_VERSION,
+  ReviewOutputSchema,
+  ReviewStateSchema,
+} from './schemas.js';
 
 const validComment = {
   path: 'src/auth.ts',
@@ -120,6 +125,133 @@ describe('InlineCommentSchema', () => {
       InlineCommentSchema.safeParse({ ...validComment, suggestion: 'x'.repeat(5001) }).success,
     ).toBe(false);
   });
+
+  it('accepts comment without category (optional)', () => {
+    const { category: _, ...withoutCategory } = { ...validComment, category: undefined };
+    expect(InlineCommentSchema.safeParse(withoutCategory).success).toBe(true);
+  });
+
+  it('accepts each known category value', () => {
+    for (const category of [
+      'bug',
+      'security',
+      'performance',
+      'maintainability',
+      'style',
+      'docs',
+      'test',
+    ] as const) {
+      const severity = category === 'style' ? 'minor' : 'major';
+      expect(InlineCommentSchema.safeParse({ ...validComment, severity, category }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it('rejects unknown category value', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'correctness' }).success,
+    ).toBe(false);
+  });
+
+  it("rejects category='style' with severity='major'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'major' })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects category='style' with severity='critical'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'critical' })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts category='style' with severity='minor'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'minor' })
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts category='style' with severity='info'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'info' })
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts category='security' with severity='critical' (no cap on non-style)", () => {
+    expect(
+      InlineCommentSchema.safeParse({
+        ...validComment,
+        category: 'security',
+        severity: 'critical',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts comment without confidence (optional)', () => {
+    expect(InlineCommentSchema.safeParse(validComment).success).toBe(true);
+  });
+
+  it("accepts each confidence value ('high', 'medium', 'low')", () => {
+    for (const confidence of ['high', 'medium', 'low'] as const) {
+      expect(InlineCommentSchema.safeParse({ ...validComment, confidence }).success).toBe(true);
+    }
+  });
+
+  it('rejects unknown confidence value', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, confidence: 'very-high' }).success,
+    ).toBe(false);
+  });
+
+  it('accepts comment without ruleId (optional)', () => {
+    expect(InlineCommentSchema.safeParse(validComment).success).toBe(true);
+  });
+
+  it('accepts a well-formed ruleId', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'sql-injection' }).success,
+    ).toBe(true);
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'unused-var' }).success).toBe(
+      true,
+    );
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'null-deref-2' }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects ruleId not matching /^[a-z][a-z0-9-]+$/', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'SQL-INJECTION' }).success,
+    ).toBe(false);
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: '1-leading-digit' }).success,
+    ).toBe(false);
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'has_underscore' }).success,
+    ).toBe(false);
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'has space' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects single-character ruleId (length min)', () => {
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'a' }).success).toBe(false);
+  });
+
+  it('rejects ruleId longer than 64 chars', () => {
+    const tooLong = `r${'a'.repeat(64)}`;
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: tooLong }).success).toBe(false);
+  });
+
+  it('accepts ruleId at the 64-char boundary', () => {
+    const exact = `r${'a'.repeat(63)}`;
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: exact }).success).toBe(true);
+  });
 });
 
 describe('ReviewOutputSchema', () => {
@@ -173,5 +305,110 @@ describe('ReviewOutputSchema', () => {
         comments: [{ ...validComment, body: '@everyone' }],
       }).success,
     ).toBe(false);
+  });
+});
+
+const validState = {
+  schemaVersion: REVIEW_STATE_SCHEMA_VERSION,
+  lastReviewedSha: '0123456789abcdef0123456789abcdef01234567',
+  baseSha: 'fedcba9876543210fedcba9876543210fedcba98',
+  reviewedAt: '2026-04-30T10:00:00.000Z',
+  modelUsed: 'claude-sonnet-4-6',
+  totalTokens: 12_345,
+  totalCostUsd: 0.45,
+  commentFingerprints: ['0123456789abcdef', 'fedcba9876543210'],
+};
+
+describe('ReviewStateSchema', () => {
+  it('accepts a well-formed state', () => {
+    expect(ReviewStateSchema.safeParse(validState).success).toBe(true);
+  });
+
+  it('accepts state with empty commentFingerprints array', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, commentFingerprints: [] }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects negative totalCostUsd', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalCostUsd: -0.01 }).success).toBe(false);
+  });
+
+  it('rejects negative totalTokens', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalTokens: -1 }).success).toBe(false);
+  });
+
+  it('rejects fractional totalTokens', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalTokens: 1.5 }).success).toBe(false);
+  });
+
+  it('rejects lastReviewedSha that is not a 40-char hex SHA', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, lastReviewedSha: 'abc' }).success).toBe(
+      false,
+    );
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        lastReviewedSha: 'GHIJKL6789abcdef0123456789abcdef01234567',
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        lastReviewedSha: '0123456789ABCDEF0123456789ABCDEF01234567',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects baseSha that is not a 40-char hex SHA', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, baseSha: 'def' }).success).toBe(false);
+  });
+
+  it('rejects schemaVersion mismatch (future v2)', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, schemaVersion: 2 }).success).toBe(false);
+  });
+
+  it('rejects schemaVersion as a non-numeric type', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, schemaVersion: '1' }).success).toBe(false);
+  });
+
+  it('rejects missing commentFingerprints', () => {
+    const { commentFingerprints: _, ...withoutFingerprints } = validState;
+    expect(ReviewStateSchema.safeParse(withoutFingerprints).success).toBe(false);
+  });
+
+  it('rejects commentFingerprints with the wrong shape', () => {
+    expect(
+      ReviewStateSchema.safeParse({ ...validState, commentFingerprints: ['short'] }).success,
+    ).toBe(false);
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        commentFingerprints: ['0123456789ABCDEF'],
+      }).success,
+    ).toBe(false);
+    expect(ReviewStateSchema.safeParse({ ...validState, commentFingerprints: [42] }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects non-ISO reviewedAt strings', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, reviewedAt: 'yesterday' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects empty modelUsed', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, modelUsed: '' }).success).toBe(false);
+  });
+
+  it('rejects modelUsed longer than 128 chars', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, modelUsed: 'm'.repeat(129) }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects unknown extra fields (strict mode)', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, extra: 'oops' }).success).toBe(false);
   });
 });

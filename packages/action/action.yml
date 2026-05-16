@@ -26,6 +26,15 @@ inputs:
     description: Per-PR cost cap in USD. Defaults to 1.0.
     required: false
     default: '1.0'
+  state-write-retries:
+    description: >-
+      Number of retries (on top of the first attempt) for the hidden state-comment write
+      and the inline-review write. On transient failures (HTTP 429 or 5xx) the action retries
+      with exponential backoff (1s, 3s, 9s). Other 4xx errors are not retried. If the budget is
+      exhausted the action fails so the operator notices. Range 0-5; default 3 (i.e. up to 4
+      total attempts). Set 0 for fail-fast (a single attempt with no retry).
+    required: false
+    default: '3'
 
 outputs:
   posted-comments:

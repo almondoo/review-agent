@@ -1,5 +1,15 @@
 export { runReview } from './agent.js';
 export {
+  type AutoFetchBudget,
+  type AutoFetchedFile,
+  type AutoFetchOptions,
+  type AutoFetchResult,
+  type CollectAutoFetchInput,
+  collectAutoFetchContext,
+  DEFAULT_AUTO_FETCH_BUDGET,
+  type PathInstructionWithFetch,
+} from './auto-fetch.js';
+export {
   COORDINATION_MODES,
   type CoordinationDecision,
   type CoordinationDecisionInput,
@@ -74,8 +84,12 @@ export {
 } from './skill-loader.js';
 export { type BuildStateInput, buildReviewState } from './state-builder.js';
 export {
+  type AiSdkToolSet,
+  type AiSdkToolsOptions,
+  createAiSdkToolset,
   createTools,
   dispatchTool,
+  MAX_TOOL_CALLS,
   TOOL_NAMES,
   type ToolDeps,
   type ToolName,

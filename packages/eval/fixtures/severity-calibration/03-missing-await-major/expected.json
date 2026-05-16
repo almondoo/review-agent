@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "missing-await",
+  "language": "TypeScript",
+  "severity_min": "minor",
+  "severity_max": "major",
+  "severity_modal": "major",
+  "must_contain_any": ["await", "promise", "async", "fire-and-forget", "unhandled"],
+  "rationale": "Removed an `await` on an audit-log call. The promise is now unhandled — if the audit sink rejects (DB down, throttled), the rejection is swallowed and we silently lose the audit record for placed orders. Modal severity `major` (correctness defect with observability cost), floor `minor` (some teams treat audit-log as best-effort), ceiling `major` — never critical (no exploit), never info."
+}

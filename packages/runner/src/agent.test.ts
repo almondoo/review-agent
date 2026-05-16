@@ -3,10 +3,11 @@ import {
   SchemaValidationError,
   SecretLeakAbortedError,
 } from '@review-agent/core';
-import type { LlmProvider, ReviewOutput } from '@review-agent/llm';
+import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
 import type { GitleaksFinding } from './gitleaks.js';
+import { MAX_TOOL_CALLS } from './tools.js';
 import type { ReviewJob } from './types.js';
 
 const baseJob: ReviewJob = {
@@ -272,6 +273,62 @@ describe('runReview — secret-leak post-scan', () => {
   });
 });
 
+describe('runReview — min_confidence filter (#69)', () => {
+  it('keeps all comments when minConfidence defaults to "low"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'low' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview(baseJob, provider);
+    expect(result.comments).toHaveLength(2);
+  });
+
+  it('drops "low" comments when minConfidence is "medium"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'low' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview({ ...baseJob, minConfidence: 'medium' }, provider);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.confidence).toBe('high');
+  });
+
+  it('drops "medium" + "low" when minConfidence is "high"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'medium' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview({ ...baseJob, minConfidence: 'high' }, provider);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('treats comments without a confidence field as "high"', async () => {
+    // Back-compat: a legacy review with no confidence field must not
+    // be silently dropped when an operator sets minConfidence: 'high'.
+    const provider = makeProvider();
+    const result = await runReview({ ...baseJob, minConfidence: 'high' }, provider);
+    expect(result.comments).toHaveLength(2);
+  });
+});
+
 describe('runReview — dedup against previousState', () => {
   it('drops comments whose fingerprint is already in previousState', async () => {
     const provider = makeProvider();
@@ -290,5 +347,171 @@ describe('runReview — dedup against previousState', () => {
     const secondRun = await runReview({ ...baseJob, previousState }, provider);
     expect(secondRun.comments).toHaveLength(0);
     expect(secondRun.droppedDuplicates).toBe(2);
+  });
+});
+
+describe('runReview — tool exposure (#59)', () => {
+  it('passes an AI-SDK tool set with read_file / glob / grep to the provider', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    await runReview(baseJob, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.tools).toBeDefined();
+    const names = Object.keys(callArgs?.tools ?? {});
+    expect(names).toEqual(expect.arrayContaining(['read_file', 'glob', 'grep']));
+  });
+
+  it('bounds tool calls per review via maxToolCalls = MAX_TOOL_CALLS', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    await runReview(baseJob, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.maxToolCalls).toBe(MAX_TOOL_CALLS);
+  });
+
+  it('counts at least one read_file tool call when the LLM invokes it during the review', async () => {
+    // Integration scenario: the diff references a function defined
+    // elsewhere; a tool-using LLM looks it up via read_file before
+    // producing the final review. The fake provider mimics that by
+    // calling the wired-in tool through its `execute` hook.
+    const diffText =
+      'diff --git a/src/caller.ts b/src/caller.ts\n@@ -1 +1 @@\n+import { helper } from "./helper";\n+helper();';
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async (input: ReviewInput) => {
+      const readFile = (input.tools as Record<string, { execute: (args: unknown) => unknown }>)
+        ?.read_file;
+      // Exercise the AI-SDK tool surface end-to-end: the provider
+      // would normally drive these calls; here the fake provider
+      // does so directly so the assertion below holds without a
+      // real model in the loop.
+      try {
+        await readFile?.execute({ path: 'src/helper.ts' });
+      } catch {
+        // The default tools.read_file resolves against the
+        // workspace dir which is a non-existent tmp path in this
+        // test; we don't need the read to succeed, only to be
+        // *attempted*. The onCall hook fires before any fs IO.
+      }
+      return validOutput;
+    });
+    const provider = makeProvider({ generateReview });
+    const result = await runReview({ ...baseJob, diffText }, provider);
+    expect(result.toolCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  it('reports zero tool calls when the LLM produces output without using tools', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(result.toolCalls).toBe(0);
+  });
+});
+
+describe('runReview — reviewEvent mapping (#65)', () => {
+  const criticalOutput: ReviewOutput = {
+    summary: 'Critical finding.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'SQL injection on req.params.id',
+        severity: 'critical',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+  const majorOnlyOutput: ReviewOutput = {
+    summary: 'One major.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'Missing await.',
+        severity: 'major',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+  const minorOnlyOutput: ReviewOutput = {
+    summary: 'Style only.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'Unused import.',
+        severity: 'minor',
+      },
+    ],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+
+  it('defaults to threshold=critical when job.requestChangesOn is not set', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const result = await runReview(baseJob, provider);
+    expect(result.reviewEvent).toBe('REQUEST_CHANGES');
+  });
+
+  it('emits COMMENT when comments contain only majors at threshold=critical', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => majorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'critical' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('emits REQUEST_CHANGES when comments contain a major at threshold=major', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => majorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'major' }, provider);
+    expect(result.reviewEvent).toBe('REQUEST_CHANGES');
+  });
+
+  it('emits COMMENT at threshold=never even with a critical present', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'never' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('emits COMMENT when all comments are minor', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => minorOnlyOutput),
+    });
+    const result = await runReview({ ...baseJob, requestChangesOn: 'critical' }, provider);
+    expect(result.reviewEvent).toBe('COMMENT');
+  });
+
+  it('computes against the *kept* comment list (post-dedup), not the LLM output', async () => {
+    // First run posts both critical + minor; second run with previousState
+    // containing both fingerprints drops everything → reviewEvent must
+    // be COMMENT (no critical left to request changes on).
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => criticalOutput),
+    });
+    const firstRun = await runReview(baseJob, provider);
+    expect(firstRun.reviewEvent).toBe('REQUEST_CHANGES');
+
+    const previousState = {
+      schemaVersion: 1 as const,
+      lastReviewedSha: 'old',
+      baseSha: 'b',
+      reviewedAt: 'r',
+      modelUsed: 'm',
+      totalTokens: 0,
+      totalCostUsd: 0,
+      commentFingerprints: firstRun.comments.map((c) => c.fingerprint),
+    };
+    const secondRun = await runReview({ ...baseJob, previousState }, provider);
+    expect(secondRun.comments).toHaveLength(0);
+    expect(secondRun.reviewEvent).toBe('COMMENT');
   });
 });

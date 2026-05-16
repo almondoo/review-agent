@@ -1,5 +1,5 @@
 import { ReviewOutputSchema } from '@review-agent/core';
-import { generateObject } from 'ai';
+import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { getEncoding } from 'js-tiktoken';
 import { type ModelPrice, priceForModel } from './pricing.js';
 import type { ErrorClassification, LlmProvider, ReviewInput, ReviewOutput } from './types.js';
@@ -8,13 +8,20 @@ export type ProviderPricing = Readonly<Record<string, ModelPrice>>;
 
 const DEFAULT_TEMPERATURE = 0.2;
 const FALLBACK_CHARS_PER_TOKEN = 4;
+/**
+ * Default upper bound on agent-loop steps when `ReviewInput.maxToolCalls`
+ * is not set. Mirrors `MAX_TOOL_CALLS` in `@review-agent/runner` —
+ * duplicated here so the llm package has no dependency on the runner.
+ */
+const DEFAULT_MAX_TOOL_CALLS = 20;
 
-export type GenerateObjectFn = typeof generateObject;
+export type GenerateTextFn = typeof generateText;
 export type Tokenizer = (text: string) => number;
 
 // Each driver hands us a small "describe-the-provider" object; this
-// module owns the boilerplate (generateObject call, pricing, tokenize
-// fallback, prompt composition).
+// module owns the boilerplate (generateText call with tools +
+// experimental_output, pricing, tokenize fallback, prompt
+// composition).
 export type ProviderShape<TModelArg> = {
   /** Display name returned on the LlmProvider. */
   readonly name: string;
@@ -22,12 +29,12 @@ export type ProviderShape<TModelArg> = {
   readonly pricing: ProviderPricing;
   /** Provider-specific error classifier. */
   readonly classifyError: (err: unknown) => ErrorClassification;
-  /** Builds the AI-SDK `LanguageModel` (or whatever the SDK calls it) for `generateObject`. */
+  /** Builds the AI-SDK `LanguageModel` for the request. */
   readonly modelForRequest: (model: string) => TModelArg;
 };
 
 export type ProviderDriverDeps = {
-  readonly generate?: GenerateObjectFn;
+  readonly generate?: GenerateTextFn;
   readonly tokenize?: Tokenizer;
 };
 
@@ -65,6 +72,24 @@ export function composeUserPrompt(input: ReviewInput): string {
   ].join('\n');
 }
 
+/**
+ * Counts the total number of tool calls a `generateText` result
+ * recorded across all agent-loop steps. Defensive against the steps
+ * array (or individual `toolCalls` arrays) being absent — some
+ * providers / SDK versions omit the field when no tools fired.
+ */
+export function countToolCalls(result: unknown): number {
+  if (typeof result !== 'object' || result === null) return 0;
+  const steps = (result as { steps?: ReadonlyArray<{ toolCalls?: ReadonlyArray<unknown> }> }).steps;
+  if (!Array.isArray(steps)) return 0;
+  let total = 0;
+  for (const step of steps) {
+    const calls = step?.toolCalls;
+    if (Array.isArray(calls)) total += calls.length;
+  }
+  return total;
+}
+
 // Generic driver factory shared by every provider. Each provider's
 // own file becomes a thin shim that builds the `ProviderShape` plus
 // validates / extracts its specific config fields.
@@ -73,7 +98,7 @@ export function createGenericProvider<TModelArg>(
   model: string,
   deps: ProviderDriverDeps = {},
 ): LlmProvider {
-  const generate = deps.generate ?? generateObject;
+  const generate = deps.generate ?? generateText;
   const tokenize = deps.tokenize ?? tryLoadTiktoken() ?? approximateTokens;
 
   return {
@@ -81,17 +106,23 @@ export function createGenericProvider<TModelArg>(
     model,
     generateReview: async (input: ReviewInput): Promise<ReviewOutput> => {
       const userPrompt = composeUserPrompt(input);
+      const tools = (input.tools ?? {}) as ToolSet;
+      const maxSteps = input.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
       const result = await generate({
-        model: shape.modelForRequest(model) as Parameters<GenerateObjectFn>[0]['model'],
-        schema: ReviewOutputSchema,
+        model: shape.modelForRequest(model) as Parameters<GenerateTextFn>[0]['model'],
+        tools,
+        stopWhen: stepCountIs(maxSteps),
+        experimental_output: Output.object({ schema: ReviewOutputSchema }),
         messages: [
           { role: 'system', content: input.systemPrompt },
           { role: 'user', content: userPrompt },
         ],
         temperature: DEFAULT_TEMPERATURE,
       });
-      const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } })
-        .usage ?? { inputTokens: 0, outputTokens: 0 };
+      const usage =
+        (result as { totalUsage?: { inputTokens?: number; outputTokens?: number } }).totalUsage ??
+        (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage ??
+        {};
       const inputTokens = usage.inputTokens ?? 0;
       const outputTokens = usage.outputTokens ?? 0;
       const price = priceForModel(shape.pricing, model);
@@ -100,14 +131,15 @@ export function createGenericProvider<TModelArg>(
         (outputTokens / 1_000_000) * price.outputPerMTok;
       const data = (
         result as {
-          object: { comments: ReviewOutput['comments']; summary: string };
+          experimental_output: { comments: ReviewOutput['comments']; summary: string };
         }
-      ).object;
+      ).experimental_output;
       return {
         comments: data.comments,
         summary: data.summary,
         tokensUsed: { input: inputTokens, output: outputTokens },
         costUsd,
+        toolCalls: countToolCalls(result),
       };
     },
     estimateCost: async (

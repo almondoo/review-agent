@@ -94,6 +94,13 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
       headRef: target?.sourceReference ?? '',
       draft: false,
       labels: [],
+      // CodeCommit's PullRequest payload does not include commit
+      // messages, and there is no listCommits-equivalent on the
+      // pull request itself; we'd need GetCommit per sha after
+      // walking the source-branch history, which is too expensive
+      // to do unconditionally. Return empty for now; a follow-up
+      // can wire GetCommit if operators ask for it.
+      commitMessages: [],
       createdAt: pr.creationDate?.toISOString() ?? new Date(0).toISOString(),
       updatedAt: pr.lastActivityDate?.toISOString() ?? new Date(0).toISOString(),
     };
@@ -147,6 +154,11 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
 
   const postReview = async (ref: PRRef, review: ReviewPayload): Promise<void> => {
     ensureCodeCommit(ref);
+    // `review.event` is honored by the GitHub adapter to drive
+    // `REQUEST_CHANGES`; CodeCommit has no equivalent merge-blocking
+    // review state on the comment API, so we intentionally drop it
+    // here. Operators wanting merge-blocking on CodeCommit must wire
+    // it via approval rules in CodeCommit itself.
     const pr = await getPR(ref);
     if (review.summary) {
       await client.send(

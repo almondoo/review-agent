@@ -1,4 +1,6 @@
 import { Command, Option } from 'commander';
+import { auditExportCommand } from './commands/audit-export.js';
+import { auditPruneCommand } from './commands/audit-prune.js';
 import { runEvalCommand } from './commands/eval.js';
 import { recoverSyncStateCommand } from './commands/recover.js';
 import { runReviewCommand } from './commands/review.js';
@@ -99,6 +101,46 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'manual' || result.status === 'api_ok' ? 0 : 1);
     });
 
+  const audit = program
+    .command('audit')
+    .description('audit_log + cost_ledger retention helpers (spec §13.3).');
+
+  audit
+    .command('export')
+    .description(
+      'Export audit_log + cost_ledger rows for an installation/date range as gzipped JSONL.',
+    )
+    .requiredOption('--installation <id>', 'GitHub App installation ID', (v) => BigInt(v))
+    .requiredOption('--since <date>', 'inclusive lower bound (YYYY-MM-DD or full ISO 8601)')
+    .option('--until <date>', 'inclusive upper bound (YYYY-MM-DD or full ISO 8601)')
+    .requiredOption('--output <path>', 'output file path (`.jsonl.gz` by convention)')
+    .action(async (opts: AuditExportCliOpts) => {
+      const result = await auditExportCommand(io, {
+        installationId: opts.installation,
+        since: opts.since,
+        ...(opts.until !== undefined ? { until: opts.until } : {}),
+        output: opts.output,
+        env,
+      });
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  audit
+    .command('prune')
+    .description(
+      'Delete audit_log + cost_ledger rows older than --before. Preserves chain integrity via an anchor row.',
+    )
+    .requiredOption('--before <date>', 'inclusive upper bound (YYYY-MM-DD or full ISO 8601)')
+    .option('--confirm', 'actually delete (default is dry run)', false)
+    .action(async (opts: AuditPruneCliOpts) => {
+      const result = await auditPruneCommand(io, {
+        before: opts.before,
+        confirm: !!opts.confirm,
+        env,
+      });
+      io.exit(result.status === 'ok' || result.status === 'dry_run' ? 0 : 1);
+    });
+
   const recover = program
     .command('recover')
     .description('Disaster-recovery commands (spec §8.6.6).');
@@ -146,6 +188,18 @@ type SetupWorkspaceCliOpts = {
   api?: boolean;
   name?: string;
   spendCapUsd?: number;
+};
+
+type AuditExportCliOpts = {
+  installation: bigint;
+  since: string;
+  until?: string;
+  output: string;
+};
+
+type AuditPruneCliOpts = {
+  before: string;
+  confirm?: boolean;
 };
 
 export type { ProgramIo } from './io.js';

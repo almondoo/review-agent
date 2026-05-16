@@ -1,0 +1,10 @@
+--- a/src/api/orders.ts
++++ b/src/api/orders.ts
+@@ -3,6 +3,7 @@ import { db } from '../db/client.js';
+
+ export async function fetchOrder(req: Request): Promise<Response> {
+   const id = new URL(req.url).searchParams.get('id') ?? '';
++  console.log('[debug] fetchOrder id=', id);
+   const order = await db.orders.findById(id);
+   if (!order) return new Response('not found', { status: 404 });
+   return Response.json(order);

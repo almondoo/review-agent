@@ -1,3 +1,9 @@
+import {
+  CONFIDENCES,
+  isValidGlob,
+  REQUEST_CHANGES_THRESHOLDS,
+  WORKSPACE_STRATEGIES,
+} from '@review-agent/core';
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from './languages.js';
 
@@ -31,10 +37,37 @@ const AutoReviewSchema = z
   })
   .strict();
 
+// Per-instruction auto-fetch options (`reviews.path_instructions[*].auto_fetch`).
+// When the diff touches a file matching the instruction's `path`
+// glob, the runner pre-fetches related files via the workspace
+// tools so the LLM has the right context without spending tool-call
+// budget asking for them. Defaults: tests=true, types=true, siblings=false.
+//
+// Sibling fetch is opt-in because "sibling files" can be a lot of
+// noise on dense directories — operators should turn it on only
+// after a path_instruction proves it actually needs it.
+const AutoFetchSchema = z
+  .object({
+    tests: z.boolean().default(true),
+    types: z.boolean().default(true),
+    siblings: z.boolean().default(false),
+  })
+  .strict();
+
 const PathInstructionSchema = z
   .object({
-    path: z.string().min(1),
+    // The `path` field is a glob pattern. We compile it via
+    // `globToRegExp` (the same compiler the runner's tool dispatcher
+    // uses) so a typo like `src/utils/\*.ts` fails at load time
+    // instead of silently never matching. `.refine` runs after the
+    // base string-length check so the error path is empty-string →
+    // length error, otherwise glob-syntax error.
+    path: z.string().min(1).refine(isValidGlob, {
+      message:
+        'must be a valid glob pattern (`*` within a segment, `**` across segments, no NUL bytes)',
+    }),
     instructions: z.string().min(1),
+    auto_fetch: AutoFetchSchema.optional(),
   })
   .strict();
 
@@ -48,6 +81,20 @@ const ReviewsSchema = z
     ignore_authors: z
       .array(z.string().min(1))
       .default(['dependabot[bot]', 'renovate[bot]', 'github-actions[bot]']),
+    // Suppress comments whose model-reported confidence is strictly
+    // below this threshold. Default `'low'` means "post everything";
+    // operators tighten to `'medium'` to drop hunches or `'high'` to
+    // post only the model's strongest findings. Comments emitted
+    // without a confidence field are treated as `'high'`.
+    min_confidence: z.enum(CONFIDENCES).default('low'),
+    // Severity threshold at which the GitHub adapter switches the
+    // review event from `COMMENT` to `REQUEST_CHANGES`. Default
+    // `'critical'` matches the conservative "block on critical only"
+    // semantic. Set to `'major'` to also block on `major` findings
+    // (e.g. when wiring this into a branch-protection rule on a
+    // release branch), or `'never'` to disable the mapping entirely
+    // (every review posts `COMMENT`, regardless of severity).
+    request_changes_on: z.enum(REQUEST_CHANGES_THRESHOLDS).default('critical'),
   })
   .strict();
 
@@ -77,6 +124,23 @@ const RepoSchema = z
 const IncrementalSchema = z
   .object({
     enabled: z.boolean().default(true),
+  })
+  .strict();
+
+// Server-mode workspace provisioning. Only consulted by
+// `@review-agent/server`'s `provisionWorkspace` — Action mode ignores
+// this section (the GitHub Actions runner does `actions/checkout`
+// before the Action runs, so the worktree is already present).
+//
+// `workspace_strategy` defaults to `'none'` so existing Server
+// deployments (v0.2 era) keep working without operator action. To
+// turn on the read_file / glob / grep tools in Server mode, operators
+// must opt in to `'contents-api'` (cheap, no shell deps) or
+// `'sparse-clone'` (richer, requires `git` in the Lambda image).
+// See `docs/deployment/aws.md` for the trade-off.
+const ServerSchema = z
+  .object({
+    workspace_strategy: z.enum(WORKSPACE_STRATEGIES).default('none'),
   })
   .strict();
 
@@ -128,6 +192,7 @@ export const ConfigSchema = z
     skills: z.array(z.string().min(1)).default([]),
     incremental: IncrementalSchema.default({}),
     coordination: CoordinationSchema.default({}),
+    server: ServerSchema.default({}),
   })
   .strict();
 

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Severity-calibration fixture index (#68). Each fixture has a ground-truth severity range. The eval driver runs the agent N=3 times per fixture and asserts (a) modal-severity stability ≥ 2/3, (b) every run within [severity_min, severity_max]. CI compares the resulting severity_consistency_score against baseline.json with a 5pp regression gate.",
+  "n_runs_per_fixture": 3,
+  "stability_threshold": 0.66,
+  "fixtures": [
+    {
+      "id": "01-sql-injection-critical",
+      "category": "security",
+      "expected_severity_modal": "critical"
+    },
+    {
+      "id": "02-path-traversal-critical",
+      "category": "security",
+      "expected_severity_modal": "critical"
+    },
+    {
+      "id": "03-missing-await-major",
+      "category": "bug",
+      "expected_severity_modal": "major"
+    },
+    {
+      "id": "04-off-by-one-major",
+      "category": "bug",
+      "expected_severity_modal": "major"
+    },
+    {
+      "id": "05-magic-number-minor",
+      "category": "maintainability",
+      "expected_severity_modal": "minor"
+    },
+    {
+      "id": "06-debug-log-info",
+      "category": "style",
+      "expected_severity_modal": "info"
+    }
+  ]
+}

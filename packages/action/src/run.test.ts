@@ -1,8 +1,8 @@
 import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
-import type { LlmProvider } from '@review-agent/llm';
+import type { LlmProvider, ReviewInput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import type { ActionInputs } from './inputs.js';
-import { runAction } from './run.js';
+import { type RunActionDeps, runAction } from './run.js';
 
 const inputs: ActionInputs = {
   githubToken: 'gh_token',
@@ -10,7 +10,13 @@ const inputs: ActionInputs = {
   language: 'en-US',
   configPath: '.review-agent.yml',
   costCapUsd: 1.0,
+  stateWriteRetries: 3,
 };
+
+// Inject a no-op sleep across every test so retry backoffs don't pay
+// real wall-clock time. The retry helper itself has dedicated tests
+// in retry.test.ts that exercise the real backoff schedule.
+const noSleep = async (_ms: number) => undefined;
 
 const ref: PRRef = { platform: 'github', owner: 'o', repo: 'r', number: 1 };
 
@@ -25,6 +31,7 @@ const samplePR: PR = {
   headRef: 'feat',
   draft: false,
   labels: [],
+  commitMessages: [],
   createdAt: '',
   updatedAt: '',
 };
@@ -218,6 +225,237 @@ describe('runAction', () => {
     );
     expect(result.skipped).toBe(true);
     expect(result.skipReason).toContain('acme-internal-reviewer[bot]');
+  });
+
+  it('runs a full diff on the first review (no previous state) and does NOT pass sinceSha', async () => {
+    const vcs = makeVCS({ getStateComment: vi.fn(async () => null) });
+    const computeDiffStrategy = vi.fn<RunActionDeps['computeDiffStrategy'] & object>(
+      async () => 'full',
+    );
+    const logger = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        computeDiffStrategy,
+        logger,
+      },
+    );
+    expect(computeDiffStrategy).toHaveBeenCalledTimes(1);
+    expect(computeDiffStrategy.mock.calls[0]?.[1]).toBeNull();
+    const getDiffMock = vcs.getDiff as ReturnType<typeof vi.fn>;
+    expect(getDiffMock).toHaveBeenCalledTimes(1);
+    expect(getDiffMock.mock.calls[0]?.[1]).toBeUndefined();
+    // No 'rebase detected' since there was no previous state.
+    expect(logger.mock.calls.find((c) => c[0] === 'rebase detected')).toBeUndefined();
+  });
+
+  it('runs an incremental diff (sinceSha) on a 2nd review when lastReviewedSha is reachable', async () => {
+    const previousState: ReviewState = {
+      schemaVersion: 1,
+      lastReviewedSha: 'prevHead',
+      baseSha: 'B',
+      reviewedAt: '2026-05-01T00:00:00Z',
+      modelUsed: 'claude-sonnet-4-6',
+      totalTokens: 1234,
+      totalCostUsd: 0.01,
+      commentFingerprints: ['abc1', 'def2'],
+    };
+    const vcs = makeVCS({ getStateComment: vi.fn(async () => previousState) });
+    const computeDiffStrategy = vi.fn<RunActionDeps['computeDiffStrategy'] & object>(async () => ({
+      since: 'prevHead',
+    }));
+    const logger = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    const provider = makeProvider();
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        computeDiffStrategy,
+        logger,
+      },
+    );
+    const getDiffMock = vcs.getDiff as ReturnType<typeof vi.fn>;
+    expect(getDiffMock).toHaveBeenCalledWith(ref, { sinceSha: 'prevHead' });
+    // The runner-side prompt section is wired via ReviewJob.incrementalContext;
+    // verify the LLM-facing systemPrompt actually carries the section.
+    const generateMock = provider.generateReview as ReturnType<typeof vi.fn>;
+    const reviewInput = generateMock.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(reviewInput?.systemPrompt).toContain('## Incremental review');
+    expect(reviewInput?.systemPrompt).toContain('since commit `prevHead`');
+    expect(reviewInput?.systemPrompt).toContain('## Previously raised findings');
+    // 'incremental review' line, not 'rebase detected'.
+    expect(logger.mock.calls.map((c) => c[0])).toContain('incremental review');
+    expect(logger.mock.calls.map((c) => c[0])).not.toContain('rebase detected');
+  });
+
+  it('falls back to a full diff and logs "rebase detected" when lastReviewedSha is unreachable', async () => {
+    const previousState: ReviewState = {
+      schemaVersion: 1,
+      lastReviewedSha: 'orphanedHead',
+      baseSha: 'B',
+      reviewedAt: '2026-05-01T00:00:00Z',
+      modelUsed: 'claude-sonnet-4-6',
+      totalTokens: 0,
+      totalCostUsd: 0,
+      commentFingerprints: [],
+    };
+    const vcs = makeVCS({ getStateComment: vi.fn(async () => previousState) });
+    // Rebase / force-push: computeDiffStrategy returns 'full' even
+    // though previousState exists.
+    const computeDiffStrategy = vi.fn<RunActionDeps['computeDiffStrategy'] & object>(
+      async () => 'full',
+    );
+    const logger = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    const provider = makeProvider();
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        computeDiffStrategy,
+        logger,
+      },
+    );
+    const getDiffMock = vcs.getDiff as ReturnType<typeof vi.fn>;
+    expect(getDiffMock).toHaveBeenCalledTimes(1);
+    expect(getDiffMock.mock.calls[0]?.[1]).toBeUndefined();
+    expect(logger).toHaveBeenCalledWith(
+      'rebase detected',
+      expect.objectContaining({ previousSha: 'orphanedHead', headSha: 'H' }),
+    );
+    // No incremental-context section in the prompt on the fallback path.
+    const generateMock = provider.generateReview as ReturnType<typeof vi.fn>;
+    const reviewInput = generateMock.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(reviewInput?.systemPrompt).not.toContain('## Incremental review');
+  });
+
+  it('retries upsertStateComment on 5xx and fails-loud after the configured budget', async () => {
+    const log = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    const upsertStateComment = vi.fn(async () => {
+      // Always throw a 503; with stateWriteRetries=2 that's 3 total
+      // attempts, all of which fail → retry budget exhausted.
+      throw Object.assign(new Error('service unavailable'), { status: 503 });
+    });
+    const vcs = makeVCS({ upsertStateComment });
+    await expect(
+      runAction(
+        { ...inputs, stateWriteRetries: 2 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => makeProvider(),
+          logger: log,
+          sleep: noSleep,
+        },
+      ),
+    ).rejects.toThrow(/State comment write failed after 2 retries/);
+    // 2 retries = 3 total attempts.
+    expect(upsertStateComment).toHaveBeenCalledTimes(3);
+    // The fail-loud log includes the operator-facing warning + the
+    // underlying error message captured from the last attempt.
+    const messages = log.mock.calls.map((c) => c[0]);
+    expect(messages).toContain(
+      'State comment write failed after 2 retries; next review will be a full re-review.',
+    );
+    expect(messages.filter((m) => m.includes('vcs.upsertStateComment: attempt'))).toHaveLength(2);
+  });
+
+  it('does NOT retry upsertStateComment on a non-retriable 4xx (404)', async () => {
+    const log = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    const upsertStateComment = vi.fn(async () => {
+      // 404 → permissions / not-found, retrying won't help.
+      throw Object.assign(new Error('not found'), { status: 404 });
+    });
+    const vcs = makeVCS({ upsertStateComment });
+    await expect(
+      runAction(
+        { ...inputs, stateWriteRetries: 5 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => makeProvider(),
+          logger: log,
+          sleep: noSleep,
+        },
+      ),
+    ).rejects.toThrow(/State comment write failed/);
+    // Single attempt; no retries on 404 regardless of budget.
+    expect(upsertStateComment).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries postReview on transient 5xx and succeeds before exhausting the budget', async () => {
+    const log = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    let postCall = 0;
+    const postReview = vi.fn(async () => {
+      postCall += 1;
+      if (postCall < 3) {
+        throw Object.assign(new Error('502'), { status: 502 });
+      }
+      // 3rd attempt succeeds.
+    });
+    const vcs = makeVCS({ postReview });
+    const result = await runAction(
+      { ...inputs, stateWriteRetries: 3 },
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        logger: log,
+        sleep: noSleep,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(postReview).toHaveBeenCalledTimes(3);
+    expect(vcs.upsertStateComment).toHaveBeenCalledTimes(1);
+  });
+
+  it('with stateWriteRetries=0, runs a single attempt and fails on first error', async () => {
+    const log = vi.fn<NonNullable<RunActionDeps['logger']>>();
+    const upsertStateComment = vi.fn(async () => {
+      throw Object.assign(new Error('service down'), { status: 503 });
+    });
+    const vcs = makeVCS({ upsertStateComment });
+    await expect(
+      runAction(
+        { ...inputs, stateWriteRetries: 0 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => makeProvider(),
+          logger: log,
+          sleep: noSleep,
+        },
+      ),
+    ).rejects.toThrow(/State comment write failed after 0 retries/);
+    // 0 retries = 1 total attempt (no retry on failure).
+    expect(upsertStateComment).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces cost-cap violations as a thrown error and posts no comments', async () => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SEVERITIES, SIDES } from './review.js';
+import { CATEGORIES, CONFIDENCES, SEVERITIES, SIDES } from './review.js';
 
 const PATH_MAX = 500;
 const BODY_MAX = 5000;
@@ -7,9 +7,18 @@ const SUGGESTION_MAX = 5000;
 const SUMMARY_MAX = 10_000;
 const LINE_MAX = 1_000_000;
 const COMMENTS_MAX = 50;
+const MODEL_NAME_MIN = 1;
+const MODEL_NAME_MAX = 128;
+const RULE_ID_MIN = 2;
+const RULE_ID_MAX = 64;
 
 const NO_NUL = /^[^\0]+$/;
 const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
+const SHA1_HEX = /^[0-9a-f]{40}$/;
+const FINGERPRINT_HEX = /^[0-9a-f]{16}$/;
+const RULE_ID_PATTERN = /^[a-z][a-z0-9-]+$/;
+
+export const REVIEW_STATE_SCHEMA_VERSION = 1;
 
 function notBroadcastMention(text: string): boolean {
   return !text.includes('@everyone') && !text.includes('@channel');
@@ -37,9 +46,23 @@ export const InlineCommentSchema = z
     side: z.enum(SIDES),
     body: safeBody,
     severity: z.enum(SEVERITIES),
+    category: z.enum(CATEGORIES).optional(),
+    confidence: z.enum(CONFIDENCES).optional(),
+    ruleId: z.string().min(RULE_ID_MIN).max(RULE_ID_MAX).regex(RULE_ID_PATTERN).optional(),
     suggestion: z.string().max(SUGGESTION_MAX).optional(),
   })
-  .strict();
+  .strict()
+  // Enforce the taxonomy rule that `style` findings never exceed
+  // `minor`. The system prompt also instructs the LLM not to emit
+  // `style/major|critical`, but the schema is the hard backstop —
+  // a provider that ignores the prompt still cannot escalate style.
+  .refine(
+    (c) => !(c.category === 'style' && (c.severity === 'major' || c.severity === 'critical')),
+    {
+      message: "category='style' must be at most severity='minor'",
+      path: ['severity'],
+    },
+  );
 
 export const ReviewOutputSchema = z
   .object({
@@ -48,5 +71,19 @@ export const ReviewOutputSchema = z
   })
   .strict();
 
+export const ReviewStateSchema = z
+  .object({
+    schemaVersion: z.literal(REVIEW_STATE_SCHEMA_VERSION),
+    lastReviewedSha: z.string().regex(SHA1_HEX),
+    baseSha: z.string().regex(SHA1_HEX),
+    reviewedAt: z.string().datetime(),
+    modelUsed: z.string().min(MODEL_NAME_MIN).max(MODEL_NAME_MAX),
+    totalTokens: z.number().int().nonnegative(),
+    totalCostUsd: z.number().nonnegative(),
+    commentFingerprints: z.array(z.string().regex(FINGERPRINT_HEX)),
+  })
+  .strict();
+
 export type InlineCommentInput = z.input<typeof InlineCommentSchema>;
 export type ReviewOutputInput = z.input<typeof ReviewOutputSchema>;
+export type ReviewStateInput = z.input<typeof ReviewStateSchema>;

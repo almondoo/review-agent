@@ -31,12 +31,15 @@ describe('buildProgram', () => {
     expect(names).toContain('config');
     expect(names).toContain('eval');
     expect(names).toContain('setup');
+    expect(names).toContain('audit');
     const config = program.commands.find((c) => c.name() === 'config');
     const subNames = config?.commands.map((c) => c.name());
     expect(subNames).toContain('validate');
     expect(subNames).toContain('schema');
     const setup = program.commands.find((c) => c.name() === 'setup');
     expect(setup?.commands.map((c) => c.name())).toContain('workspace');
+    const audit = program.commands.find((c) => c.name() === 'audit');
+    expect(audit?.commands.map((c) => c.name())).toEqual(['export', 'prune']);
   });
 
   it('wires `config schema` to print to stdout', async () => {

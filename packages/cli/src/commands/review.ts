@@ -81,16 +81,27 @@ export async function runReviewCommand(
       jobId: `${ref.owner}/${ref.repo}#${ref.number}`,
       workspaceDir: process.cwd(),
       diffText,
-      prMetadata: { title: pr.title, body: pr.body, author: pr.author },
+      prMetadata: {
+        title: pr.title,
+        body: pr.body,
+        author: pr.author,
+        baseRef: pr.baseRef,
+        labels: pr.labels,
+        commitMessages: pr.commitMessages,
+      },
       previousState,
       profile: config.profile,
+      changedPaths: diff.files.map((f) => f.path),
       pathInstructions: config.reviews.path_instructions.map((p) => ({
         pattern: p.path,
         text: p.instructions,
+        ...(p.auto_fetch ? { autoFetch: p.auto_fetch } : {}),
       })),
       skills: skillBlock ? [skillBlock] : [],
       language: config.language,
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
+      minConfidence: config.reviews.min_confidence,
+      requestChangesOn: config.reviews.request_changes_on,
     },
     provider,
   );
@@ -225,6 +236,7 @@ async function postOrUpdate(
     comments: result.comments,
     summary: result.summary,
     state,
+    event: result.reviewEvent,
   });
   await vcs.upsertStateComment(ref, state);
 }

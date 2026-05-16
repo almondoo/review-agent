@@ -107,8 +107,9 @@ describe('createOpenAIProvider', () => {
 
   it('generateReview computes cost from usage tokens', async () => {
     const generate = vi.fn().mockResolvedValue({
-      object: { comments: [], summary: 'ok' },
-      usage: { inputTokens: 1000, outputTokens: 500 },
+      experimental_output: { comments: [], summary: 'ok' },
+      totalUsage: { inputTokens: 1000, outputTokens: 500 },
+      steps: [],
     });
     const provider = createOpenAIProvider(
       { type: 'openai', model: 'gpt-4o-mini', apiKey: 'k' },
@@ -123,5 +124,34 @@ describe('createOpenAIProvider', () => {
     expect(out.costUsd).toBeCloseTo((1000 / 1_000_000) * 0.15 + (500 / 1_000_000) * 0.6, 6);
     expect(out.summary).toBe('ok');
     expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it('generateReview forwards tools and stopWhen to generateText', async () => {
+    const generate = vi.fn().mockResolvedValue({
+      experimental_output: { comments: [], summary: 'ok' },
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+      steps: [{ toolCalls: [{ toolName: 'read_file' }] }],
+    });
+    const fakeTools = { read_file: { execute: () => 'x' } } as unknown as Parameters<
+      typeof generate
+    >[0]['tools'];
+    const provider = createOpenAIProvider(
+      { type: 'openai', model: 'gpt-4o', apiKey: 'k' },
+      {
+        createClient: vi.fn().mockReturnValue(() => ({ id: 'm' })),
+        generate,
+        tokenize: () => 0,
+      },
+    );
+    const out = await provider.generateReview({
+      ...baseInput,
+      tools: fakeTools as never,
+      maxToolCalls: 7,
+    });
+    const call = generate.mock.calls[0]?.[0];
+    expect(call?.tools).toBe(fakeTools);
+    expect(typeof call?.stopWhen).toBe('function');
+    expect(call?.experimental_output).toBeDefined();
+    expect(out.toolCalls).toBe(1);
   });
 });

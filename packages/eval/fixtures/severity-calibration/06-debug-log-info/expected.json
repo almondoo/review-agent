@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "debug-log-leftover",
+  "language": "TypeScript",
+  "severity_min": "info",
+  "severity_max": "minor",
+  "severity_modal": "info",
+  "must_contain_any": ["debug", "console.log", "logging", "leftover", "diagnostic"],
+  "rationale": "Adds a `console.log('[debug] ...')` line in a request handler. Pure log noise — no PII leakage (the `id` is a public URL param), no behaviour change. Modal severity `info`. `minor` is acceptable when the model judges 'log noise in prod is a real maintenance cost'. `major`/`critical` is over-flagging."
+}

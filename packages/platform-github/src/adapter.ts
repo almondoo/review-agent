@@ -14,7 +14,12 @@ import type {
 } from '@review-agent/core';
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
 import { assertSafeRelativePath } from './path-guard.js';
-import { buildSummaryWithState, formatStateComment, parseStateComment } from './state-comment.js';
+import {
+  buildSummaryWithState,
+  formatStateComment,
+  parseStateComment,
+  type StateParseEventHandler,
+} from './state-comment.js';
 
 const STATUS_MAP: Readonly<Record<string, DiffFile['status']>> = {
   added: 'added',
@@ -26,11 +31,41 @@ const STATUS_MAP: Readonly<Record<string, DiffFile['status']>> = {
   unchanged: 'modified',
 };
 
+/**
+ * Cap on the number of recent commits surfaced to the LLM via
+ * `PR.commitMessages`. A multi-author rebased PR can land with
+ * hundreds of commits; sending all of them blows the prompt cache
+ * and burns tokens with little marginal signal. 20 covers the
+ * typical PR while keeping the upper-bound payload bounded.
+ */
+const COMMIT_MESSAGES_CAP = 20;
+
+/**
+ * Per-message byte cap. A 5 KB upper bound is generous for a
+ * commit message but firm enough to truncate the occasional
+ * pasted-stack-trace or AI-generated essay that some teams use
+ * as their commit body.
+ */
+const COMMIT_MESSAGE_MAX_CHARS = 5_000;
+
+function truncateMessage(message: string): string {
+  if (message.length <= COMMIT_MESSAGE_MAX_CHARS) return message;
+  return `${message.slice(0, COMMIT_MESSAGE_MAX_CHARS)}\n[...truncated at ${COMMIT_MESSAGE_MAX_CHARS} chars]`;
+}
+
 export type GithubVCSOptions = {
   readonly token: string;
   readonly octokit?: Pick<Octokit, 'rest' | 'paginate'>;
   readonly runGit?: RunGit;
   readonly cloneUrl?: (ref: PRRef) => string;
+  /**
+   * Invoked when the embedded state-comment JSON cannot be trusted
+   * (`schema_mismatch`, `validation_failure`, `json_parse_failure`).
+   * Callers should log + (for schema mismatches) append an
+   * `state_schema_mismatch` audit event. When omitted, untrusted
+   * state is silently dropped — i.e. the review is treated as fresh.
+   */
+  readonly onStateParseEvent?: StateParseEventHandler;
 };
 
 function mapStatus(status: string | undefined): DiffFile['status'] {
@@ -65,6 +100,57 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       repo: ref.repo,
       pull_number: ref.number,
     });
+    // We only need the last `COMMIT_MESSAGES_CAP` commits. Fetch a
+    // single page at the tail instead of paginating the whole PR —
+    // a 1000-commit rebase otherwise burns 10× the rate-limit budget
+    // and 5–15 s of latency on every review (reviewer I-1).
+    //
+    // GitHub's `listCommits` returns oldest→newest; the newest are on
+    // the highest-numbered page. With `per_page=100` (Octokit's max)
+    // and `page=ceil(total/100)`, one request covers the tail in the
+    // vast majority of PRs (total ≤ 100 is page 1; total > 100 with a
+    // full last page is also one request). The remaining pathological
+    // case is `total > 100` with a *partial* last page (e.g. 101
+    // commits → page 2 has 1 commit). In that case we also fetch the
+    // penultimate page to fill out the `COMMIT_MESSAGES_CAP` window —
+    // at most 2 API calls total, regardless of PR size.
+    const COMMIT_PAGE_SIZE = 100;
+    // Defensive `?? 0`: Octokit's openapi-types declares
+    // `commits: number` required, but mocks in our own test suite
+    // and third-party API proxies sometimes elide the field. A
+    // missing value collapses to "no commits to fetch" rather than
+    // a NaN page number — and we skip the listCommits call entirely
+    // (no point firing a request we know will return nothing useful).
+    const totalCommits = data.commits ?? 0;
+    let commitsRaw: ReadonlyArray<{
+      readonly sha: string;
+      readonly commit: { readonly message?: string };
+    }> = [];
+    if (totalCommits > 0) {
+      const lastPage = Math.max(1, Math.ceil(totalCommits / COMMIT_PAGE_SIZE));
+      const lastResp = await octokit.rest.pulls.listCommits({
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: ref.number,
+        per_page: COMMIT_PAGE_SIZE,
+        page: lastPage,
+      });
+      commitsRaw = lastResp.data;
+      if (lastPage > 1 && commitsRaw.length < COMMIT_MESSAGES_CAP) {
+        const prevResp = await octokit.rest.pulls.listCommits({
+          owner: ref.owner,
+          repo: ref.repo,
+          pull_number: ref.number,
+          per_page: COMMIT_PAGE_SIZE,
+          page: lastPage - 1,
+        });
+        commitsRaw = [...prevResp.data, ...commitsRaw];
+      }
+    }
+    const commitMessages = commitsRaw.slice(-COMMIT_MESSAGES_CAP).map((c) => ({
+      sha: c.sha,
+      message: truncateMessage(c.commit.message ?? ''),
+    }));
     return {
       ref,
       title: data.title,
@@ -76,6 +162,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       headRef: data.head.ref,
       draft: data.draft ?? false,
       labels: data.labels.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))),
+      commitMessages,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
     };
@@ -159,11 +246,17 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       side: c.side,
       body: c.body,
     }));
+    // `event` is optional on ReviewPayload so callers that haven't
+    // been updated (or third-party adapters via the VCS interface)
+    // still get the v0.1 `COMMENT` behavior. Wiring the runner
+    // through computeReviewEvent is what unlocks `REQUEST_CHANGES`
+    // on critical findings.
+    const event = review.event ?? 'COMMENT';
     await octokit.rest.pulls.createReview({
       owner: ref.owner,
       repo: ref.repo,
       pull_number: ref.number,
-      event: 'COMMENT',
+      event,
       body: summaryWithState,
       comments,
     });
@@ -222,7 +315,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
     ensureGithub(ref);
     const found = await findStateComment(ref);
     if (!found) return null;
-    return parseStateComment(found.body);
+    return parseStateComment(found.body, opts.onStateParseEvent);
   };
 
   const upsertStateComment = async (ref: PRRef, state: ReviewState): Promise<void> => {

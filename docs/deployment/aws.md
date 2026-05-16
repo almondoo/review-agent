@@ -261,6 +261,58 @@ mixed-provider configs.
   for the receiver, lift `aws_lambda_function.receiver`'s `vpc_config`
   out (it doesn't talk to RDS).
 
+## 8.1 Workspace strategy (Server mode)
+
+The Server-mode worker provisions a per-job ephemeral workspace
+before invoking the agent loop, so the LLM's `read_file` / `glob` /
+`grep` tools have files to operate on. Choose via
+`.review-agent.yml`:
+
+```yaml
+server:
+  workspace_strategy: none          # default: diff text only (v0.2 behavior)
+  #                  contents-api   # one Octokit getContent per changed file
+  #                  sparse-clone   # git clone --depth 1 --filter=blob:none --sparse
+```
+
+### Trade-off
+
+| Strategy        | Lambda image | API cost                  | Latency        | LLM fidelity |
+|-----------------|--------------|---------------------------|----------------|--------------|
+| `none`          | smallest     | 0                         | 0              | diff only — review quality matches v0.2 |
+| `contents-api`  | smallest     | **N getContent calls**, where N = # changed files; counts against the 5000/h GitHub App rate-limit budget | ~150 ms × N (sequential by default) | full content of the changed files at `pr.headSha` |
+| `sparse-clone`  | **adds ~30 MB** for the `git` binary in the Lambda image | 1 clone (network egress, no API quota) | ~2–5 s clone latency + 1× per-changed-dir checkout | full file tree under the changed directories — best for cross-file context (e.g. `read_file` of a sibling file) |
+
+### Recommendation
+
+- Start with `contents-api`. Pure Octokit, no shell dep, the worker
+  image stays minimal. Adequate for most PRs because the LLM mostly
+  needs to read the *changed* files plus a handful of references.
+- Promote to `sparse-clone` if your reviews routinely span multiple
+  files and the LLM frequently asks for siblings of changed files
+  (visible in `result.toolCalls` telemetry).
+- Use `none` only if you're upgrading from v0.2 and want to roll
+  out workspace provisioning later — it's a strict superset of the
+  old behavior.
+
+### Cleanup
+
+Both strategies materialize to a tmpdir under `os.tmpdir()` with a
+`review-agent-ws-` prefix. The provisioner returns a `cleanup()`
+handle the worker must invoke in `try/finally`; the call is
+idempotent and uses `rm -rf` semantics. Lambda's per-invocation
+`/tmp` is automatically reaped on container teardown — `cleanup`
+exists to free space during the warm-Lambda lifetime.
+
+### Denylist
+
+`.env*`, `secrets/`, `private/`, `*.pem`, `credentials*.json`, and
+`service-account*.json` are refused by the provisioner regardless
+of `workspace_strategy`. Even if a malicious PR adds such a file
+and the diff lists it, those bytes never hit the worker's disk and
+the runner's tool dispatcher refuses to read them as a defense-in-
+depth second layer. See `SECURITY.md` for the full deny-list.
+
 ## 9. Cost control
 
 | Lever | Where | Effect |
