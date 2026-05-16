@@ -167,3 +167,80 @@ v1.0 — all 9 issues (#43–#51) shipped on `main`:
 v1.0 follow-on:
 
 - #58 wire gitleaks scanner into agent pipeline (surfaced by Round 1 of #44's review) — `54e4953`
+
+---
+
+## v1.0.1 — hotfix patches for doc-vs-code gaps (2 issues, planning)
+
+Two architectural gaps surfaced by a 2026-05-15 multi-agent code audit
+of the v1.0 baseline (issue #44 procedure round 2). Both are
+implemented "skeleton only" — the infrastructure ships but is never
+wired to the LLM call path. Cut a v1.0.1 hotfix once both land.
+
+| # | Issue | Title (short) | Depends on |
+|---|---|---|---|
+| 59 | [#59](https://github.com/almondoo/review-agent/issues/59) | feat(llm,runner): expose read_file/glob/grep tools to the LLM | — |
+| 60 | [#60](https://github.com/almondoo/review-agent/issues/60) | feat(runner,action): wire incremental diff via sinceSha | — |
+
+**Suggested execution order**: #59 → #60. They are independent
+(can be parallelised) but #59 unblocks v1.1's #63 + #70, so prioritise it.
+
+**v1.0.1 release gate**: both #59 and #60 closed, typecheck + lint +
+test:coverage + build green, walkthrough rows T-2 / I-2 / E-1 in
+`docs/security/threat-model-review-2026-05.md` updated to reflect
+the new behaviour.
+
+---
+
+## v1.1 — structured output, ops hardening, Server-mode quality (11 issues, planning)
+
+Eleven enhancements grouped into four themes. All issues have a
+"Ready to implement (2026-05-16)" comment with locked design
+decisions and concrete acceptance criteria.
+
+### Theme 1 — structured output (3 issues, ship as ONE PR)
+
+| # | Issue | Title (short) | Bundle |
+|---|---|---|---|
+| 61 | [#61](https://github.com/almondoo/review-agent/issues/61) | explicit severity rubric in BASE_SYSTEM_PROMPT | A |
+| 64 | [#64](https://github.com/almondoo/review-agent/issues/64) | add category field to InlineCommentSchema | A |
+| 69 | [#69](https://github.com/almondoo/review-agent/issues/69) | add confidence + ruleId to InlineCommentSchema | A |
+
+### Theme 2 — review-event mapping + context expansion (2 issues)
+
+| # | Issue | Title (short) | Depends on |
+|---|---|---|---|
+| 65 | [#65](https://github.com/almondoo/review-agent/issues/65) | map severity → GitHub review event (REQUEST_CHANGES on critical) | #64 |
+| 66 | [#66](https://github.com/almondoo/review-agent/issues/66) | pass commit messages + PR labels + base branch into ReviewInput | — |
+
+### Theme 3 — durability + ops (3 issues)
+
+| # | Issue | Title (short) | Depends on |
+|---|---|---|---|
+| 62 | [#62](https://github.com/almondoo/review-agent/issues/62) | state-comment write retry + fail-loud | — |
+| 67 | [#67](https://github.com/almondoo/review-agent/issues/67) | audit_log + cost_ledger retention + export CLI | — |
+| 71 | [#71](https://github.com/almondoo/review-agent/issues/71) | stronger ReviewState validation (Zod refines) | — |
+
+### Theme 4 — quality measurement + Server / path features (3 issues)
+
+| # | Issue | Title (short) | Depends on |
+|---|---|---|---|
+| 68 | [#68](https://github.com/almondoo/review-agent/issues/68) | severity consistency assertions in red-team + golden fixtures | #61 |
+| 63 | [#63](https://github.com/almondoo/review-agent/issues/63) | provision workspace in Server mode (contents-api default) | #59 |
+| 70 | [#70](https://github.com/almondoo/review-agent/issues/70) | path_instructions auto-fetch + glob validation | #59 (partial: validation half ships independently) |
+
+**Suggested v1.1 execution order**:
+
+1. **#71** — defensive, low-risk warmup; lands fast.
+2. **#62** — same, narrow scope.
+3. **#61 + #64 + #69** — Theme 1 bundled PR (largest single change, highest review-quality win).
+4. **#65** — depends on #64 (`category`); changes default UX, document in UPGRADING.
+5. **#68** — depends on #61 (rubric); locks in baseline for severity consistency.
+6. **#66** — independent; PR-metadata expansion.
+7. **#67** — independent; retention + export tooling.
+8. **#63** — depends on v1.0.1 #59; Server-mode parity.
+9. **#70** — depends on v1.0.1 #59; final piece.
+
+**v1.1 release gate**: all 11 issues closed, eval baseline stable
+(severity_consistency_score ≥ baseline from #68), typecheck + lint
++ test:coverage + build green.
