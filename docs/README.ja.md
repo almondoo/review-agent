@@ -178,17 +178,28 @@ flowchart TD
 （strategy: Lambda は `contents-api`、`git` 利用可なら `sparse-clone`）で
 ジョブ単位の一時 workspace を用意する。図の "Workspace" 以降は完全に同一。
 
+## 対応 VCS プラットフォーム
+
+| プラットフォーム | モード | ステータス | 備考 |
+|---|---|---|---|
+| **GitHub** (`platform-github`) | GitHub Action / Server (webhook → SQS) / CLI | ✅ フル対応 | デフォルト。隠し state コメントによる重複排除、`REQUEST_CHANGES` マッピング。 |
+| **GitHub Enterprise Server** | Server / CLI | ✅ 対応 | 同じ Octokit 経路を使用。[`docs/deployment/ghes.md`](./deployment/ghes.md) 参照。 |
+| **AWS CodeCommit** (`platform-codecommit`) | CLI / Server（手動トリガー） | ⚠️ 部分対応 | アダプタ実装済みでレビューは投稿可能。自動イベント受信（SNS → SQS）と CLI `--platform codecommit` フラグは [#73](https://github.com/almondoo/review-agent/issues/73) / [#75](https://github.com/almondoo/review-agent/issues/75) で対応中。状態は Postgres canonical（隠しコメントマーカーなし — spec §12.1.1）。 |
+
+GitLab / Bitbucket アダプタは v1.x のスコープ外です（spec §1.2）。
+
 ## リポジトリ構成
 
 ```
 packages/
-  core/              # 型・スキーマ・fingerprint（I/O なし）
-  llm/               # Vercel AI SDK provider adapter + retry/error mapping
-  config/            # zod 型付き YAML loader、env マージ、JSON schema 出力
-  platform-github/   # VCS 実装: clone / diff / コメント / 隠し state
-  runner/            # エージェントループ、ツール、プロンプト、gitleaks、skill loader
-  action/            # GitHub Action ラッパー（エントリポイント）
-  eval/              # promptfoo 回帰スイート + golden PR fixture
+  core/                # 型・スキーマ・fingerprint（I/O なし）
+  llm/                 # Vercel AI SDK provider adapter + retry/error mapping
+  config/              # zod 型付き YAML loader、env マージ、JSON schema 出力
+  platform-github/     # VCS 実装: clone / diff / コメント / 隠し state (GitHub)
+  platform-codecommit/ # VCS 実装: AWS CodeCommit（Postgres canonical state）
+  runner/              # エージェントループ、ツール、プロンプト、gitleaks、skill loader
+  action/              # GitHub Action ラッパー（エントリポイント）
+  eval/                # promptfoo 回帰スイート + golden PR fixture
 ```
 
 完全な仕様は [`docs/specs/review-agent-spec.md`](./specs/review-agent-spec.md)、
