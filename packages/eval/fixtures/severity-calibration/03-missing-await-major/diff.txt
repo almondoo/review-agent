@@ -1,0 +1,11 @@
+--- a/src/api/orders.ts
++++ b/src/api/orders.ts
+@@ -10,7 +10,7 @@ export async function placeOrder(req: Request): Promise<Response> {
+   const order = await db.orders.insert({ userId, items });
+   if (!order) return new Response('failed', { status: 500 });
+
+-  await audit.log({ event: 'order.placed', userId, orderId: order.id });
++  audit.log({ event: 'order.placed', userId, orderId: order.id });
+
+   return Response.json({ orderId: order.id });
+ }

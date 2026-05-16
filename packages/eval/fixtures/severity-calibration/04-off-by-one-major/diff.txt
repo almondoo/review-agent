@@ -1,0 +1,8 @@
+--- a/src/util/pagination.ts
++++ b/src/util/pagination.ts
+@@ -1,5 +1,5 @@
+ export function pageOf<T>(items: ReadonlyArray<T>, page: number, size: number): ReadonlyArray<T> {
+   const start = page * size;
+-  return items.slice(start, start + size);
++  return items.slice(start, start + size + 1);
+ }

@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "path-traversal",
+  "language": "TypeScript",
+  "severity_min": "major",
+  "severity_max": "critical",
+  "severity_modal": "critical",
+  "must_contain_any": ["path traversal", "traversal", "../", "resolve", "normaliz"],
+  "rationale": "Removed the post-`join` containment check that prevented `../` escapes out of UPLOADS_DIR. A request like `?name=../../etc/passwd` now reads files outside the upload dir. This is unauthenticated remote file read — `critical` modally, `major` is the floor."
+}

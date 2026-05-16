@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "sql-injection",
+  "language": "TypeScript",
+  "severity_min": "major",
+  "severity_max": "critical",
+  "severity_modal": "critical",
+  "must_contain_any": ["SQL injection", "parameteriz", "interpolat", "prepared statement"],
+  "rationale": "Switched from a parameterised query ($1) to template-string concatenation of user-controlled `email`. This is a textbook SQL-injection regression; severity should be `critical` (security boundary breach, exploitable from any external caller), and never lower than `major`. A reasonable run may pick `major` if the model reads `customer_email` as already-sanitized, but `minor` / `info` is calibration failure."
+}

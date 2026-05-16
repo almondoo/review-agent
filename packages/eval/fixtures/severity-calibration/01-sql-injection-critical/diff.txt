@@ -1,0 +1,8 @@
+--- a/src/db/orders.ts
++++ b/src/db/orders.ts
+@@ -1,7 +1,7 @@ import { db } from './client.js';
+
+ export async function findByCustomer(email: string) {
+-  return db.query('SELECT id, total FROM orders WHERE customer_email = $1', [email]);
++  return db.query(`SELECT id, total FROM orders WHERE customer_email = '${email}'`);
+ }

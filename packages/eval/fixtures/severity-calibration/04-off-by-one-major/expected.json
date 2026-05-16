@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "off-by-one",
+  "language": "TypeScript",
+  "severity_min": "minor",
+  "severity_max": "major",
+  "severity_modal": "major",
+  "must_contain_any": ["off-by-one", "off by one", "slice", "+ 1", "duplicate", "overlap"],
+  "rationale": "Each page now includes one extra item — the first item of the next page. Pages overlap by one element, which corrupts any downstream consumer that joins or de-dups by page. Modal `major` (a correctness bug visible to every caller). `minor` is the floor (some callers do downstream dedup), `major` is the ceiling — not `critical` (no security boundary) and not `info` (this is a real defect, not a style nit)."
+}

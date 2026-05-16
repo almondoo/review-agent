@@ -1,0 +1,10 @@
+{
+  "category": "severity-calibration",
+  "bug_class": "magic-number",
+  "language": "TypeScript",
+  "severity_min": "info",
+  "severity_max": "minor",
+  "severity_modal": "minor",
+  "must_contain_any": ["magic", "constant", "MAX_REQUESTS_PER_MINUTE", "named", "literal"],
+  "rationale": "Replaced a named constant with the literal `60`, and the constant itself was renamed to `*_DEPRECATED` (so the original named constant is no longer the source of truth). No behaviour change at runtime, just readability/maintenance loss. Modal severity `minor` (style/maintainability), floor `info`, ceiling `minor` — never `major`/`critical` (no exploit, no correctness defect)."
+}

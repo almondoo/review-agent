@@ -16,11 +16,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate:
+    name: validate fixture shapes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @review-agent/eval validate:severity-consistency
+      - run: pnpm --filter @review-agent/eval test
+
   promptfoo:
     if: ${{ github.event.pull_request.draft == false }}
     name: promptfoo regression
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [validate]
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
@@ -41,6 +59,19 @@ jobs:
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
         run: pnpm --filter @review-agent/eval eval
 
+      - name: Run severity-consistency eval (3 runs/fixture)
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        run: pnpm --filter @review-agent/eval eval:severity-consistency
+
+      # Gate severity_consistency_score against baseline (5pp drop max).
+      # The scoring step expects a pre-shaped results JSON; until the
+      # promptfoo-output → scoring-input shim lands, operators provide
+      # the file via the docs/eval workflow. Run only when that file
+      # exists so the gate is opt-in until the shim is wired up.
+      - name: Gate severity_consistency_score against baseline
+        if: ${{ env.ANTHROPIC_API_KEY != '' && hashFiles('packages/eval/severity-consistency-input.json') != '' }}
+        run: pnpm --filter @review-agent/eval score:severity-consistency -- --results severity-consistency-input.json --max-drop-pp 5
+
       - name: Skip notice
         if: ${{ env.ANTHROPIC_API_KEY == '' }}
         run: echo "ANTHROPIC_API_KEY not set - skipping promptfoo eval. Add the secret to enable regression gating."
@@ -50,6 +81,8 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: promptfoo-results
-          path: packages/eval/.promptfoo
+          path: |
+            packages/eval/.promptfoo
+            packages/eval/severity-consistency-results.json
           if-no-files-found: ignore
           retention-days: 14

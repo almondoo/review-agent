@@ -1,0 +1,14 @@
+--- a/src/api/files.ts
++++ b/src/api/files.ts
+@@ -1,10 +1,8 @@ import { readFile } from 'node:fs/promises';
+ import { join } from 'node:path';
+
+ const UPLOADS_DIR = '/srv/uploads';
+
+ export async function serveFile(req: Request): Promise<Response> {
+   const name = new URL(req.url).searchParams.get('name') ?? '';
+-  const resolved = join(UPLOADS_DIR, name);
+-  if (!resolved.startsWith(UPLOADS_DIR)) return new Response('forbidden', { status: 403 });
+-  return new Response(await readFile(resolved));
++  return new Response(await readFile(join(UPLOADS_DIR, name)));
+ }
