@@ -347,7 +347,14 @@ describe('createCodecommitVCS — postReview approvalState mapping (#74)', () =>
   });
 
   it('warns and continues when the approval-state call throws (no approval rule)', async () => {
-    const noRuleErr = Object.assign(new Error('No approval rule applies'), {
+    // The SDK error `message` here mirrors a real AWS AccessDenied
+    // body and embeds an assumed-role ARN with an account id. The
+    // adapter must NOT include this string in its warn line — see
+    // SEC-6 in the audit notes.
+    const leakyMessage =
+      'User: arn:aws:sts::123456789012:assumed-role/review-agent-worker/abc ' +
+      'is not authorized to perform: codecommit:UpdatePullRequestApprovalState';
+    const noRuleErr = Object.assign(new Error(leakyMessage), {
       name: 'ApprovalRuleDoesNotExistException',
     });
     const client = {
@@ -370,8 +377,17 @@ describe('createCodecommitVCS — postReview approvalState mapping (#74)', () =>
     await expect(vcs.postReview(REF, buildPayload('APPROVE'))).resolves.toBeUndefined();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const [msg] = warnSpy.mock.calls[0] ?? [];
-    expect(String(msg)).toContain('ApprovalRuleDoesNotExistException');
-    expect(String(msg)).toContain('UpdatePullRequestApprovalState');
+    const line = String(msg);
+    // The error class name and the API name should still be present
+    // for operator diagnosis.
+    expect(line).toContain('ApprovalRuleDoesNotExistException');
+    expect(line).toContain('UpdatePullRequestApprovalState');
+    // SEC-6: the warn line must not leak the role ARN, assumed-role
+    // path, or the 12-digit account id carried by `err.message`.
+    expect(line).not.toContain('arn:aws:');
+    expect(line).not.toContain('assumed-role');
+    expect(line).not.toMatch(/\d{12}/);
+    expect(line).not.toContain(leakyMessage);
   });
 
   it("'managed' but PullRequest has no revisionId logs a warn and skips the call", async () => {

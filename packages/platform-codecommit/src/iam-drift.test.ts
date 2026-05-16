@@ -7,6 +7,8 @@ import { EXPECTED_COMMANDS, EXPECTED_PERMISSIONS, PENDING_COMMANDS } from './iam
 const here = dirname(fileURLToPath(import.meta.url));
 const ADAPTER_PATH = resolve(here, 'adapter.ts');
 const README_PATH = resolve(here, '..', 'README.md');
+// Repo root: packages/platform-codecommit/src → repo root is three levels up.
+const SPEC_PATH = resolve(here, '..', '..', '..', 'docs', 'specs', 'review-agent-spec.md');
 
 /**
  * Extract every `new <X>Command(` occurrence from the adapter source.
@@ -99,6 +101,31 @@ describe('IAM ↔ SDK Command drift', () => {
       missing,
       `permissions present in EXPECTED_PERMISSIONS but missing from README IAM block — ` +
         `update packages/platform-codecommit/README.md: ${missing.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('every EXPECTED_PERMISSIONS entry appears inside spec §8.4', () => {
+    // Issue #78 framed this drift test as a "spec ↔ code drift
+    // detector". Without this assertion the spec can silently fall
+    // out of sync with the registry (as it did pre-audit when
+    // `codecommit:GetCommentsForPullRequest` was omitted from §8.4).
+    const spec = readFileSync(SPEC_PATH, 'utf8');
+    const sectionStart = spec.indexOf('### 8.4 CodeCommit');
+    expect(sectionStart, 'spec §8.4 CodeCommit heading not found').toBeGreaterThan(-1);
+    // Find the next "### " heading after §8.4 to bound the slice.
+    const afterHeading = spec.indexOf('\n', sectionStart) + 1;
+    const nextHeadingRel = spec.slice(afterHeading).search(/\n### /);
+    const sectionEnd = nextHeadingRel === -1 ? spec.length : afterHeading + nextHeadingRel;
+    const section = spec.slice(sectionStart, sectionEnd);
+
+    const missing: string[] = [];
+    for (const permission of EXPECTED_PERMISSIONS) {
+      if (!section.includes(permission)) missing.push(permission);
+    }
+    expect(
+      missing,
+      `permissions present in EXPECTED_PERMISSIONS but missing from spec §8.4 — ` +
+        `update docs/specs/review-agent-spec.md: ${missing.join(', ')}`,
     ).toEqual([]);
   });
 

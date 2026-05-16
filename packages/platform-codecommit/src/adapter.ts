@@ -282,14 +282,22 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
       // (`ApprovalRuleDoesNotExistException`, `InvalidApprovalStateException`,
       // etc.). Degrade non-fatally — the inline comments above were
       // posted successfully, and the operator may not have wired an
-      // approval rule yet. Surface the error name so it shows up in
-      // logs without leaking the request payload.
-      const name = err instanceof Error ? err.name : 'UnknownError';
-      const message = err instanceof Error ? err.message : String(err);
+      // approval rule yet.
+      //
+      // Log ONLY the SDK error class name. AWS SDK error `message`
+      // strings frequently include the caller's role ARN and account
+      // id (e.g. `User: arn:aws:sts::123456789012:assumed-role/X is
+      // not authorized…`). Including `err.message` would leak that
+      // tenancy info into whatever sink stdout flows to. The error
+      // name alone is sufficient for operators to diagnose
+      // (`ApprovalRuleDoesNotExistException`, `AccessDeniedException`,
+      // …) without revealing IAM identity.
+      const name = err instanceof Error ? err.name : 'unknown';
       // biome-ignore lint/suspicious/noConsole: operator-visible degrade-non-fatal log line
       console.warn(
-        `[platform-codecommit] UpdatePullRequestApprovalState failed for PR ${ref.number} ` +
-          `(approvalState=${desired}): ${name}: ${message}`,
+        `[platform-codecommit] UpdatePullRequestApprovalState failed (${name}); ` +
+          `the agent's IAM principal may have no applicable approval rule. ` +
+          `Skipped approval-state mutation for PR ${toPullRequestId(ref)}.`,
       );
     }
   };

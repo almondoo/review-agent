@@ -877,8 +877,12 @@ export const verifyGithubSignature = (secret: string) =>
   });
 ```
 
-CodeCommit (via SNS): use AWS SNS message signature verification with SigV4. Use
-`@aws-sdk/credential-providers` for the worker's IAM role.
+CodeCommit (via SNS): use AWS SNS message signature verification with the
+RSA-SHA1/SHA256 signing-cert scheme (the asymmetric signature SNS attaches to
+each message — distinct from SigV4, which is the AWS request-signing scheme used
+for SDK calls; see
+https://docs.aws.amazon.com/sns/latest/dg/sns-verify-signature-of-message.html).
+Use `@aws-sdk/credential-providers` for the worker's IAM role.
 
 ### 7.2 Idempotency
 
@@ -1232,6 +1236,7 @@ const octokit = new Octokit({ auth: token });
   codecommit:GetPullRequest
   codecommit:GetDifferences
   codecommit:GetFile
+  codecommit:GetCommentsForPullRequest
   codecommit:PostCommentForPullRequest
   codecommit:PostCommentReply
   codecommit:UpdatePullRequestApprovalState  # only if approval is configured
