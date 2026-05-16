@@ -103,6 +103,27 @@ describe('loadConfigFromYaml — explicit values', () => {
       ConfigError,
     );
   });
+
+  it("defaults server.workspace_strategy to 'none' (v0.2 behavior)", () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.server.workspace_strategy).toBe('none');
+  });
+
+  it("parses server.workspace_strategy: 'contents-api'", () => {
+    const cfg = loadConfigFromYaml('server:\n  workspace_strategy: contents-api\n');
+    expect(cfg.server.workspace_strategy).toBe('contents-api');
+  });
+
+  it("parses server.workspace_strategy: 'sparse-clone'", () => {
+    const cfg = loadConfigFromYaml('server:\n  workspace_strategy: sparse-clone\n');
+    expect(cfg.server.workspace_strategy).toBe('sparse-clone');
+  });
+
+  it('rejects an unknown server.workspace_strategy value', () => {
+    expect(() => loadConfigFromYaml('server:\n  workspace_strategy: docker\n')).toThrow(
+      ConfigError,
+    );
+  });
 });
 
 describe('defaultConfig', () => {

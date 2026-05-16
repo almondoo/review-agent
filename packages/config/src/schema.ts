@@ -1,4 +1,4 @@
-import { CONFIDENCES, REQUEST_CHANGES_THRESHOLDS } from '@review-agent/core';
+import { CONFIDENCES, REQUEST_CHANGES_THRESHOLDS, WORKSPACE_STRATEGIES } from '@review-agent/core';
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from './languages.js';
 
@@ -95,6 +95,23 @@ const IncrementalSchema = z
   })
   .strict();
 
+// Server-mode workspace provisioning. Only consulted by
+// `@review-agent/server`'s `provisionWorkspace` — Action mode ignores
+// this section (the GitHub Actions runner does `actions/checkout`
+// before the Action runs, so the worktree is already present).
+//
+// `workspace_strategy` defaults to `'none'` so existing Server
+// deployments (v0.2 era) keep working without operator action. To
+// turn on the read_file / glob / grep tools in Server mode, operators
+// must opt in to `'contents-api'` (cheap, no shell deps) or
+// `'sparse-clone'` (richer, requires `git` in the Lambda image).
+// See `docs/deployment/aws.md` for the trade-off.
+const ServerSchema = z
+  .object({
+    workspace_strategy: z.enum(WORKSPACE_STRATEGIES).default('none'),
+  })
+  .strict();
+
 // `coordination.other_bots` (§22 #9 / v1.0 #48) controls coexistence with
 // other PR-review bots (`coderabbitai[bot]`, `qodo-merge[bot]`, etc.).
 //
@@ -143,6 +160,7 @@ export const ConfigSchema = z
     skills: z.array(z.string().min(1)).default([]),
     incremental: IncrementalSchema.default({}),
     coordination: CoordinationSchema.default({}),
+    server: ServerSchema.default({}),
   })
   .strict();
 

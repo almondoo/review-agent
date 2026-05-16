@@ -111,6 +111,27 @@ export type ReviewEvent = (typeof REVIEW_EVENTS)[number];
 export const REQUEST_CHANGES_THRESHOLDS = ['critical', 'major', 'never'] as const;
 export type RequestChangesThreshold = (typeof REQUEST_CHANGES_THRESHOLDS)[number];
 
+/**
+ * How Server mode materializes a per-job workspace for the LLM's
+ * `read_file` / `glob` / `grep` tools (`@review-agent/server` consumes
+ * this; declared in core so the config schema can validate the YAML
+ * value without taking a `server` dependency).
+ *
+ * - `'sparse-clone'`  — `git clone --depth 1 --filter=blob:none --sparse`
+ *                       scoped to the diff's changed paths. Highest
+ *                       fidelity (full file tree under the changed
+ *                       roots), but requires `git` on the Lambda image.
+ * - `'contents-api'`  — pure Octokit: one `getFile` per changed file,
+ *                       written to a tmpdir mirroring the repo layout.
+ *                       No shell dependency. Best for Lambda images
+ *                       that don't bundle `git`.
+ * - `'none'`          — v0.2 default. No workspace; the LLM only sees
+ *                       the diff text. Preserves existing Server
+ *                       deployments without operator action.
+ */
+export const WORKSPACE_STRATEGIES = ['sparse-clone', 'contents-api', 'none'] as const;
+export type WorkspaceStrategy = (typeof WORKSPACE_STRATEGIES)[number];
+
 const SEVERITY_RANK: Readonly<Record<Severity, number>> = {
   critical: 3,
   major: 2,

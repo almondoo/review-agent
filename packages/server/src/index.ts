@@ -22,3 +22,10 @@ export {
   startWorker,
   type WorkerDeps,
 } from './worker.js';
+export {
+  type ProvisionWorkspaceDeps,
+  type ProvisionWorkspaceInput,
+  provisionWorkspace,
+  type WorkspaceHandle,
+  type WorkspaceStrategy,
+} from './workspace.js';

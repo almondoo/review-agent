@@ -82,6 +82,8 @@ export {
   type Severity,
   SIDES,
   type Side,
+  WORKSPACE_STRATEGIES,
+  type WorkspaceStrategy,
 } from './review.js';
 export {
   type InlineCommentInput,
