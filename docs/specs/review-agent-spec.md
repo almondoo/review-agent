@@ -329,6 +329,24 @@ Enforced via Biome import restrictions (`organizeImports` + custom rule).
 - Verifies signature (§7), enqueues to SQS, returns 2xx within 10s.
 - Worker process: separate Lambda function or separate Node process. Polls SQS,
   runs review, posts comments.
+- **Workspace provisioning (v1.1)**: the worker calls
+  `provisionWorkspace({ strategy, vcs, diff, ref })` before
+  `runReview` to materialise a per-job ephemeral tmpdir whose layout
+  matches the runner's `read_file` / `glob` / `grep` tool root. Three
+  strategies (operator-selected via `server.workspace_strategy`):
+  - `'none'` — preserves v0.2 / v1.0 behaviour (diff-only review, no
+    file tools usable in Server mode).
+  - `'contents-api'` — pure Octokit; fetches each changed file via
+    `vcs.getFile` and mirrors into tmpdir. Lambda-friendly (no `git`
+    binary required).
+  - `'sparse-clone'` — `git clone --depth 1 --filter=blob:none
+    --sparse` scoped to changed-path parent dirs. Requires `git` in
+    the image; highest fidelity for multi-file tool use.
+  The provisioner applies the same denylist as the runner's tool
+  dispatcher (8 patterns including `.env*`, `secrets/`, `*.pem`,
+  `.aws/credentials`) BEFORE bytes hit disk; cleanup is idempotent
+  with `rm -rf` semantics in a `try/finally`. See `docs/deployment/aws.md`
+  §8.1 for the trade-off table.
 
 ### 4.3 CLI (`packages/cli`)
 
@@ -1040,8 +1058,51 @@ export const ReviewOutputSchema = z.object({
 });
 ```
 
-Anything failing validation is dropped with a Langfuse error span. The agent retries
-once with a "your previous output was malformed; produce valid output" prompt.
+#### 7.7.1 v1.1 schema extensions (additive, all optional)
+
+The v1.1 wave (`develop`, 2026-05-16) added three optional fields to
+`InlineCommentSchema` and a Zod schema for the hidden state comment:
+
+- `category?: 'bug' | 'security' | 'performance' | 'maintainability' | 'style' | 'docs' | 'test'` — operator-facing taxonomy.
+- `confidence?: 'high' | 'medium' | 'low'` — model self-assessment. Operators set a floor via `reviews.min_confidence`; comments strictly below are dropped after dedup. Unset defaults to `'high'`.
+- `ruleId?: string` (`/^[a-z][a-z0-9-]+$/`, max 64 chars) — stable identifier used as the dedup-fingerprint key in preference to severity. Fixes the same-line-same-severity collision the pre-v1.1 fingerprint had.
+
+The schema enforces one cross-field invariant via `.refine`:
+**`category: 'style'` must use at most `severity: 'minor'`**. The same
+rule is repeated in the system prompt for the model, but the Zod
+schema is the hard backstop.
+
+`ReviewStateSchema` (new, exported from `@review-agent/core`)
+validates the hidden state comment with refined types: schemaVersion
+literal, 40-hex SHA regexes on `lastReviewedSha` / `baseSha`,
+non-negative tokens/cost, 16-hex regex on each `commentFingerprints`
+entry, `reviewedAt` as ISO 8601 datetime, `modelUsed` length 1..128.
+On any validation failure the parser returns `null` (drops previous
+state, forces full re-review) and emits a `StateParseEvent` callback
+so the action / CLI layer can wire `state_schema_mismatch` audit
+events without coupling `platform-github` to `db`.
+
+Anything failing the output validation is dropped with a Langfuse error
+span. The agent retries once with a "your previous output was
+malformed; produce valid output" prompt.
+
+#### 7.7.2 Severity → review event mapping (v1.1)
+
+`computeReviewEvent(comments, threshold)` in `@review-agent/core` is
+the pure function that derives the GitHub review event from the
+**post-dedup, post-confidence-filter, post-redaction** comment list:
+
+| `reviews.request_changes_on` | Effect |
+|---|---|
+| `'critical'` (default) | Any `severity: 'critical'` → `REQUEST_CHANGES`. Otherwise `COMMENT`. |
+| `'major'` | Any `severity: 'critical'` or `'major'` → `REQUEST_CHANGES`. Otherwise `COMMENT`. |
+| `'never'` | Always `COMMENT`. |
+
+The function never returns `'APPROVE'` — the agent does not approve
+PRs. The GitHub adapter's `postReview` reads `payload.event` (defaults
+to `'COMMENT'` when unset for back-compat); CodeCommit drops the field
+because it has no native merge-blocking review state. Branch-protection
+wiring instructions are in `SECURITY.md`.
 
 ---
 
@@ -1315,11 +1376,17 @@ reviews:
   path_instructions:                   # per-path agent instructions
     - path: "**/*.go"
       instructions: "errors are checked, defer for cleanup, t.Helper() in test helpers"
+      auto_fetch:                      # v1.1; budget = 5 files / 50 KB each / 250 KB total
+        tests: true                    # default true
+        types: true                    # default true
+        siblings: false                # default false (opt-in; high noise on dense dirs)
     - path: "**/*.tsx"
       instructions: "no any, prefer type imports, hooks rules"
   max_files: 50
   max_diff_lines: 3000
   ignore_authors: ["dependabot[bot]", "renovate[bot]"]
+  min_confidence: low                  # v1.1; high | medium | low (default: low - post everything)
+  request_changes_on: critical         # v1.1; critical | major | never (default: critical)
 
 cost:
   max_usd_per_pr: 1.0
@@ -1346,6 +1413,9 @@ skills:
 
 incremental:
   enabled: true                        # default. Set false to always full-review.
+
+server:                                # v1.1; Server / CLI mode only
+  workspace_strategy: none             # none | contents-api | sparse-clone (default: none)
 ```
 
 ### 10.2 Precedence (highest → lowest)

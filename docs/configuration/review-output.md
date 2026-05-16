@@ -7,10 +7,13 @@ provider (Anthropic, OpenAI, Azure, Google, Vertex, Bedrock) generates
 output that matches it, so operators can aggregate findings across
 providers without text-mining comment bodies.
 
-This document covers the **`category`** taxonomy that is attached to
-each inline comment.
+This document covers the three optional fields the v1.1 schema attaches
+to each inline comment — **`category`** (taxonomy), **`confidence`**
+(operator-tunable suppression floor), and **`ruleId`** (stable identifier
+for dedup + triage) — plus the operator-facing config keys that drive
+them.
 
-Spec reference: §6 (output schema).
+Spec reference: §7.7 (output validation schema).
 
 ---
 
@@ -84,6 +87,62 @@ rather than an empty one.
 
 If no comment has a category, the formatter returns the empty string
 so it is safe to concatenate without producing an orphan header.
+
+---
+
+## The `confidence` field
+
+`InlineCommentSchema.confidence` is an **optional** enum with three
+values:
+
+| Confidence | Use when |
+|---|---|
+| `high`     | The model is sure the finding is real. Default for legacy / unannotated output. |
+| `medium`   | Likely real but worth a human glance. |
+| `low`      | Speculative; operator may want to suppress. |
+
+Set the per-installation floor in `.review-agent.yml`:
+
+```yaml
+reviews:
+  min_confidence: medium    # high | medium | low (default: low — post everything)
+```
+
+`min_confidence: 'high'` keeps only `high`. `'medium'` drops `low`.
+`'low'` (default) keeps everything. Comments without a `confidence`
+field are treated as `high` for back-compat — legacy reviews continue
+to surface.
+
+The filter runs **after** dedup so the fingerprint set on the kept
+list stays well-formed. Suppressed comments are NOT memoised — flipping
+the floor back from `high` → `low` lets the next review re-emit
+previously-silent findings.
+
+---
+
+## The `ruleId` field
+
+`InlineCommentSchema.ruleId` is an **optional** stable identifier (max
+64 chars, regex `/^[a-z][a-z0-9-]+$/`). The dedup middleware
+fingerprints findings by `(path, line, ruleId, suggestionType)`; with
+no `ruleId` it falls back to severity, which collided whenever two
+distinct findings on the same line shared a severity. Setting `ruleId`
+eliminates that collision.
+
+A non-exhaustive canonical taxonomy (the model is instructed to
+prefer these IDs when applicable; otherwise invent a kebab-case ID
+that two reviewers would converge on):
+
+- Security: `sql-injection`, `path-traversal`, `xss`, `ssrf`, `unsafe-deserialization`.
+- Correctness: `null-deref`, `off-by-one`, `missing-await`, `race-condition`.
+- Performance: `n-plus-one`, `accidental-quadratic`, `hot-loop-alloc`.
+- Maintainability: `duplicated-logic`, `leaky-abstraction`, `magic-number`, `unused-var`, `unused-import`, `long-function`.
+- Style: `inconsistent-naming`, `dead-code`.
+- Docs: `stale-comment`, `missing-doc`, `wrong-example`.
+- Test: `flaky-test`, `missing-case`, `brittle-assertion`, `weak-coverage`.
+
+When `ruleId` is unset, dedup uses severity as the fingerprint key —
+existing reviews keep working byte-for-byte.
 
 ---
 

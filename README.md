@@ -10,20 +10,42 @@ Self-hosted, BYOK AI code-review agent for GitHub Pull Requests.
 `review-agent` runs as a GitHub Action on your PRs. It:
 
 - Posts inline comments tied to specific lines, plus a single summary
-  comment per review.
+  comment per review. Each comment carries optional `category` (bug /
+  security / performance / maintainability / style / docs / test),
+  `confidence` (high / medium / low), and `ruleId` so operators can
+  aggregate, suppress, and dedupe findings across providers.
+- Calibrates severity against a published rubric (critical / major /
+  minor / info with before/after examples) baked into the system
+  prompt, and switches the GitHub review event to `REQUEST_CHANGES`
+  on critical findings (opt-in via `reviews.request_changes_on`).
 - Deduplicates findings across pushes via a hidden state comment
-  (`<!-- review-agent-state: ... -->`) and per-finding fingerprints, so
-  comments don't pile up on incremental reviews.
+  (`<!-- review-agent-state: ... -->`) and per-finding fingerprints,
+  and sends only the **incremental** diff to the LLM on the 2nd+
+  push so reviewers don't pay for the whole PR on every commit.
+- Exposes `read_file` / `glob` / `grep` tools to the model so it can
+  pull in test companions, type declarations, and siblings as it
+  reviews — bounded by a per-review `MAX_TOOL_CALLS` budget plus an
+  auto-fetch budget on `path_instructions[i].auto_fetch`.
 - Honours an opt-in `.review-agent.yml` config — language, profile
   (`chill` / `assertive`), provider/model, cost cap, ignored authors,
-  path-scoped instructions, and skills.
+  path-scoped instructions (with auto-fetch + glob validation),
+  skills, confidence floor, severity threshold for REQUEST_CHANGES,
+  and (Server mode) workspace strategy.
 - Scans diffs and any agent-collected text with [`gitleaks`](https://github.com/gitleaks/gitleaks)
   before posting; aborts review on secret leakage in agent output.
 - Runs in a non-root sandboxed Docker container with denylisted paths
-  (`.env*`, `.git/`, `node_modules/`) and partial+sparse clone of just the
-  changed paths.
-- Caps cost per PR (`cost-cap-usd`, default `1.0`) and short-circuits the
-  agent loop the moment the cap is reached.
+  (`.env*`, `.git/`, `node_modules/`, `.aws/credentials`, secret stores)
+  enforced at BOTH the provisioner and the tool dispatcher, and
+  partial+sparse clone of just the changed paths.
+- Caps cost per PR (`cost-cap-usd`, default `1.0`) and short-circuits
+  the agent loop the moment the cap is reached.
+- Ships a `review-agent audit export` / `audit prune` CLI for
+  operator-driven retention of `audit_log` / `cost_ledger`, with
+  HMAC-chain re-verification on prune (Server mode).
+- Retries the state-comment write on transient GitHub failures
+  (configurable via the `state-write-retries` action input) and fails
+  loud on exhaustion so the next push doesn't silently re-review the
+  whole PR.
 
 ## Quick start (GitHub Action)
 

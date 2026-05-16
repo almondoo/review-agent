@@ -168,31 +168,53 @@ v1.0 follow-on:
 
 - #58 wire gitleaks scanner into agent pipeline (surfaced by Round 1 of #44's review) — `54e4953`
 
+v1.0.1 — both issues shipped on `develop`:
+
+- #59 expose read_file/glob/grep tools to the LLM — `d20f101`
+- #60 wire incremental diff via sinceSha — `e3281cd`
+
+v1.1 — all 11 issues (#61–#71) shipped on `develop`:
+
+- #61 explicit severity rubric + what-NOT-to-flag + suggestion guidance — `6498bb3`
+- #62 state-comment retry + fail-loud — `615fa8a`
+- #63 provision workspace in Server mode — `62ae130` (+ `15ac9c3` reviewer I-1 denylist parity)
+- #64 add optional category field to InlineCommentSchema — `9e3f3ba`
+- #65 map severity to GitHub review event — `5c76b93`
+- #66 surface commit messages + labels + base branch to LLM — `6844725` (+ `215abed` reviewer I-1 listCommits perf)
+- #67 audit_log + cost_ledger retention + export CLI — `198fba3` (+ `bfcd769` reviewer I-1/I-2 retention.md RLS doc)
+- #68 severity consistency assertions + CI gate — `a534c37`
+- #69 add confidence + ruleId to InlineCommentSchema — `553f156`
+- #70 path_instructions auto-fetch + glob validation — `011d014` (+ `ffe6aa6` reviewer I-1 `<related_files>` envelope)
+- #71 stronger ReviewState validation via Zod schema — `6ef4ff2`
+
+17 commits (13 features + 4 reviewer-fix follow-ups) landed on `develop`
+between 2026-05-16 and 2026-05-16 in a single multi-agent wave. Final
+regression: 823/823 unit tests, typecheck/lint/build green across all
+12 packages. Not yet merged to `main`.
+
 ---
 
-## v1.0.1 — hotfix patches for doc-vs-code gaps (2 issues, planning)
+## v1.0.1 — hotfix patches for doc-vs-code gaps (2 issues, shipped on `develop`)
 
 Two architectural gaps surfaced by a 2026-05-15 multi-agent code audit
-of the v1.0 baseline (issue #44 procedure round 2). Both are
-implemented "skeleton only" — the infrastructure ships but is never
-wired to the LLM call path. Cut a v1.0.1 hotfix once both land.
+of the v1.0 baseline (issue #44 procedure round 2). Both were
+implemented "skeleton only" in v1.0 — the infrastructure shipped but
+was never wired to the LLM call path. Both are now wired on `develop`.
 
-| # | Issue | Title (short) | Depends on |
+| # | Issue | Title (short) | Commit |
 |---|---|---|---|
-| 59 | [#59](https://github.com/almondoo/review-agent/issues/59) | feat(llm,runner): expose read_file/glob/grep tools to the LLM | — |
-| 60 | [#60](https://github.com/almondoo/review-agent/issues/60) | feat(runner,action): wire incremental diff via sinceSha | — |
+| 59 | [#59](https://github.com/almondoo/review-agent/issues/59) | feat(llm,runner): expose read_file/glob/grep tools to the LLM | `d20f101` |
+| 60 | [#60](https://github.com/almondoo/review-agent/issues/60) | feat(runner,action): wire incremental diff via sinceSha | `e3281cd` |
 
-**Suggested execution order**: #59 → #60. They are independent
-(can be parallelised) but #59 unblocks v1.1's #63 + #70, so prioritise it.
-
-**v1.0.1 release gate**: both #59 and #60 closed, typecheck + lint +
-test:coverage + build green, walkthrough rows T-2 / I-2 / E-1 in
-`docs/security/threat-model-review-2026-05.md` updated to reflect
-the new behaviour.
+**Execution order taken**: #59 → #60 (as suggested; #59 unblocked v1.1's
+#63 + #70). A retry-undercount fix on #59 (use `Math.max` instead of a
+ternary so cumulative tool-call counts survive the schema-retry path)
+landed transparently inside `553f156` (#69 commit) due to in-flight
+working-tree overlap; net effect on develop is correct.
 
 ---
 
-## v1.1 — structured output, ops hardening, Server-mode quality (11 issues, planning)
+## v1.1 — structured output, ops hardening, Server-mode quality (11 issues, shipped on `develop`)
 
 Eleven enhancements grouped into four themes. All issues have a
 "Ready to implement (2026-05-16)" comment with locked design
@@ -229,18 +251,24 @@ decisions and concrete acceptance criteria.
 | 63 | [#63](https://github.com/almondoo/review-agent/issues/63) | provision workspace in Server mode (contents-api default) | #59 |
 | 70 | [#70](https://github.com/almondoo/review-agent/issues/70) | path_instructions auto-fetch + glob validation | #59 (partial: validation half ships independently) |
 
-**Suggested v1.1 execution order**:
+**Execution order taken** (multi-agent wave on `develop`, 2026-05-16):
 
-1. **#71** — defensive, low-risk warmup; lands fast.
-2. **#62** — same, narrow scope.
-3. **#61 + #64 + #69** — Theme 1 bundled PR (largest single change, highest review-quality win).
-4. **#65** — depends on #64 (`category`); changes default UX, document in UPGRADING.
-5. **#68** — depends on #61 (rubric); locks in baseline for severity consistency.
-6. **#66** — independent; PR-metadata expansion.
-7. **#67** — independent; retention + export tooling.
-8. **#63** — depends on v1.0.1 #59; Server-mode parity.
-9. **#70** — depends on v1.0.1 #59; final piece.
+1. **#71** — `6ef4ff2`, ReviewState Zod refines + StateParseEvent.
+2. **#59** (v1.0.1) — `d20f101`, LLM tool exposure.
+3. **#64** — `9e3f3ba`, InlineCommentSchema.category.
+4. **#67** — `198fba3` + `bfcd769` doc fix, audit retention + export CLI.
+5. **#60** (v1.0.1) — `e3281cd`, incremental diff via sinceSha.
+6. **#69** — `553f156`, confidence + ruleId + min_confidence filter.
+7. **#68** — `a534c37`, severity-consistency eval + CI gate.
+8. **#61** — `6498bb3`, severity rubric + what-NOT + suggestion guidance.
+9. **#66** — `6844725` + `215abed` perf fix, commits/labels/base_branch surface.
+10. **#62** — `615fa8a`, state-comment retry + state-write-retries input.
+11. **#65** — `5c76b93`, severity → REQUEST_CHANGES mapping + branch-protection guidance in SECURITY.md.
+12. **#63** — `62ae130` + `15ac9c3` denylist parity, Server-mode workspace provisioning.
+13. **#70** — `011d014` + `ffe6aa6` envelope fix, path_instructions auto-fetch + glob validation.
 
-**v1.1 release gate**: all 11 issues closed, eval baseline stable
-(severity_consistency_score ≥ baseline from #68), typecheck + lint
-+ test:coverage + build green.
+**v1.1 release gate**: all 11 issues closed ✓ (on `develop`), typecheck +
+lint + test:coverage + build green ✓ (823/823 unit tests pass at HEAD
+`ffe6aa6`). Eval baseline measurement (`severity_consistency_score`)
+remains null in `packages/eval/baseline.json` — the gate is dormant until
+the promptfoo→scoring-input shim lands as a wave-end follow-up.
