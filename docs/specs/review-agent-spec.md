@@ -38,6 +38,10 @@ Build a self-hostable, OSS, AI code review agent that:
   Anthropic API key (BYOK) and runs on their own infra.
 - **No GitLab/Bitbucket adapter in v1.x.** Only GitHub and CodeCommit. Other VCS
   platforms come post-v1.0.
+  - **GHES note.** GitHub Enterprise Server compatibility (issue #49,
+    `docs/deployment/ghes.md`) is GitHub-side only. AWS CodeCommit is a
+    managed AWS service with no on-premises / self-hosted equivalent, so
+    there is no "CodeCommit Enterprise Server" tier to support.
 - **No code modification.** The agent does not commit, push, edit files in the user's
   repo, or open PRs. Read-only on source, write-only on PR comments.
 - **No model fine-tuning.** No training data collection. Inference only.
@@ -718,6 +722,36 @@ source of truth** for review state, keyed by `(repository_arn, pr_id)`. The
 adapter interface remains the same; the GitHub adapter writes both, the
 CodeCommit adapter writes only to Postgres. This divergence is documented in
 `packages/platform-codecommit/README.md` and the user-facing docs.
+
+#### 5.2.1 CodeCommit out of scope (deliberate)
+
+The CodeCommit adapter implements the full `VCS` interface but several
+methods are intentionally inert because the underlying platform either
+lacks the API or the runner does not need it. These are **permanent
+design decisions**, not unfinished work:
+
+- **`cloneRepo` is unsupported.** The CodeCommit adapter's `cloneRepo`
+  throws `not supported` (`packages/platform-codecommit/src/adapter.ts`).
+  The runner's review flow uses `getDiff()` + `getFile()` exclusively —
+  it never requires a working tree clone. CodeCommit auth would also
+  require `git-remote-codecommit` or AWS-signed HTTPS, which we
+  deliberately do not bundle. If a future feature needs a clone, it
+  must declare so via `VcsCapabilities.clone` (issue #80) and either
+  fall back to the API path or refuse to run on CodeCommit.
+- **`getStateComment` / `upsertStateComment` are no-ops** (return
+  `null` / resolve without side effect). See §12.1.1 — Postgres is
+  canonical for CodeCommit, and the adapter's no-op is defense in
+  depth so accidental callers cannot corrupt state by writing to a
+  comment that will not survive HTML escaping.
+- **`review.event` (APPROVE / REQUEST_CHANGES) is currently dropped**
+  by `postReview`. Issue #74 wires this to
+  `UpdatePullRequestApprovalState` behind an opt-in
+  `codecommit.approvalState` config flag.
+- **Commit-message access for the LLM context** (§7.6,
+  `ReviewInput.commits[]` per issue #66) is **GitHub-only**. The
+  CodeCommit `GetDifferences` API does not return commit metadata in
+  the diff response and we do not call `GetCommitsFromMergeBase` per
+  review for cost reasons.
 
 ---
 
@@ -2595,6 +2629,43 @@ v1.0+ as design work, not implementation blockers. Status as of v0.3 release:
     **Resolved**: v0.3 ships with `manifest.json` + SHA-256 only (mandatory).
     Cosign attestation is **deferred to v1.1** — re-evaluate based on
     contributor demand. Track in a roadmap issue, not in the spec.
+
+### 22.1 CodeCommit-specific posture (consolidated)
+
+These items consolidate CodeCommit design constraints that were
+previously scattered in code comments and adapter READMEs. None of
+them are open questions — they are documented here so contributors do
+not mistake them for gaps in implementation.
+
+1. **Multi-bot coordination on CodeCommit.** Issue #48
+   (`docs/configuration/coordination.md`) ships the multi-bot
+   coordination policy with `coordination.other_bots: ignore` /
+   `defer_if_present`. **The detection list
+   (`packages/config/src/known-bots.ts`) is GitHub-actor-based** —
+   detection scans `existingComments[].author.login` for GitHub bot
+   logins (`coderabbitai[bot]`, etc.). CodeCommit comments come from
+   IAM principals rather than `*[bot]` user logins; the GitHub
+   actor-string detector therefore matches nothing on CodeCommit, and
+   `defer_if_present` reduces to `ignore` in practice. Operators who
+   need multi-bot coordination on CodeCommit should rely on AWS
+   approval-rule templates or external orchestration. This is **not**
+   a planned feature — the demand vs. complexity is unfavourable
+   (CodeCommit is in maintenance mode upstream;
+   `packages/platform-codecommit/README.md` §1 already warns about
+   that).
+2. **GHES compatibility (#49) is GitHub-only.** AWS CodeCommit is a
+   managed AWS service with no on-premises tier; there is no
+   "CodeCommit Enterprise Server". See §1.2 for the corresponding
+   non-goal entry.
+3. **Disaster-recovery posture differs from GitHub.** Postgres is
+   canonical for review state on CodeCommit (§12.1.1). The
+   `recover sync-state` CLI command is GitHub-only — there is no
+   `recover sync-state-from-codecommit` because the hidden-state
+   markers do not survive CodeCommit's HTML escaping. See
+   `docs/operations/codecommit-disaster-recovery.md` for the
+   operator-facing runbook.
+4. **`cloneRepo` is intentionally unsupported** on CodeCommit
+   (§5.2.1). The runner uses `getDiff()` + `getFile()`.
 
 ---
 

@@ -57,6 +57,12 @@
 - **GitLab / Bitbucket アダプタは v1.x では対応しない**。Post-v1.0 で着手
 - **IDE 統合は v1.x では対応しない**。Web / PR コメント面のみ
 
+> CodeCommit に関する出スコープ項目（`cloneRepo` の不対応、multi-bot
+> coordination が GitHub-actor ベースで動作する点、GHES 互換性は
+> GitHub 側のみ）は、`docs/specs/review-agent-spec.md` §5.2.1 と
+> §22.1 に統合的に整理してある。本 PRD はその要約のみ示し、詳細は
+> spec を参照する。
+
 ---
 
 ## 3. 課題の定義
