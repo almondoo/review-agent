@@ -21,9 +21,9 @@
  *   3. Re-run `pnpm --filter @review-agent/platform-codecommit test`.
  *
  * Some entries below correspond to Commands that are listed in the IAM
- * block but not yet exercised in `adapter.ts` (e.g. `PostCommentReply`,
- * and — until issue #74 lands — `UpdatePullRequestApprovalState`). They
- * remain in the registry so docs and ops never lag the planned surface.
+ * block but not yet exercised in `adapter.ts` (e.g. `PostCommentReply`).
+ * They remain in the registry so docs and ops never lag the planned
+ * surface.
  */
 
 export type ExpectedCommandPair = {
@@ -67,7 +67,4 @@ export const EXPECTED_PERMISSIONS: ReadonlySet<string> = new Set(
 export const PENDING_COMMANDS: ReadonlySet<string> = new Set([
   // Used by reply-on-comment flows (spec §10.3); not wired yet.
   'PostCommentReplyCommand',
-  // Issue #74 will wire this; we list it here so the IAM block stays
-  // ahead of the code rather than behind.
-  'UpdatePullRequestApprovalStateCommand',
 ]);

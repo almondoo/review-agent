@@ -102,12 +102,12 @@ describe('IAM ↔ SDK Command drift', () => {
     ).toEqual([]);
   });
 
-  it('UpdatePullRequestApprovalStateCommand is registered ahead of issue #74', () => {
-    // #74 will wire `UpdatePullRequestApprovalStateCommand` into
-    // adapter.ts. The registry lists it now so the IAM block does not
-    // lag the planned surface. Once #74 lands the Command will also
-    // appear in `adapterCommands`; either way this assertion holds
-    // because it only checks the registry side.
+  it('UpdatePullRequestApprovalStateCommand is registered and wired (post issue #74)', () => {
+    // Issue #74 wired `UpdatePullRequestApprovalStateCommand` into
+    // adapter.ts, so the Command must appear in both the registry and
+    // the adapter usage set. It is no longer in PENDING_COMMANDS.
     expect(registryCommands.has('UpdatePullRequestApprovalStateCommand')).toBe(true);
+    expect(adapterCommands.has('UpdatePullRequestApprovalStateCommand')).toBe(true);
+    expect(PENDING_COMMANDS.has('UpdatePullRequestApprovalStateCommand')).toBe(false);
   });
 });
