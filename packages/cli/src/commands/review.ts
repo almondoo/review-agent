@@ -26,7 +26,7 @@ export type RunReviewOpts = {
   readonly costCapUsd?: number;
   readonly env: NodeJS.ProcessEnv;
   readonly readFile?: (p: string, enc: 'utf8') => Promise<string>;
-  readonly createVCS?: (token: string | null) => VCS;
+  readonly createVCS?: (token: string | null, config: Config) => VCS;
   readonly createProvider?: (apiKey: string, config: Config) => LlmProvider;
   readonly confirm?: () => Promise<boolean>;
 };
@@ -66,7 +66,7 @@ export async function runReviewCommand(
   const readFile = opts.readFile ?? defaultReadFile;
   const config = applyOverrides(await loadConfig(opts.configPath, readFile), opts);
 
-  const vcs = (opts.createVCS ?? ((t) => defaultCreateVCS(platform, t)))(token);
+  const vcs = (opts.createVCS ?? ((t, c) => defaultCreateVCS(platform, t, c)))(token, config);
   const pr = await vcs.getPR(ref);
 
   const skipReason = decideSkip(pr, config);
@@ -166,9 +166,9 @@ function parseRef(platform: ReviewPlatform, repo: string, prNumber: number): PRR
   };
 }
 
-function defaultCreateVCS(platform: ReviewPlatform, token: string | null): VCS {
+function defaultCreateVCS(platform: ReviewPlatform, token: string | null, config: Config): VCS {
   if (platform === 'codecommit') {
-    return createCodecommitVCS();
+    return createCodecommitVCS({ approvalState: config.codecommit.approvalState });
   }
   if (!token) {
     throw new Error('GitHub token is required for --platform github.');

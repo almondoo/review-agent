@@ -103,14 +103,9 @@ function pickPrNumber(ev: CodecommitEvent): number | null {
 /**
  * Build the JobMessage for a CodeCommit PR.
  *
- * Note: `JobMessageSchema` in `core` currently pins
- * `prRef.platform: z.literal('github')` — widening that schema to
- * include `'codecommit'` belongs to a `core` change (out of scope for
- * this handler-only PR). Since the GitHub adapter only consumes
- * `platform: 'github'` jobs, the worker safely ignores any
- * `'codecommit'` jobs that reach it until the schema is widened and a
- * dispatcher routes by platform. The type assertion below is the
- * narrowest possible workaround for the schema mismatch.
+ * `JobMessageSchema.prRef.platform` is now a `'github' | 'codecommit'`
+ * enum (widened in core as the issue #73 follow-on), so we can build
+ * the prRef as a plain typed object without any `unknown` cast.
  */
 function buildCodecommitJobMessage(
   ev: CodecommitEvent,
@@ -122,17 +117,13 @@ function buildCodecommitJobMessage(
   const number = pickPrNumber(ev);
   if (!repo || !number) return null;
   const headSha = ev.sourceCommit;
-  // JobMessageSchema in core currently pins `prRef.platform: z.literal('github')`.
-  // Widening it to include `'codecommit'` is a separate core change; until then
-  // we mint the codecommit value here via an `unknown` round-trip so the
-  // receiver is ready as soon as the schema lifts, and no `any` is introduced.
-  const prRef = {
+  const prRef: JobMessage['prRef'] = {
     platform: 'codecommit',
     owner: '',
     repo,
     number,
     ...(headSha ? { headSha } : {}),
-  } as unknown as JobMessage['prRef'];
+  };
   const msg: JobMessage = {
     jobId: `codecommit:${repo}#${number}@${now.getTime()}`,
     installationId: snsMessageId,

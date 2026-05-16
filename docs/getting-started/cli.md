@@ -83,6 +83,25 @@ Notes:
   `--platform codecommit` short-circuits with an informative message
   (CodeCommit treats Postgres as the canonical state).
 
+#### Approval-state mapping (opt-in)
+
+By default the CLI does **not** mutate the CodeCommit pull-request approval
+state when posting a review — it only writes inline comments and the
+Postgres-backed state record. To let the agent map a request-changes
+verdict onto `REVOKE` and an approval onto `APPROVE`, opt in via
+`.review-agent.yml`:
+
+```yaml
+codecommit:
+  approvalState: managed   # default: off
+```
+
+The CLI threads this value into `createCodecommitVCS({ approvalState })`
+on every run, so the behaviour matches the server. See
+[`packages/platform-codecommit/README.md`](../../packages/platform-codecommit/README.md#approval-state-mapping-74)
+for the full mapping table and the IAM permissions required
+(`codecommit:UpdatePullRequestApprovalState`).
+
 The dry-run summary lists each generated comment as
 `[severity] path:line — first line of body` plus the model, tokens, cost,
 and the run summary. Use `--post` only after you've reviewed the dry-run.

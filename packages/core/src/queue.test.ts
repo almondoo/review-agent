@@ -112,4 +112,25 @@ describe('JobMessageSchema', () => {
       JobMessageSchema.parse({ ...buildBase(), installationId: 'a'.repeat(65) }),
     ).toThrow(z.ZodError);
   });
+
+  it("accepts prRef.platform 'codecommit'", () => {
+    const m = JobMessageSchema.parse({
+      jobId: 'codecommit:my-repo#7@1700000000000',
+      installationId: 'sns-msg-id',
+      prRef: { platform: 'codecommit', owner: '', repo: 'my-repo', number: 7 },
+      triggeredBy: 'pull_request.opened',
+      enqueuedAt: '2026-04-30T00:00:00.000Z',
+    });
+    expect(m.prRef.platform).toBe('codecommit');
+    expect(m.prRef.repo).toBe('my-repo');
+  });
+
+  it('rejects prRef.platform outside the enum', () => {
+    expect(() =>
+      JobMessageSchema.parse({
+        ...buildBase(),
+        prRef: { ...buildBase().prRef, platform: 'gitlab' },
+      }),
+    ).toThrow(z.ZodError);
+  });
 });
