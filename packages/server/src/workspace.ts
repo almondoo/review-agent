@@ -27,6 +27,14 @@ const DENY_PATTERNS: ReadonlyArray<RegExp> = [
   /\.(key|pem|p12|pfx)$/i,
   /credentials.*\.json$/i,
   /service-account.*\.json$/i,
+  // Keep this 8-entry list in sync with `runner/src/tools.ts`'s
+  // DENY_PATTERNS. Reviewer flagged drift in #63 I-1: a missing entry
+  // here meant the bytes would hit disk in the worker tmpdir before
+  // the runner's tool dispatcher refused to read them, leaving a
+  // warm-Lambda residue window. Wave-end follow-up M-2 will extract
+  // the shared list to `@review-agent/core` so both packages import
+  // a single source.
+  /^\.aws\/credentials$/,
 ];
 
 const TRAVERSAL = /(^|\/)\.\.(\/|$)/;

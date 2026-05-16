@@ -115,6 +115,11 @@ describe('provisionWorkspace — strategy: contents-api', () => {
           { path: 'tls/server.pem' },
           { path: 'credentials.json' },
           { path: 'service-account.json' },
+          // Reviewer I-1 on #63: this entry was missing from the
+          // workspace provisioner's deny-list while present in
+          // runner/src/tools.ts, leaving a bytes-on-disk window
+          // for `.aws/credentials` in the worker tmpdir.
+          { path: '.aws/credentials' },
           { path: 'src/ok.ts' }, // only this one should fetch.
         ]),
       },
