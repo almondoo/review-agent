@@ -75,8 +75,11 @@ export {
 export {
   type InlineCommentInput,
   InlineCommentSchema,
+  REVIEW_STATE_SCHEMA_VERSION,
   type ReviewOutputInput,
   ReviewOutputSchema,
+  type ReviewStateInput,
+  ReviewStateSchema,
 } from './schemas.js';
 export type {
   CloneOpts,

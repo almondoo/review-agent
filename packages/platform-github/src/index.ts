@@ -27,4 +27,6 @@ export {
   buildSummaryWithState,
   formatStateComment,
   parseStateComment,
+  type StateParseEvent,
+  type StateParseEventHandler,
 } from './state-comment.js';

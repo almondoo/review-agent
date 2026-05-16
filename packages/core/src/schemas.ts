@@ -7,9 +7,15 @@ const SUGGESTION_MAX = 5000;
 const SUMMARY_MAX = 10_000;
 const LINE_MAX = 1_000_000;
 const COMMENTS_MAX = 50;
+const MODEL_NAME_MIN = 1;
+const MODEL_NAME_MAX = 128;
 
 const NO_NUL = /^[^\0]+$/;
 const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
+const SHA1_HEX = /^[0-9a-f]{40}$/;
+const FINGERPRINT_HEX = /^[0-9a-f]{16}$/;
+
+export const REVIEW_STATE_SCHEMA_VERSION = 1;
 
 function notBroadcastMention(text: string): boolean {
   return !text.includes('@everyone') && !text.includes('@channel');
@@ -48,5 +54,19 @@ export const ReviewOutputSchema = z
   })
   .strict();
 
+export const ReviewStateSchema = z
+  .object({
+    schemaVersion: z.literal(REVIEW_STATE_SCHEMA_VERSION),
+    lastReviewedSha: z.string().regex(SHA1_HEX),
+    baseSha: z.string().regex(SHA1_HEX),
+    reviewedAt: z.string().datetime(),
+    modelUsed: z.string().min(MODEL_NAME_MIN).max(MODEL_NAME_MAX),
+    totalTokens: z.number().int().nonnegative(),
+    totalCostUsd: z.number().nonnegative(),
+    commentFingerprints: z.array(z.string().regex(FINGERPRINT_HEX)),
+  })
+  .strict();
+
 export type InlineCommentInput = z.input<typeof InlineCommentSchema>;
 export type ReviewOutputInput = z.input<typeof ReviewOutputSchema>;
+export type ReviewStateInput = z.input<typeof ReviewStateSchema>;

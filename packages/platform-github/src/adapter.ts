@@ -14,7 +14,12 @@ import type {
 } from '@review-agent/core';
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
 import { assertSafeRelativePath } from './path-guard.js';
-import { buildSummaryWithState, formatStateComment, parseStateComment } from './state-comment.js';
+import {
+  buildSummaryWithState,
+  formatStateComment,
+  parseStateComment,
+  type StateParseEventHandler,
+} from './state-comment.js';
 
 const STATUS_MAP: Readonly<Record<string, DiffFile['status']>> = {
   added: 'added',
@@ -31,6 +36,14 @@ export type GithubVCSOptions = {
   readonly octokit?: Pick<Octokit, 'rest' | 'paginate'>;
   readonly runGit?: RunGit;
   readonly cloneUrl?: (ref: PRRef) => string;
+  /**
+   * Invoked when the embedded state-comment JSON cannot be trusted
+   * (`schema_mismatch`, `validation_failure`, `json_parse_failure`).
+   * Callers should log + (for schema mismatches) append an
+   * `state_schema_mismatch` audit event. When omitted, untrusted
+   * state is silently dropped — i.e. the review is treated as fresh.
+   */
+  readonly onStateParseEvent?: StateParseEventHandler;
 };
 
 function mapStatus(status: string | undefined): DiffFile['status'] {
@@ -222,7 +235,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
     ensureGithub(ref);
     const found = await findStateComment(ref);
     if (!found) return null;
-    return parseStateComment(found.body);
+    return parseStateComment(found.body, opts.onStateParseEvent);
   };
 
   const upsertStateComment = async (ref: PRRef, state: ReviewState): Promise<void> => {

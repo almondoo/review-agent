@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { InlineCommentSchema, ReviewOutputSchema } from './schemas.js';
+import {
+  InlineCommentSchema,
+  REVIEW_STATE_SCHEMA_VERSION,
+  ReviewOutputSchema,
+  ReviewStateSchema,
+} from './schemas.js';
 
 const validComment = {
   path: 'src/auth.ts',
@@ -173,5 +178,110 @@ describe('ReviewOutputSchema', () => {
         comments: [{ ...validComment, body: '@everyone' }],
       }).success,
     ).toBe(false);
+  });
+});
+
+const validState = {
+  schemaVersion: REVIEW_STATE_SCHEMA_VERSION,
+  lastReviewedSha: '0123456789abcdef0123456789abcdef01234567',
+  baseSha: 'fedcba9876543210fedcba9876543210fedcba98',
+  reviewedAt: '2026-04-30T10:00:00.000Z',
+  modelUsed: 'claude-sonnet-4-6',
+  totalTokens: 12_345,
+  totalCostUsd: 0.45,
+  commentFingerprints: ['0123456789abcdef', 'fedcba9876543210'],
+};
+
+describe('ReviewStateSchema', () => {
+  it('accepts a well-formed state', () => {
+    expect(ReviewStateSchema.safeParse(validState).success).toBe(true);
+  });
+
+  it('accepts state with empty commentFingerprints array', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, commentFingerprints: [] }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects negative totalCostUsd', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalCostUsd: -0.01 }).success).toBe(false);
+  });
+
+  it('rejects negative totalTokens', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalTokens: -1 }).success).toBe(false);
+  });
+
+  it('rejects fractional totalTokens', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, totalTokens: 1.5 }).success).toBe(false);
+  });
+
+  it('rejects lastReviewedSha that is not a 40-char hex SHA', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, lastReviewedSha: 'abc' }).success).toBe(
+      false,
+    );
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        lastReviewedSha: 'GHIJKL6789abcdef0123456789abcdef01234567',
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        lastReviewedSha: '0123456789ABCDEF0123456789ABCDEF01234567',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects baseSha that is not a 40-char hex SHA', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, baseSha: 'def' }).success).toBe(false);
+  });
+
+  it('rejects schemaVersion mismatch (future v2)', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, schemaVersion: 2 }).success).toBe(false);
+  });
+
+  it('rejects schemaVersion as a non-numeric type', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, schemaVersion: '1' }).success).toBe(false);
+  });
+
+  it('rejects missing commentFingerprints', () => {
+    const { commentFingerprints: _, ...withoutFingerprints } = validState;
+    expect(ReviewStateSchema.safeParse(withoutFingerprints).success).toBe(false);
+  });
+
+  it('rejects commentFingerprints with the wrong shape', () => {
+    expect(
+      ReviewStateSchema.safeParse({ ...validState, commentFingerprints: ['short'] }).success,
+    ).toBe(false);
+    expect(
+      ReviewStateSchema.safeParse({
+        ...validState,
+        commentFingerprints: ['0123456789ABCDEF'],
+      }).success,
+    ).toBe(false);
+    expect(ReviewStateSchema.safeParse({ ...validState, commentFingerprints: [42] }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects non-ISO reviewedAt strings', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, reviewedAt: 'yesterday' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects empty modelUsed', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, modelUsed: '' }).success).toBe(false);
+  });
+
+  it('rejects modelUsed longer than 128 chars', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, modelUsed: 'm'.repeat(129) }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects unknown extra fields (strict mode)', () => {
+    expect(ReviewStateSchema.safeParse({ ...validState, extra: 'oops' }).success).toBe(false);
   });
 });

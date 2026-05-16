@@ -6,9 +6,9 @@ const ref: PRRef = { platform: 'github', owner: 'o', repo: 'r', number: 7 };
 
 const validState: ReviewState = {
   schemaVersion: 1,
-  lastReviewedSha: 'abc',
-  baseSha: 'def',
-  reviewedAt: '2026-04-30T10:00:00Z',
+  lastReviewedSha: '0123456789abcdef0123456789abcdef01234567',
+  baseSha: 'fedcba9876543210fedcba9876543210fedcba98',
+  reviewedAt: '2026-04-30T10:00:00.000Z',
   modelUsed: 'claude-sonnet-4-6',
   totalTokens: 100,
   totalCostUsd: 0.01,
@@ -266,7 +266,43 @@ describe('getStateComment / upsertStateComment', () => {
       octokit: createMockOctokit({ paginate, issues: { listComments: vi.fn() } }),
     });
     const got = await vcs.getStateComment(ref);
-    expect(got?.lastReviewedSha).toBe('abc');
+    expect(got?.lastReviewedSha).toBe(validState.lastReviewedSha);
+  });
+
+  it('forwards schema_mismatch events to onStateParseEvent', async () => {
+    const forwardRolled = JSON.stringify({ ...validState, schemaVersion: 2 });
+    const paginate = vi.fn(async () => [
+      { id: 1, body: `<!-- review-agent-state: ${forwardRolled} -->` },
+    ]);
+    const onStateParseEvent = vi.fn();
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, issues: { listComments: vi.fn() } }),
+      onStateParseEvent,
+    });
+    const got = await vcs.getStateComment(ref);
+    expect(got).toBeNull();
+    expect(onStateParseEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'schema_mismatch', foundVersion: 2 }),
+    );
+  });
+
+  it('forwards validation_failure events to onStateParseEvent', async () => {
+    const corrupted = JSON.stringify({ ...validState, totalCostUsd: -1 });
+    const paginate = vi.fn(async () => [
+      { id: 1, body: `<!-- review-agent-state: ${corrupted} -->` },
+    ]);
+    const onStateParseEvent = vi.fn();
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, issues: { listComments: vi.fn() } }),
+      onStateParseEvent,
+    });
+    const got = await vcs.getStateComment(ref);
+    expect(got).toBeNull();
+    expect(onStateParseEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'validation_failure' }),
+    );
   });
 
   it('updates existing state comment when one exists', async () => {
