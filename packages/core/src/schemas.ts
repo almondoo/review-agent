@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SEVERITIES, SIDES } from './review.js';
+import { CATEGORIES, SEVERITIES, SIDES } from './review.js';
 
 const PATH_MAX = 500;
 const BODY_MAX = 5000;
@@ -43,9 +43,21 @@ export const InlineCommentSchema = z
     side: z.enum(SIDES),
     body: safeBody,
     severity: z.enum(SEVERITIES),
+    category: z.enum(CATEGORIES).optional(),
     suggestion: z.string().max(SUGGESTION_MAX).optional(),
   })
-  .strict();
+  .strict()
+  // Enforce the taxonomy rule that `style` findings never exceed
+  // `minor`. The system prompt also instructs the LLM not to emit
+  // `style/major|critical`, but the schema is the hard backstop —
+  // a provider that ignores the prompt still cannot escalate style.
+  .refine(
+    (c) => !(c.category === 'style' && (c.severity === 'major' || c.severity === 'critical')),
+    {
+      message: "category='style' must be at most severity='minor'",
+      path: ['severity'],
+    },
+  );
 
 export const ReviewOutputSchema = z
   .object({

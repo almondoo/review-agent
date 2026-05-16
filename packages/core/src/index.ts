@@ -59,11 +59,14 @@ export {
   type QueueClient,
 } from './queue.js';
 export {
+  CATEGORIES,
+  type Category,
   COST_LEDGER_PHASES,
   COST_LEDGER_STATUSES,
   type CostLedgerPhase,
   type CostLedgerRow,
   type CostLedgerStatus,
+  formatCategoryRollup,
   type InlineComment,
   type ReviewPayload,
   type ReviewState,

@@ -4,6 +4,31 @@ export type Severity = (typeof SEVERITIES)[number];
 export const SIDES = ['LEFT', 'RIGHT'] as const;
 export type Side = (typeof SIDES)[number];
 
+/**
+ * Coarse-grained taxonomy for review findings. Lets operators slice
+ * "how many security findings shipped this month" without text-mining
+ * comment bodies, and lets the prompt enforce category-specific rules
+ * (e.g. `style` finding maxes out at `severity: 'minor'`).
+ *
+ * - `bug`              — incorrect behavior, off-by-one, wrong logic.
+ * - `security`         — authn/authz, injection, secret leak, SSRF, crypto misuse.
+ * - `performance`      — N+1 queries, accidental O(n^2), hot-loop allocation.
+ * - `maintainability`  — duplication, leaky abstraction, missing test seam.
+ * - `style`            — formatting, naming, idiom; never higher than `minor`.
+ * - `docs`             — missing/inaccurate comments, README/JSDoc drift.
+ * - `test`             — missing case, flaky test, brittle assertion.
+ */
+export const CATEGORIES = [
+  'bug',
+  'security',
+  'performance',
+  'maintainability',
+  'style',
+  'docs',
+  'test',
+] as const;
+export type Category = (typeof CATEGORIES)[number];
+
 export type InlineComment = {
   readonly path: string;
   readonly line: number;
@@ -11,6 +36,7 @@ export type InlineComment = {
   readonly body: string;
   readonly fingerprint: string;
   readonly severity: Severity;
+  readonly category?: Category;
   readonly suggestion?: string;
 };
 
@@ -30,6 +56,29 @@ export type ReviewPayload = {
   readonly summary: string;
   readonly state: ReviewState;
 };
+
+/**
+ * Optional formatter: roll category counts into a markdown bullet list
+ * a caller can append to the human-readable summary. Returns the empty
+ * string when no comments carry a category — so the caller can safely
+ * concatenate without producing a header without a body. Categories are
+ * emitted in {@link CATEGORIES} order for deterministic snapshots.
+ */
+export function formatCategoryRollup(comments: ReadonlyArray<InlineComment>): string {
+  const counts = new Map<Category, number>();
+  for (const c of comments) {
+    if (c.category !== undefined) {
+      counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
+    }
+  }
+  if (counts.size === 0) return '';
+  const lines: string[] = ['### Findings by category'];
+  for (const cat of CATEGORIES) {
+    const n = counts.get(cat);
+    if (n !== undefined && n > 0) lines.push(`- ${cat}: ${n}`);
+  }
+  return lines.join('\n');
+}
 
 export const COST_LEDGER_PHASES = ['injection_detect', 'review_main', 'review_retry'] as const;
 export type CostLedgerPhase = (typeof COST_LEDGER_PHASES)[number];

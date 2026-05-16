@@ -125,6 +125,72 @@ describe('InlineCommentSchema', () => {
       InlineCommentSchema.safeParse({ ...validComment, suggestion: 'x'.repeat(5001) }).success,
     ).toBe(false);
   });
+
+  it('accepts comment without category (optional)', () => {
+    const { category: _, ...withoutCategory } = { ...validComment, category: undefined };
+    expect(InlineCommentSchema.safeParse(withoutCategory).success).toBe(true);
+  });
+
+  it('accepts each known category value', () => {
+    for (const category of [
+      'bug',
+      'security',
+      'performance',
+      'maintainability',
+      'style',
+      'docs',
+      'test',
+    ] as const) {
+      const severity = category === 'style' ? 'minor' : 'major';
+      expect(InlineCommentSchema.safeParse({ ...validComment, severity, category }).success).toBe(
+        true,
+      );
+    }
+  });
+
+  it('rejects unknown category value', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'correctness' }).success,
+    ).toBe(false);
+  });
+
+  it("rejects category='style' with severity='major'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'major' })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects category='style' with severity='critical'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'critical' })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts category='style' with severity='minor'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'minor' })
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts category='style' with severity='info'", () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, category: 'style', severity: 'info' })
+        .success,
+    ).toBe(true);
+  });
+
+  it("accepts category='security' with severity='critical' (no cap on non-style)", () => {
+    expect(
+      InlineCommentSchema.safeParse({
+        ...validComment,
+        category: 'security',
+        severity: 'critical',
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe('ReviewOutputSchema', () => {

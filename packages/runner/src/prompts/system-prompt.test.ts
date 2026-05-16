@@ -50,4 +50,25 @@ describe('composeSystemPrompt', () => {
     expect(out).toContain('- For files matching `**/*.ts`: Use strict types.');
     expect(out).toContain('- For files matching `**/*.test.ts`: Avoid mocks for pure logic.');
   });
+
+  it('describes the comment-category taxonomy', () => {
+    const out = composeSystemPrompt(baseOpts);
+    expect(out).toContain('## Comment categories');
+    for (const cat of [
+      'bug',
+      'security',
+      'performance',
+      'maintainability',
+      'style',
+      'docs',
+      'test',
+    ]) {
+      expect(out).toContain(`- ${cat} —`);
+    }
+  });
+
+  it("instructs that category='style' is capped at severity 'minor'", () => {
+    const out = composeSystemPrompt(baseOpts);
+    expect(out).toContain("category 'style' must use at most severity 'minor'");
+  });
 });
