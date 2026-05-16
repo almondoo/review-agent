@@ -72,6 +72,33 @@ describe('composeSystemPrompt', () => {
     expect(out).toContain("category 'style' must use at most severity 'minor'");
   });
 
+  it('emits a severity rubric with concrete before/after examples per level', () => {
+    const out = composeSystemPrompt(baseOpts);
+    expect(out).toContain('## Severity rubric');
+    for (const level of ['critical', 'major', 'minor', 'info']) {
+      expect(out).toContain(`- ${level} —`);
+    }
+    // Each rubric level should ship at least one concrete Before/After
+    // example so the LLM has a calibration anchor for the label.
+    const beforeCount = (out.match(/Before:/g) ?? []).length;
+    expect(beforeCount).toBeGreaterThanOrEqual(6);
+  });
+
+  it('emits a What NOT to flag section with at least 5 false-positive categories', () => {
+    const out = composeSystemPrompt(baseOpts);
+    expect(out).toContain('## What NOT to flag');
+    const fpSection = out.split('## What NOT to flag')[1]?.split('##')[0] ?? '';
+    const bulletCount = (fpSection.match(/^- /gm) ?? []).length;
+    expect(bulletCount).toBeGreaterThanOrEqual(5);
+  });
+
+  it('emits suggestion-field guidance (mechanical vs semantic)', () => {
+    const out = composeSystemPrompt(baseOpts);
+    expect(out).toContain('## Suggestions');
+    expect(out).toContain('mechanical and unambiguous');
+    expect(out).toContain('semantic, design-level');
+  });
+
   it('describes the three confidence levels', () => {
     const out = composeSystemPrompt(baseOpts);
     expect(out).toContain('## Confidence');
