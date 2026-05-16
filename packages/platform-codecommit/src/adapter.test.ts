@@ -53,6 +53,10 @@ describe('createCodecommitVCS — getPR', () => {
     expect(pr.baseSha).toBe('b1');
     expect(pr.draft).toBe(false);
     expect(pr.labels).toEqual([]);
+    // CodeCommit does not expose commit messages on the PullRequest
+    // payload; surface an empty array so the runner / wrapUntrusted
+    // simply omit the <commits> child.
+    expect(pr.commitMessages).toEqual([]);
     expect(client.send).toHaveBeenCalledWith(expect.any(GetPullRequestCommand));
   });
 

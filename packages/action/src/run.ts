@@ -132,7 +132,14 @@ export async function runAction(
     jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
     workspaceDir,
     diffText,
-    prMetadata: { title: pr.title, body: pr.body, author: pr.author },
+    prMetadata: {
+      title: pr.title,
+      body: pr.body,
+      author: pr.author,
+      baseRef: pr.baseRef,
+      labels: pr.labels,
+      commitMessages: pr.commitMessages,
+    },
     previousState,
     profile: config.profile,
     pathInstructions: config.reviews.path_instructions.map((p) => ({

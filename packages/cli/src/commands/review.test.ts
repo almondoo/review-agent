@@ -31,6 +31,7 @@ function fakePR(overrides: Partial<PR> = {}): PR {
     headRef: 'feat',
     draft: false,
     labels: [],
+    commitMessages: [],
     createdAt: '2026-04-30T00:00:00Z',
     updatedAt: '2026-04-30T00:00:00Z',
     ...overrides,

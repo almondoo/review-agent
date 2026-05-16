@@ -25,6 +25,7 @@ const samplePR: PR = {
   headRef: 'feat',
   draft: false,
   labels: [],
+  commitMessages: [],
   createdAt: '',
   updatedAt: '',
 };

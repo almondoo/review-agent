@@ -97,6 +97,45 @@ describe('getPR', () => {
     expect(pr.draft).toBe(false);
   });
 
+  it('populates commitMessages via paginate(listCommits), keeping the last 20 and truncating each at 5000 chars', async () => {
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'b', ref: 'main' },
+        head: { sha: 'h', ref: 'f' },
+        draft: false,
+        labels: [],
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    const listCommits = vi.fn();
+    // 25 commits — should keep only the last 20.
+    const commits = Array.from({ length: 25 }, (_, i) => ({
+      sha: `sha${i.toString().padStart(2, '0')}`,
+      commit: { message: i === 24 ? 'x'.repeat(6_000) : `commit ${i}` },
+    }));
+    const paginate = vi.fn(async (fn: unknown) => (fn === listCommits ? commits : []));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get, listCommits },
+        paginate,
+      }),
+    });
+    const pr = await vcs.getPR(ref);
+    expect(pr.commitMessages).toHaveLength(20);
+    // Cap: keep the trailing 20 (sha05 .. sha24).
+    expect(pr.commitMessages[0]?.sha).toBe('sha05');
+    expect(pr.commitMessages[19]?.sha).toBe('sha24');
+    // Last commit's 6_000-char message should be truncated to 5_000 + the trailing marker.
+    const last = pr.commitMessages[19];
+    expect(last?.message.startsWith('x'.repeat(5_000))).toBe(true);
+    expect(last?.message).toContain('[...truncated at 5000 chars]');
+  });
+
   it('surfaces 404 from Octokit unchanged', async () => {
     const get = vi.fn(async () => {
       const err = new Error('Not Found');
@@ -126,20 +165,30 @@ describe('getDiff', () => {
         updated_at: '',
       },
     }));
-    const paginate = vi.fn(async () => [
-      {
-        filename: 'a.ts',
-        previous_filename: null,
-        status: 'modified',
-        additions: 1,
-        deletions: 0,
-        patch: '@@',
-      },
-    ]);
+    const listCommits = vi.fn();
+    const listFiles = vi.fn();
+    // `getDiff` triggers two paginated reads: `getPR` calls
+    // `paginate(listCommits, …)` first to populate `commitMessages`,
+    // then this test's getDiff path calls `paginate(listFiles, …)`
+    // for the diff itself. Dispatch by reference so each lookup
+    // returns a shape matching the call site.
+    const paginate = vi.fn(async (fn: unknown) => {
+      if (fn === listCommits) return [];
+      return [
+        {
+          filename: 'a.ts',
+          previous_filename: null,
+          status: 'modified',
+          additions: 1,
+          deletions: 0,
+          patch: '@@',
+        },
+      ];
+    });
     const vcs = createGithubVCS({
       token: 't',
       octokit: createMockOctokit({
-        pulls: { get, listFiles: vi.fn() },
+        pulls: { get, listCommits, listFiles },
         paginate,
       }),
     });

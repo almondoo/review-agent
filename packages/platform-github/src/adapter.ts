@@ -31,6 +31,28 @@ const STATUS_MAP: Readonly<Record<string, DiffFile['status']>> = {
   unchanged: 'modified',
 };
 
+/**
+ * Cap on the number of recent commits surfaced to the LLM via
+ * `PR.commitMessages`. A multi-author rebased PR can land with
+ * hundreds of commits; sending all of them blows the prompt cache
+ * and burns tokens with little marginal signal. 20 covers the
+ * typical PR while keeping the upper-bound payload bounded.
+ */
+const COMMIT_MESSAGES_CAP = 20;
+
+/**
+ * Per-message byte cap. A 5 KB upper bound is generous for a
+ * commit message but firm enough to truncate the occasional
+ * pasted-stack-trace or AI-generated essay that some teams use
+ * as their commit body.
+ */
+const COMMIT_MESSAGE_MAX_CHARS = 5_000;
+
+function truncateMessage(message: string): string {
+  if (message.length <= COMMIT_MESSAGE_MAX_CHARS) return message;
+  return `${message.slice(0, COMMIT_MESSAGE_MAX_CHARS)}\n[...truncated at ${COMMIT_MESSAGE_MAX_CHARS} chars]`;
+}
+
 export type GithubVCSOptions = {
   readonly token: string;
   readonly octokit?: Pick<Octokit, 'rest' | 'paginate'>;
@@ -78,6 +100,21 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       repo: ref.repo,
       pull_number: ref.number,
     });
+    // listCommits is paginated; we cap at COMMIT_MESSAGES_CAP. With
+    // per_page = 100 the typical PR fits in one page. We keep the
+    // *last* N commits (most recent context first reading
+    // newest→oldest in the prompt), since the latest commits carry
+    // the most current author intent.
+    const commitsRaw = await octokit.paginate(octokit.rest.pulls.listCommits, {
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.number,
+      per_page: 100,
+    });
+    const commitMessages = commitsRaw.slice(-COMMIT_MESSAGES_CAP).map((c) => ({
+      sha: c.sha,
+      message: truncateMessage(c.commit.message ?? ''),
+    }));
     return {
       ref,
       title: data.title,
@@ -89,6 +126,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       headRef: data.head.ref,
       draft: data.draft ?? false,
       labels: data.labels.map((l) => (typeof l === 'string' ? l : (l.name ?? ''))),
+      commitMessages,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
     };

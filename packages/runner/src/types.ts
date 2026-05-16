@@ -10,6 +10,26 @@ export type ReviewJob = {
     readonly title: string;
     readonly body: string;
     readonly author: string;
+    /**
+     * Base branch the PR targets (e.g. `main`, `release/1.x`). Used by
+     * the LLM as a hint for review strictness — a release branch
+     * typically warrants tighter scrutiny than a feature-flag branch.
+     * Optional for back-compat with callers that haven't been updated.
+     */
+    readonly baseRef?: string;
+    /**
+     * Operator-assigned PR labels (e.g. `hotfix`, `performance`,
+     * `breaking-change`). Surfaced to the LLM as soft hints; never
+     * authoritative — the system prompt explicitly instructs the
+     * model not to let labels suppress a critical finding.
+     */
+    readonly labels?: ReadonlyArray<string>;
+    /**
+     * Recent commit messages on the PR head, oldest → newest. Capped
+     * upstream at the adapter level (e.g. last 20, each ≤ 5 KB). Empty
+     * for platforms that don't expose commit listings (CodeCommit).
+     */
+    readonly commitMessages?: ReadonlyArray<{ readonly sha: string; readonly message: string }>;
   };
   readonly previousState: ReviewState | null;
   readonly profile: string;
