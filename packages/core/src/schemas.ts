@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CATEGORIES, SEVERITIES, SIDES } from './review.js';
+import { CATEGORIES, CONFIDENCES, SEVERITIES, SIDES } from './review.js';
 
 const PATH_MAX = 500;
 const BODY_MAX = 5000;
@@ -9,11 +9,14 @@ const LINE_MAX = 1_000_000;
 const COMMENTS_MAX = 50;
 const MODEL_NAME_MIN = 1;
 const MODEL_NAME_MAX = 128;
+const RULE_ID_MIN = 2;
+const RULE_ID_MAX = 64;
 
 const NO_NUL = /^[^\0]+$/;
 const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
 const SHA1_HEX = /^[0-9a-f]{40}$/;
 const FINGERPRINT_HEX = /^[0-9a-f]{16}$/;
+const RULE_ID_PATTERN = /^[a-z][a-z0-9-]+$/;
 
 export const REVIEW_STATE_SCHEMA_VERSION = 1;
 
@@ -44,6 +47,8 @@ export const InlineCommentSchema = z
     body: safeBody,
     severity: z.enum(SEVERITIES),
     category: z.enum(CATEGORIES).optional(),
+    confidence: z.enum(CONFIDENCES).optional(),
+    ruleId: z.string().min(RULE_ID_MIN).max(RULE_ID_MAX).regex(RULE_ID_PATTERN).optional(),
     suggestion: z.string().max(SUGGESTION_MAX).optional(),
   })
   .strict()

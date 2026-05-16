@@ -142,6 +142,7 @@ export async function runAction(
     skills: skillBlock ? [skillBlock] : [],
     language: config.language,
     costCapUsd: inputs.costCapUsd,
+    minConfidence: config.reviews.min_confidence,
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;

@@ -191,6 +191,67 @@ describe('InlineCommentSchema', () => {
       }).success,
     ).toBe(true);
   });
+
+  it('accepts comment without confidence (optional)', () => {
+    expect(InlineCommentSchema.safeParse(validComment).success).toBe(true);
+  });
+
+  it("accepts each confidence value ('high', 'medium', 'low')", () => {
+    for (const confidence of ['high', 'medium', 'low'] as const) {
+      expect(InlineCommentSchema.safeParse({ ...validComment, confidence }).success).toBe(true);
+    }
+  });
+
+  it('rejects unknown confidence value', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, confidence: 'very-high' }).success,
+    ).toBe(false);
+  });
+
+  it('accepts comment without ruleId (optional)', () => {
+    expect(InlineCommentSchema.safeParse(validComment).success).toBe(true);
+  });
+
+  it('accepts a well-formed ruleId', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'sql-injection' }).success,
+    ).toBe(true);
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'unused-var' }).success).toBe(
+      true,
+    );
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'null-deref-2' }).success).toBe(
+      true,
+    );
+  });
+
+  it('rejects ruleId not matching /^[a-z][a-z0-9-]+$/', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'SQL-INJECTION' }).success,
+    ).toBe(false);
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: '1-leading-digit' }).success,
+    ).toBe(false);
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, ruleId: 'has_underscore' }).success,
+    ).toBe(false);
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'has space' }).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects single-character ruleId (length min)', () => {
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: 'a' }).success).toBe(false);
+  });
+
+  it('rejects ruleId longer than 64 chars', () => {
+    const tooLong = `r${'a'.repeat(64)}`;
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: tooLong }).success).toBe(false);
+  });
+
+  it('accepts ruleId at the 64-char boundary', () => {
+    const exact = `r${'a'.repeat(63)}`;
+    expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: exact }).success).toBe(true);
+  });
 });
 
 describe('ReviewOutputSchema', () => {

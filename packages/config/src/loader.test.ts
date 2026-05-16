@@ -71,6 +71,25 @@ describe('loadConfigFromYaml — explicit values', () => {
     expect(cfg.coordination.other_bots_logins).toEqual([]);
   });
 
+  it("defaults reviews.min_confidence to 'low' (post everything)", () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.reviews.min_confidence).toBe('low');
+  });
+
+  it("parses reviews.min_confidence: 'medium'", () => {
+    const cfg = loadConfigFromYaml('reviews:\n  min_confidence: medium\n');
+    expect(cfg.reviews.min_confidence).toBe('medium');
+  });
+
+  it("parses reviews.min_confidence: 'high'", () => {
+    const cfg = loadConfigFromYaml('reviews:\n  min_confidence: high\n');
+    expect(cfg.reviews.min_confidence).toBe('high');
+  });
+
+  it('rejects an unknown reviews.min_confidence value', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  min_confidence: certain\n')).toThrow(ConfigError);
+  });
+
   it('parses coordination.other_bots: defer_if_present + custom logins', () => {
     const cfg = loadConfigFromYaml(
       'coordination:\n  other_bots: defer_if_present\n  other_bots_logins:\n    - my-internal-reviewer[bot]\n',

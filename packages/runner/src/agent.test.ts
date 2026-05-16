@@ -273,6 +273,62 @@ describe('runReview — secret-leak post-scan', () => {
   });
 });
 
+describe('runReview — min_confidence filter (#69)', () => {
+  it('keeps all comments when minConfidence defaults to "low"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'low' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview(baseJob, provider);
+    expect(result.comments).toHaveLength(2);
+  });
+
+  it('drops "low" comments when minConfidence is "medium"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'low' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview({ ...baseJob, minConfidence: 'medium' }, provider);
+    expect(result.comments).toHaveLength(1);
+    expect(result.comments[0]?.confidence).toBe('high');
+  });
+
+  it('drops "medium" + "low" when minConfidence is "high"', async () => {
+    const out: ReviewOutput = {
+      summary: 's',
+      comments: [
+        { ...validOutput.comments[0], confidence: 'high' } as ReviewOutput['comments'][number],
+        { ...validOutput.comments[1], confidence: 'medium' } as ReviewOutput['comments'][number],
+      ],
+      tokensUsed: { input: 1, output: 1 },
+      costUsd: 0,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => out) });
+    const result = await runReview({ ...baseJob, minConfidence: 'high' }, provider);
+    expect(result.comments).toHaveLength(1);
+  });
+
+  it('treats comments without a confidence field as "high"', async () => {
+    // Back-compat: a legacy review with no confidence field must not
+    // be silently dropped when an operator sets minConfidence: 'high'.
+    const provider = makeProvider();
+    const result = await runReview({ ...baseJob, minConfidence: 'high' }, provider);
+    expect(result.comments).toHaveLength(2);
+  });
+});
+
 describe('runReview — dedup against previousState', () => {
   it('drops comments whose fingerprint is already in previousState', async () => {
     const provider = makeProvider();

@@ -62,8 +62,10 @@ export {
 export {
   CATEGORIES,
   type Category,
+  CONFIDENCES,
   COST_LEDGER_PHASES,
   COST_LEDGER_STATUSES,
+  type Confidence,
   type CostLedgerPhase,
   type CostLedgerRow,
   type CostLedgerStatus,

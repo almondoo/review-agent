@@ -1,3 +1,4 @@
+import { CONFIDENCES } from '@review-agent/core';
 import { z } from 'zod';
 import { SUPPORTED_LANGUAGES } from './languages.js';
 
@@ -48,6 +49,12 @@ const ReviewsSchema = z
     ignore_authors: z
       .array(z.string().min(1))
       .default(['dependabot[bot]', 'renovate[bot]', 'github-actions[bot]']),
+    // Suppress comments whose model-reported confidence is strictly
+    // below this threshold. Default `'low'` means "post everything";
+    // operators tighten to `'medium'` to drop hunches or `'high'` to
+    // post only the model's strongest findings. Comments emitted
+    // without a confidence field are treated as `'high'`.
+    min_confidence: z.enum(CONFIDENCES).default('low'),
   })
   .strict();
 

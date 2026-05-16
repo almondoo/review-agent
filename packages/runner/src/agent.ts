@@ -1,4 +1,6 @@
 import {
+  CONFIDENCES,
+  type Confidence,
   ReviewOutputSchema,
   SchemaValidationError,
   SecretLeakAbortedError,
@@ -117,7 +119,15 @@ export async function runReview(
   const result = await compose(middlewares, ctx, main);
   const dedup = dedupComments(result, { previousState: job.previousState });
 
-  const scannedText = [result.summary, ...dedup.kept.map((c) => c.body)].join('\n\n');
+  // Apply the operator-configured confidence floor *after* dedup so the
+  // fingerprint set on the kept list is still well-formed; comments
+  // dropped here do not contribute to the next review's state (i.e. we
+  // do not "remember" we suppressed them, by design — operator wants
+  // them silent, not memoized).
+  const minConfidence = job.minConfidence ?? 'low';
+  const filteredKept = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+
+  const scannedText = [result.summary, ...filteredKept.map((c) => c.body)].join('\n\n');
   const outputFindings = [...scanContent(scannedText)];
   const outputDecision = shouldAbortReview(outputFindings);
   if (outputDecision.abort) {
@@ -133,16 +143,22 @@ export async function runReview(
     outputFindings.length === 0 ? result.summary : applyRedactions(result.summary, outputFindings);
   const comments =
     outputFindings.length === 0
-      ? dedup.kept
-      : dedup.kept.map((c) => ({ ...c, body: applyRedactions(c.body, outputFindings) }));
+      ? filteredKept
+      : filteredKept.map((c) => ({ ...c, body: applyRedactions(c.body, outputFindings) }));
 
-  // Prefer the provider-reported tool-call count (sourced from the
-  // AI-SDK step results) when it's non-zero, otherwise fall back to
-  // the local counter. They typically agree; the divergence path
-  // covers test doubles that don't populate steps, and tool calls
-  // refused before dispatch (which our counter still increments).
+  // Take the larger of the two sources so refused-before-dispatch
+  // calls (counted locally) AND retry-path calls (counted on the
+  // SDK side only for the retry attempt) both show up in the
+  // cost-guard accounting. On the schema-retry path, `result` is
+  // the retried attempt — its `steps` cover only that attempt,
+  // while `toolCallCounter` accumulates across both. A ternary
+  // ("prefer provider when >0") collapses to the retry-only count
+  // and silently undercounts the main attempt's tool use; Math.max
+  // preserves both. SDK-recorded calls our `onCall` hook missed
+  // (arg-parse failures where `execute` never fires) are likewise
+  // covered when the provider count exceeds the local one.
   const providerToolCalls = result.toolCalls ?? 0;
-  const toolCalls = providerToolCalls > 0 ? providerToolCalls : toolCallCounter;
+  const toolCalls = Math.max(providerToolCalls, toolCallCounter);
 
   return {
     comments,
@@ -171,6 +187,9 @@ function validateOutput(out: ReviewOutput): void {
       side: c.side,
       body: c.body,
       severity: c.severity,
+      ...(c.category === undefined ? {} : { category: c.category }),
+      ...(c.confidence === undefined ? {} : { confidence: c.confidence }),
+      ...(c.ruleId === undefined ? {} : { ruleId: c.ruleId }),
       ...(c.suggestion === undefined ? {} : { suggestion: c.suggestion }),
     })),
   });
@@ -180,6 +199,18 @@ function validateOutput(out: ReviewOutput): void {
       parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
     );
   }
+}
+
+// `CONFIDENCES` is ordered most-confident → least-confident
+// (`high`, `medium`, `low`). A comment passes the filter when its
+// declared confidence is at or above the threshold — i.e. its index
+// in CONFIDENCES is <= the threshold's index. Comments emitted
+// without a confidence field are treated as `'high'` (the strongest
+// signal) so legacy reviews are not silently demoted by tightening
+// `min_confidence`.
+function meetsConfidence(commentConfidence: Confidence | undefined, floor: Confidence): boolean {
+  const declared = commentConfidence ?? 'high';
+  return CONFIDENCES.indexOf(declared) <= CONFIDENCES.indexOf(floor);
 }
 
 async function compose(

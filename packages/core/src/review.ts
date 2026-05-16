@@ -5,6 +5,20 @@ export const SIDES = ['LEFT', 'RIGHT'] as const;
 export type Side = (typeof SIDES)[number];
 
 /**
+ * Coarse-grained confidence the model has in a finding. Operators
+ * suppress noisy reviewers by setting `reviews.min_confidence` in
+ * `.review-agent.yml`. When a comment omits the field it is treated
+ * as `'high'` for back-compat — the existing fleet of reviews emitted
+ * before this field existed should not be silently demoted.
+ *
+ * - `high`   — the finding is a defect by any reasonable reading.
+ * - `medium` — the finding is likely a defect but depends on context the model can't fully see.
+ * - `low`    — the finding is a hunch; the model is reaching.
+ */
+export const CONFIDENCES = ['high', 'medium', 'low'] as const;
+export type Confidence = (typeof CONFIDENCES)[number];
+
+/**
  * Coarse-grained taxonomy for review findings. Lets operators slice
  * "how many security findings shipped this month" without text-mining
  * comment bodies, and lets the prompt enforce category-specific rules
@@ -37,6 +51,22 @@ export type InlineComment = {
   readonly fingerprint: string;
   readonly severity: Severity;
   readonly category?: Category;
+  /**
+   * Model-reported confidence in the finding. Drives operator
+   * suppression via `reviews.min_confidence` in `.review-agent.yml`.
+   * Unset means `high` (back-compat with reviews emitted before this
+   * field existed).
+   */
+  readonly confidence?: Confidence;
+  /**
+   * Stable taxonomy id for the underlying rule (e.g. `sql-injection`,
+   * `null-deref`, `unused-var`). Used by the dedup middleware to
+   * distinguish two findings on the same line; without it, dedup falls
+   * back to severity which collides when the same line raises two
+   * different issues at the same severity.
+   * Format: `/^[a-z][a-z0-9-]+$/`, max 64 chars.
+   */
+  readonly ruleId?: string;
   readonly suggestion?: string;
 };
 

@@ -1,4 +1,4 @@
-import type { InlineComment, ReviewState, Severity, Side } from '@review-agent/core';
+import type { Confidence, InlineComment, ReviewState, Severity, Side } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
 
@@ -29,6 +29,14 @@ export type ReviewJob = {
    * useful for observability. Ignored when `incrementalContext` is false.
    */
   readonly incrementalSinceSha?: string;
+  /**
+   * Operator-configured floor on model confidence
+   * (`.review-agent.yml` `reviews.min_confidence`). Comments whose
+   * confidence is strictly below this value are dropped before posting.
+   * Defaults to `'low'` (post everything) when omitted; comments without
+   * a confidence field are treated as `'high'`.
+   */
+  readonly minConfidence?: Confidence;
 };
 
 export type FinalizedComment = InlineComment & {

@@ -91,6 +91,7 @@ export async function runReviewCommand(
       skills: skillBlock ? [skillBlock] : [],
       language: config.language,
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
+      minConfidence: config.reviews.min_confidence,
     },
     provider,
   );
