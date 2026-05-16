@@ -62,6 +62,11 @@
 > GitHub 側のみ）は、`docs/specs/review-agent-spec.md` §5.2.1 と
 > §22.1 に統合的に整理してある。本 PRD はその要約のみ示し、詳細は
 > spec を参照する。
+>
+> VCS 抽象化（`VcsCapabilities` + Reader/Writer/StateStore のロール
+> 分割 + platform registry）の契約は `docs/specs/review-agent-spec.md`
+> §5.2 と §22.x、および `packages/core/README.md` の "VCS abstraction"
+> 節に集約してある。新規アダプタ追加時はそちらを参照すること。
 
 ---
 

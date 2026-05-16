@@ -41,6 +41,12 @@ function fakePR(overrides: Partial<PR> = {}): PR {
 function fakeVcs(overrides: Partial<VCS> = {}): VCS {
   const base: VCS = {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: async () => fakePR(),
     getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
     getFile: async () => Buffer.from(''),

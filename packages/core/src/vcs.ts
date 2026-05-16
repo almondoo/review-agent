@@ -68,15 +68,77 @@ export type GetDiffOpts = {
   readonly sinceSha?: string;
 };
 
-export type VCS = {
-  readonly platform: 'github' | 'codecommit';
+/**
+ * Static, per-adapter declaration of what the underlying VCS platform
+ * actually supports. Callers branch on capabilities instead of
+ * try/catch-ing platform-specific failure (cloneRepo throw on
+ * CodeCommit, getStateComment returning null on CodeCommit, etc.) so
+ * the contract is visible at the type level.
+ *
+ * Fields are intentionally narrow literal unions rather than booleans
+ * where the platform offers multiple modes (e.g. `stateComment` is
+ * `'native' | 'postgres-only'` rather than a flag) so future adapters
+ * cannot silently degrade to "false means broken" semantics.
+ */
+export type VcsCapabilities = {
+  /** `cloneRepo` can succeed. False on CodeCommit (no working-tree path; the runner uses getDiff()+getFile()). */
+  readonly clone: boolean;
+  /**
+   * How `getStateComment` / `upsertStateComment` behave:
+   *
+   * - `'native'`     — the platform persists the hidden HTML marker; the comment is canonical (GitHub).
+   * - `'postgres-only'` — the adapter is inert and the Postgres mirror is canonical (CodeCommit; spec §12.1.1).
+   */
+  readonly stateComment: 'native' | 'postgres-only';
+  /**
+   * How `review.event` (APPROVE / REQUEST_CHANGES) maps onto the platform:
+   *
+   * - `'github'`     — `pulls.createReview({event})` carries the verdict natively.
+   * - `'codecommit'` — `UpdatePullRequestApprovalState` is the target (gated by `codecommit.approvalState` opt-in; see #74).
+   * - `'none'`       — the adapter drops the field; operators must enforce merge-blocking out of band.
+   */
+  readonly approvalEvent: 'github' | 'codecommit' | 'none';
+  /** `pr.commitMessages` is populated. False on CodeCommit (no per-PR commit-listing API). */
+  readonly commitMessages: boolean;
+};
+
+/**
+ * Read-only PR introspection surface. Tools that only need to inspect a
+ * PR (recover-sync-state's hidden-comment reader, dedup readers, etc.)
+ * depend on this narrower type instead of the full {@link VCS}.
+ */
+export type VcsReader = {
   getPR(ref: PRRef): Promise<PR>;
   getDiff(ref: PRRef, opts?: GetDiffOpts): Promise<Diff>;
   getFile(ref: PRRef, path: string, sha: string): Promise<Buffer>;
   cloneRepo(ref: PRRef, dir: string, opts: CloneOpts): Promise<void>;
+  getExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
+};
+
+/**
+ * Write surface: post the review (inline comments + event) and the
+ * summary comment. Separated so tests can stub posts without
+ * implementing reads.
+ */
+export type VcsWriter = {
   postReview(ref: PRRef, review: ReviewPayload): Promise<void>;
   postSummary(ref: PRRef, body: string): Promise<{ commentId: string }>;
-  getExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
+};
+
+/**
+ * State-mirror surface: read/write the canonical hidden-state comment
+ * (GitHub) or no-op (CodeCommit, where Postgres is canonical). Recover
+ * commands depend on this narrowly so they don't pull in clone or
+ * review-post surface area.
+ */
+export type VcsStateStore = {
   getStateComment(ref: PRRef): Promise<ReviewState | null>;
   upsertStateComment(ref: PRRef, state: ReviewState): Promise<void>;
 };
+
+export type VCS = {
+  readonly platform: 'github' | 'codecommit';
+  readonly capabilities: VcsCapabilities;
+} & VcsReader &
+  VcsWriter &
+  VcsStateStore;

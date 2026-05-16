@@ -35,6 +35,12 @@ function fakeState(overrides: Partial<ReviewState> = {}): ReviewState {
 function fakeVcs(stateByPr: Record<number, ReviewState | null>): VCS {
   return {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: async () => {
       throw new Error('unused');
     },

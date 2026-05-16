@@ -662,17 +662,42 @@ export interface ReviewOutput {
 }
 
 // packages/core/src/vcs.ts
-export interface VCS {
+//
+// The VCS contract is decomposed into a static capability matrix
+// (`VcsCapabilities`) and three role interfaces (Reader / Writer /
+// StateStore). Callers should depend on the narrowest role they need.
+// See `packages/core/README.md` for the per-adapter capability table
+// and registry-based dispatch pattern.
+
+export type VcsCapabilities = {
+  readonly clone: boolean;                                  // false on CodeCommit
+  readonly stateComment: 'native' | 'postgres-only';        // 'postgres-only' on CodeCommit
+  readonly approvalEvent: 'github' | 'codecommit' | 'none'; // mapping target for review.event
+  readonly commitMessages: boolean;                         // false on CodeCommit
+};
+
+export type VcsReader = {
   getPR(ref: PRRef): Promise<PR>;
-  getDiff(ref: PRRef, opts: { sinceSha?: string }): Promise<Diff>;
+  getDiff(ref: PRRef, opts?: { sinceSha?: string }): Promise<Diff>;
   getFile(ref: PRRef, path: string, sha: string): Promise<Buffer>;
   cloneRepo(ref: PRRef, dir: string, opts: CloneOpts): Promise<void>;
+  getExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
+};
+
+export type VcsWriter = {
   postReview(ref: PRRef, review: ReviewPayload): Promise<void>;
   postSummary(ref: PRRef, body: string): Promise<{ commentId: string }>;
-  getExistingComments(ref: PRRef): Promise<ExistingComment[]>;
+};
+
+export type VcsStateStore = {
   getStateComment(ref: PRRef): Promise<ReviewState | null>;
   upsertStateComment(ref: PRRef, state: ReviewState): Promise<void>;
-}
+};
+
+export type VCS = {
+  readonly platform: 'github' | 'codecommit';
+  readonly capabilities: VcsCapabilities;
+} & VcsReader & VcsWriter & VcsStateStore;
 
 export interface CloneOpts {
   depth?: number;            // default 50
@@ -2630,6 +2655,50 @@ v1.0+ as design work, not implementation blockers. Status as of v0.3 release:
     **Resolved**: v0.3 ships with `manifest.json` + SHA-256 only (mandatory).
     Cosign attestation is **deferred to v1.1** — re-evaluate based on
     contributor demand. Track in a roadmap issue, not in the spec.
+
+### 22.x Platform registry contract (VCS dispatch)
+
+Adapter packages (`@review-agent/platform-github`,
+`@review-agent/platform-codecommit`) export a `PlatformDefinition`
+and call `registerPlatform(definition)` from `@review-agent/core` at
+module load. Application composition roots (`action`, `server`,
+`cli`) import the adapter package once for its registration side
+effect; subsequent code looks up the adapter via
+`getPlatform(prRef.platform).create(config)` rather than a hard-coded
+chain of `if (platform === 'github') ...`.
+
+**Why a registry instead of a literal union switch:** future adapters
+add value at the dispatch layer (server/runner) only; the persisted
+JobMessage / Postgres rows continue to carry the literal-union
+`platform` discriminator. Decoupling dispatch from the union means a
+new adapter package can ship in `packages/platform-foo/` without
+touching the core type or running a DB migration to widen
+`PRRef.platform`. The registry never serializes — it is constructed
+fresh on each worker start.
+
+**Intentional non-extension to `string` PlatformId.** The branded
+`PlatformId` (`string & { __brand: 'PlatformId' }`) is purely a
+compile-time helper; at runtime it is a normal string. `PRRef.platform`
+keeps its `'github' | 'codecommit'` literal-union shape because
+existing serialized JobMessage / `review_state` rows would otherwise
+fail to parse. Widening `PRRef.platform` to `string` is **v2 work**:
+it requires a JobMessage schema version bump (currently `v1` in
+`packages/core/src/queue.ts`) and a Postgres migration on every table
+that joins on the discriminator. v1.x adapters live inside the
+existing union; the registry is a dispatch helper, not a type-erasure
+layer.
+
+**Adapter responsibilities at registration:**
+
+- Export the `PlatformDefinition` (id, `parseRef`, `create(config)`).
+- Validate the `config: unknown` argument inside `create` — the
+  registry intentionally types config as opaque to avoid coupling
+  `@review-agent/core` to every adapter's config shape.
+- Throw a typed error from `create` when required config (auth token,
+  AWS client, etc.) is missing.
+
+See `packages/core/README.md` for the full per-adapter capability
+table and example usage.
 
 ### 22.1 CodeCommit-specific posture (consolidated)
 

@@ -23,7 +23,27 @@ import type {
   ReviewPayload,
   ReviewState,
   VCS,
+  VcsCapabilities,
 } from '@review-agent/core';
+
+/**
+ * Static capability declaration for CodeCommit. Permanent design
+ * decisions (spec §5.2.1, §12.1.1) — not gated on runtime config.
+ *
+ * - `clone: false`              — no working-tree path (cloneRepo throws).
+ * - `stateComment: 'postgres-only'` — adapter is inert; Postgres canonical.
+ * - `approvalEvent: 'codecommit'`   — `UpdatePullRequestApprovalState` is
+ *   the eventual target (gated by `codecommit.approvalState`; #74).
+ *   `approvalEvent` advertises mapping availability, not opt-in state.
+ * - `commitMessages: false`      — no per-PR commit-listing API; the
+ *   adapter returns `pr.commitMessages = []`.
+ */
+export const CODECOMMIT_CAPABILITIES: VcsCapabilities = {
+  clone: false,
+  stateComment: 'postgres-only',
+  approvalEvent: 'codecommit',
+  commitMessages: false,
+};
 
 // CodeCommit identifies a PR by a string `pullRequestId` that is a positive
 // integer rendered as a string. Our shared PRRef carries `number`, so we
@@ -235,6 +255,7 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
 
   return {
     platform: 'codecommit',
+    capabilities: CODECOMMIT_CAPABILITIES,
     getPR,
     getDiff,
     getFile,

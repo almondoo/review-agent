@@ -39,6 +39,12 @@ const samplePR: PR = {
 function makeVCS(overrides: Partial<VCS> = {}): VCS {
   return {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: vi.fn(async () => samplePR),
     getDiff: vi.fn(async () => ({ baseSha: 'B', headSha: 'H', files: [] })),
     getFile: vi.fn(),

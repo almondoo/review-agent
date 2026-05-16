@@ -120,6 +120,20 @@ async function sparseClone(input: ProvisionWorkspaceInput, dir: string): Promise
   // git plumbing as Action mode (cloneWithStrategy in
   // platform-github). Sparse paths come from the diff so we only
   // materialize the directories the LLM may need to read.
+  //
+  // Capability gate: refuse before touching the adapter when the
+  // platform advertises no clone support (CodeCommit). The adapter's
+  // own `cloneRepo` throws as defense-in-depth; this check produces a
+  // clearer operator-facing error that names the config decision
+  // ("strategy: 'sparse-clone' requires clone capability") rather
+  // than the lower-level "CodeCommit clone is not supported" message.
+  if (!input.vcs.capabilities.clone) {
+    throw new Error(
+      `workspace strategy 'sparse-clone' requires VCS clone capability, ` +
+        `but platform '${input.vcs.platform}' advertises clone: false. ` +
+        `Use strategy: 'contents-api' or 'none' for this platform.`,
+    );
+  }
   const sparsePaths = uniqueParentDirs(
     input.diff.files.filter((f) => pathIsAllowed(f.path)).map((f) => f.path),
   );

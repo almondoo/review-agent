@@ -25,6 +25,12 @@ function makeDiff(files: ReadonlyArray<Partial<Diff['files'][number]>>): Diff {
 function makeVcs(overrides: Partial<VCS> = {}): VCS {
   return {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: vi.fn(),
     getDiff: vi.fn(),
     getFile: vi.fn(),
@@ -216,6 +222,39 @@ describe('provisionWorkspace — strategy: sparse-clone', () => {
     // Sparse paths reduced to unique parent dirs.
     expect([...(opts.sparsePaths ?? [])].sort()).toEqual(['docs', 'src']);
     await handle.cleanup();
+  });
+
+  it('refuses with a typed error when capabilities.clone is false (CodeCommit-style adapter)', async () => {
+    const cloneRepo = vi.fn<VCS['cloneRepo']>(async () => undefined);
+    const vcs = makeVcs({
+      capabilities: {
+        clone: false,
+        stateComment: 'postgres-only',
+        approvalEvent: 'codecommit',
+        commitMessages: false,
+      },
+      platform: 'codecommit',
+      cloneRepo,
+    });
+    await expect(
+      provisionWorkspace(
+        {
+          strategy: 'sparse-clone',
+          vcs,
+          ref,
+          headSha: 'H',
+          diff: makeDiff([{ path: 'src/a.ts' }]),
+        },
+        {
+          tmpdir: () => '/tmp-fake',
+          mkdtemp: vi.fn(async (prefix) => `${prefix}clone`),
+          mkdir: vi.fn(async () => undefined) as never,
+          writeFile: vi.fn(async () => undefined) as never,
+          rm: vi.fn(async () => undefined),
+        },
+      ),
+    ).rejects.toThrow(/sparse-clone.*clone capability.*codecommit/);
+    expect(cloneRepo).not.toHaveBeenCalled();
   });
 
   it('drops denylisted paths from the sparse-checkout pattern set', async () => {

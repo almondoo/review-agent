@@ -45,6 +45,16 @@ describe('createGithubVCS', () => {
     const vcs = createGithubVCS({ token: 't', octokit: createMockOctokit({}) });
     expect(vcs.platform).toBe('github');
   });
+
+  it('declares the full set of GitHub capabilities (clone, native state, github event, commit msgs)', () => {
+    const vcs = createGithubVCS({ token: 't', octokit: createMockOctokit({}) });
+    expect(vcs.capabilities).toEqual({
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    });
+  });
 });
 
 describe('getPR', () => {

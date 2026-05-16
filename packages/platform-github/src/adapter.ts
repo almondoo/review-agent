@@ -11,7 +11,22 @@ import type {
   ReviewPayload,
   ReviewState,
   VCS,
+  VcsCapabilities,
 } from '@review-agent/core';
+
+/**
+ * Static capability declaration for GitHub — every flag is on. Kept
+ * here next to the adapter so the adapter and its capability claims
+ * stay in sync; deviations (e.g. a future GitHub Enterprise Server
+ * variant that drops a feature) should override at construction time.
+ */
+export const GITHUB_CAPABILITIES: VcsCapabilities = {
+  clone: true,
+  stateComment: 'native',
+  approvalEvent: 'github',
+  commitMessages: true,
+};
+
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
 import { assertSafeRelativePath } from './path-guard.js';
 import {
@@ -341,6 +356,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
 
   return {
     platform: 'github',
+    capabilities: GITHUB_CAPABILITIES,
     getPR,
     getDiff,
     getFile,

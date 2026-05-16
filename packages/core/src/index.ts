@@ -55,6 +55,16 @@ export {
   type KmsClient,
 } from './kms/index.js';
 export {
+  _resetPlatformRegistryForTests,
+  getPlatform,
+  listPlatforms,
+  type PlatformDefinition,
+  type PlatformId,
+  platformId,
+  registerPlatform,
+  unregisterPlatform,
+} from './platforms.js';
+export {
   type DequeueOpts,
   type JobMessage,
   JobMessageSchema,
@@ -95,6 +105,13 @@ export {
   type ReviewStateInput,
   ReviewStateSchema,
 } from './schemas.js';
+export {
+  createFakeVCS,
+  createFakeVcsReader,
+  createFakeVcsStateStore,
+  createFakeVcsWriter,
+  DEFAULT_FAKE_CAPABILITIES,
+} from './test-helpers.js';
 export type {
   CloneOpts,
   Diff,
@@ -104,4 +121,8 @@ export type {
   PR,
   PRRef,
   VCS,
+  VcsCapabilities,
+  VcsReader,
+  VcsStateStore,
+  VcsWriter,
 } from './vcs.js';
