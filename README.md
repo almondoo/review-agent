@@ -2,6 +2,8 @@
 
 Self-hosted, BYOK AI code-review agent for GitHub Pull Requests.
 
+**English** | [日本語](./docs/README.ja.md)
+
 > Personal project — published as open source for reference, not accepting
 > external contributions. Forks are welcome.
 
