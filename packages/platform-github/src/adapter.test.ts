@@ -55,6 +55,36 @@ describe('createGithubVCS', () => {
       commitMessages: true,
     });
   });
+
+  // SEC-5: defense-in-depth guard in `defaultCloneUrl`. JobMessageSchema's
+  // discriminated union already rejects github refs with empty owner at the
+  // queue boundary, but `cloneRepo` accepts a `PRRef` directly via the VCS
+  // interface (CLI, tests, future adapters). The adapter MUST refuse before
+  // interpolating the token into a malformed URL, and the thrown error MUST
+  // NOT contain the token (which would leak through log aggregators).
+  it('refuses to build a clone URL for a github ref with empty owner (no token in error)', async () => {
+    const token = 'ghs_super_secret_token_value';
+    const runGit = vi.fn(async () => undefined);
+    const vcs = createGithubVCS({
+      token,
+      octokit: createMockOctokit({}),
+      runGit,
+    });
+    const badRef = { platform: 'github', owner: '', repo: 'r', number: 9 } as const;
+    let caught: unknown;
+    try {
+      await vcs.cloneRepo(badRef, '/tmp/x', { depth: 1 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toMatch(/empty owner/);
+    expect(message).not.toContain(token);
+    expect(message).not.toContain('x-access-token');
+    // The guard runs before any git invocation.
+    expect(runGit).not.toHaveBeenCalled();
+  });
 });
 
 describe('getPR', () => {

@@ -113,7 +113,7 @@ describe('JobMessageSchema', () => {
     ).toThrow(z.ZodError);
   });
 
-  it("accepts prRef.platform 'codecommit'", () => {
+  it("accepts prRef.platform 'codecommit' with empty owner", () => {
     const m = JobMessageSchema.parse({
       jobId: 'codecommit:my-repo#7@1700000000000',
       installationId: 'sns-msg-id',
@@ -130,6 +130,37 @@ describe('JobMessageSchema', () => {
       JobMessageSchema.parse({
         ...buildBase(),
         prRef: { ...buildBase().prRef, platform: 'gitlab' },
+      }),
+    ).toThrow(z.ZodError);
+  });
+
+  // SEC-4: per-platform owner constraint asymmetry. The discriminated union
+  // enforces that GitHub refs MUST carry a non-empty owner (otherwise the
+  // clone URL `https://x-access-token:${token}@github.com//${repo}.git`
+  // becomes a token-leak vector) and CodeCommit refs MUST carry an empty
+  // owner (the AWS account ID lives on the installation row, not the ref —
+  // so a non-empty `owner` would risk stateId namespace collisions with a
+  // real GitHub `<owner>/<repo>#N`).
+  it('rejects prRef with platform=github and empty owner', () => {
+    expect(() =>
+      JobMessageSchema.parse({
+        jobId: 'j',
+        installationId: 'i',
+        prRef: { platform: 'github', owner: '', repo: 'r', number: 1 },
+        triggeredBy: 'manual',
+        enqueuedAt: '2026-04-30T00:00:00.000Z',
+      }),
+    ).toThrow(z.ZodError);
+  });
+
+  it('rejects prRef with platform=codecommit and non-empty owner', () => {
+    expect(() =>
+      JobMessageSchema.parse({
+        jobId: 'j',
+        installationId: 'i',
+        prRef: { platform: 'codecommit', owner: 'something', repo: 'r', number: 1 },
+        triggeredBy: 'manual',
+        enqueuedAt: '2026-04-30T00:00:00.000Z',
       }),
     ).toThrow(z.ZodError);
   });
