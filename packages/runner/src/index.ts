@@ -8,7 +8,6 @@ export {
   collectAutoFetchContext,
   DEFAULT_AUTO_FETCH_BUDGET,
   type PathInstructionWithFetch,
-  renderRelatedFiles,
 } from './auto-fetch.js';
 export {
   COORDINATION_MODES,

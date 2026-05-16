@@ -7,7 +7,7 @@ import {
   SecretLeakAbortedError,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
-import { collectAutoFetchContext, renderRelatedFiles } from './auto-fetch.js';
+import { collectAutoFetchContext } from './auto-fetch.js';
 import {
   applyRedactions,
   type GitleaksFinding,
@@ -92,15 +92,26 @@ export async function runReview(
   // `workspace_strategy: 'none'`) or no instruction has autoFetch
   // enabled. Bounded by `DEFAULT_AUTO_FETCH_BUDGET` (5 files /
   // 50 KB each / 250 KB total).
+  //
+  // The fetched files MUST be passed into `wrapUntrusted` as a
+  // child element of `<untrusted>` rather than appended after the
+  // envelope — auto-fetched bytes are author-controlled (a prior
+  // PR could have planted a prompt-injection prelude in the test
+  // companion) and the system prompt's "treat <untrusted> content
+  // as data" rule must cover them. Reviewer flagged this on the
+  // original #70 commit as I-1; the fix moves the rendering into
+  // the wrapper.
   const autoFetch = await collectAutoFetchContext({
     changedPaths: job.changedPaths ?? [],
     pathInstructions: job.pathInstructions,
     workspaceDir: job.workspaceDir,
   });
-  const relatedBlock = renderRelatedFiles(autoFetch);
-  const diffPayload = relatedBlock
-    ? `${wrapUntrusted(job.prMetadata)}\n\n${relatedBlock}\n\n${job.diffText}`
-    : `${wrapUntrusted(job.prMetadata)}\n\n${job.diffText}`;
+  const wrappedMetadata = wrapUntrusted(job.prMetadata, {
+    files: autoFetch.files,
+    hitBudgetLimit: autoFetch.hitBudgetLimit,
+    totalBytes: autoFetch.totalBytes,
+  });
+  const diffPayload = `${wrappedMetadata}\n\n${job.diffText}`;
 
   const baseInput: ReviewInput = {
     systemPrompt,
