@@ -17,6 +17,18 @@ export type ReviewJob = {
   readonly skills: ReadonlyArray<string>;
   readonly language: string;
   readonly costCapUsd: number;
+  /**
+   * True when `diffText` is incremental (delta against `previousState.lastReviewedSha`).
+   * The runner forwards this into the system-prompt composer so the LLM
+   * knows it is reviewing only new commits, not the entire PR.
+   */
+  readonly incrementalContext?: boolean;
+  /**
+   * Reference commit for the incremental review (i.e. the `sinceSha`
+   * passed to `vcs.getDiff`). Surfaced in the prompt for the LLM and
+   * useful for observability. Ignored when `incrementalContext` is false.
+   */
+  readonly incrementalSinceSha?: string;
 };
 
 export type FinalizedComment = InlineComment & {

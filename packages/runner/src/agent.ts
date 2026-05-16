@@ -29,12 +29,31 @@ export async function runReview(
   provider: LlmProvider,
   deps: RunReviewDeps = {},
 ): Promise<RunnerResult> {
-  const systemPrompt = composeSystemPrompt({
+  // Incremental review fields flow from the action / cli call site
+  // (see packages/action/src/run.ts where computeDiffStrategy decides
+  // sinceSha). When the diff is incremental, the system prompt warns
+  // the LLM not to re-flag findings from outside the new commits, and
+  // surfaces the previous review's fingerprints so the model can avoid
+  // duplicate work upstream of the dedup post-filter.
+  const previousFingerprints = job.previousState?.commentFingerprints ?? [];
+  const promptOptions: Parameters<typeof composeSystemPrompt>[0] = {
     profile: job.profile,
     skills: job.skills,
     pathInstructions: job.pathInstructions,
     language: job.language,
-  });
+  };
+  if (job.incrementalContext === true) {
+    (promptOptions as { incrementalContext?: boolean }).incrementalContext = true;
+    if (job.incrementalSinceSha !== undefined) {
+      (promptOptions as { incrementalSinceSha?: string }).incrementalSinceSha =
+        job.incrementalSinceSha;
+    }
+  }
+  if (previousFingerprints.length > 0) {
+    (promptOptions as { previousFingerprints?: ReadonlyArray<string> }).previousFingerprints =
+      previousFingerprints;
+  }
+  const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
   const scanContent = deps.scanContent ?? quickScanContent;
 

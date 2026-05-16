@@ -6,7 +6,13 @@ import {
   loadConfigFromYaml,
   mergeWithEnv,
 } from '@review-agent/config';
-import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
+import {
+  computeDiffStrategy as defaultComputeDiffStrategy,
+  type PR,
+  type PRRef,
+  type ReviewState,
+  type VCS,
+} from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createGithubVCS } from '@review-agent/platform-github';
 import {
@@ -25,6 +31,19 @@ export type RunActionDeps = {
   readonly createVCS?: (token: string) => VCS;
   readonly createProvider?: (apiKey: string, config: Config) => LlmProvider;
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Injection seam for `computeDiffStrategy`. Defaults to the
+   * production implementation in `@review-agent/core`, which shells
+   * out to `git merge-base`. Tests inject a deterministic fake.
+   */
+  readonly computeDiffStrategy?: typeof defaultComputeDiffStrategy;
+  /**
+   * Sink for the 'rebase detected' / 'incremental review' log lines.
+   * Production wiring defaults to `console.info`; tests inject a spy.
+   * Kept as a `(msg, meta) => void` rather than a full pino logger so
+   * the action package stays dependency-free for now.
+   */
+  readonly logger?: (msg: string, meta?: Record<string, unknown>) => void;
 };
 
 export type ActionContext = {
@@ -72,33 +91,64 @@ export async function runAction(
     config,
   );
 
-  const diff = await vcs.getDiff(ctx.ref);
-  const diffText = diff.files.map((f) => `--- ${f.path}\n${f.patch ?? ''}`).join('\n');
   const previousState = await vcs.getStateComment(ctx.ref);
+  const workspaceDir = process.cwd();
+  const log = deps.logger ?? defaultLogger;
+  const computeStrategy = deps.computeDiffStrategy ?? defaultComputeDiffStrategy;
+  const strategy = await computeStrategy(workspaceDir, previousState, {
+    baseSha: pr.baseSha,
+    headSha: pr.headSha,
+  });
+  const incremental = strategy !== 'full';
+  // 'rebase detected' covers any case where we had prior review state
+  // but couldn't safely reuse it — merge-base shift, lastReviewedSha
+  // unreachable, or git-side error. The Action prints to stdout (will
+  // surface in the GitHub UI's run log); production audit_log entries
+  // for the same event are emitted from the runner in #65.
+  if (previousState && strategy === 'full') {
+    log('rebase detected', {
+      previousSha: previousState.lastReviewedSha,
+      headSha: pr.headSha,
+      baseSha: pr.baseSha,
+    });
+  } else if (incremental) {
+    log('incremental review', {
+      sinceSha: strategy.since,
+      headSha: pr.headSha,
+    });
+  }
+
+  const diff = incremental
+    ? await vcs.getDiff(ctx.ref, { sinceSha: strategy.since })
+    : await vcs.getDiff(ctx.ref);
+  const diffText = diff.files.map((f) => `--- ${f.path}\n${f.patch ?? ''}`).join('\n');
 
   const skills = await loadSkills(config.skills, '.', { readFile: readFn });
   const skillBlock = renderSkillsBlock(skills, {
     changedPaths: diff.files.map((f) => f.path),
   });
 
-  const result = await runReview(
-    {
-      jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
-      workspaceDir: process.cwd(),
-      diffText,
-      prMetadata: { title: pr.title, body: pr.body, author: pr.author },
-      previousState,
-      profile: config.profile,
-      pathInstructions: config.reviews.path_instructions.map((p) => ({
-        pattern: p.path,
-        text: p.instructions,
-      })),
-      skills: skillBlock ? [skillBlock] : [],
-      language: config.language,
-      costCapUsd: inputs.costCapUsd,
-    },
-    provider,
-  );
+  const reviewJob: Parameters<typeof runReview>[0] = {
+    jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
+    workspaceDir,
+    diffText,
+    prMetadata: { title: pr.title, body: pr.body, author: pr.author },
+    previousState,
+    profile: config.profile,
+    pathInstructions: config.reviews.path_instructions.map((p) => ({
+      pattern: p.path,
+      text: p.instructions,
+    })),
+    skills: skillBlock ? [skillBlock] : [],
+    language: config.language,
+    costCapUsd: inputs.costCapUsd,
+  };
+  if (incremental) {
+    (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;
+    (reviewJob as { incrementalSinceSha?: string }).incrementalSinceSha = strategy.since;
+  }
+
+  const result = await runReview(reviewJob, provider);
 
   await postOrUpdate(vcs, ctx.ref, pr, result, previousState);
 
@@ -168,6 +218,22 @@ async function loadConfigOrDefault(
   if (env.REVIEW_AGENT_MAX_USD_PER_PR)
     overrides.REVIEW_AGENT_MAX_USD_PER_PR = env.REVIEW_AGENT_MAX_USD_PER_PR;
   return mergeWithEnv(base, overrides);
+}
+
+function defaultLogger(msg: string, meta?: Record<string, unknown>): void {
+  // GitHub Action consumers surface stdout to the run log; the
+  // 'rebase detected' / 'incremental review' lines are the only
+  // operator-visible signal of which diff path the action took, so
+  // a console.info is the simplest sink that still works with
+  // GitHub Actions' annotation parser. Server-mode wiring will
+  // route through OTel + audit_log in #65 / #63.
+  if (meta && Object.keys(meta).length > 0) {
+    // biome-ignore lint/suspicious/noConsole: structured operator-visible log line
+    console.info(`[review-agent] ${msg}`, meta);
+  } else {
+    // biome-ignore lint/suspicious/noConsole: structured operator-visible log line
+    console.info(`[review-agent] ${msg}`);
+  }
 }
 
 function buildAnthropicProvider(apiKey: string, config: Config): LlmProvider {

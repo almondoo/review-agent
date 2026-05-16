@@ -1551,6 +1551,44 @@ export async function computeDiffStrategy(
 
 Then `git diff <since>..<headSha>` gives the incremental scope.
 
+#### 12.2.1 Wiring (action / server / cli)
+
+Every call site that drives a review (currently `packages/action/src/run.ts`
+in v0.1 GitHub-Action mode; `packages/cli/src/commands/review.ts` and a
+future `packages/server/*` worker handler in v0.2+) MUST gate the
+`vcs.getDiff` call on the result of `computeDiffStrategy`:
+
+```ts
+const previousState = await vcs.getStateComment(ref);
+const strategy = await computeDiffStrategy(workspaceDir, previousState, {
+  baseSha: pr.baseSha,
+  headSha: pr.headSha,
+});
+const incremental = strategy !== 'full';
+
+if (previousState && strategy === 'full') {
+  // merge-base shifted or lastReviewedSha unreachable: rebase / force-push.
+  log('rebase detected', { previousSha: previousState.lastReviewedSha, ... });
+}
+
+const diff = incremental
+  ? await vcs.getDiff(ref, { sinceSha: strategy.since })
+  : await vcs.getDiff(ref);
+```
+
+When `incremental` is true, the runner also receives `incrementalContext: true`
++ `incrementalSinceSha` on `ReviewJob`, which `composeSystemPrompt` then
+materializes as an `## Incremental review` section instructing the LLM to
+scope its review to the new commits only. The previous review's
+`commentFingerprints` flow through `previousState` into a
+`## Previously raised findings` section so the LLM has the prior coverage
+signal in addition to the dedup post-filter (§12.3).
+
+On rebase fallback (previous state exists but `computeDiffStrategy` returns
+`'full'`), call sites emit a `'rebase detected'` log line with the previous
+and current heads. GitHub-Action mode writes to stdout (visible in the run
+log); server mode routes through OTel + `audit_log` (§§ 13, 16.4).
+
 ### 12.3 Dedup of repeated findings
 
 ```ts
