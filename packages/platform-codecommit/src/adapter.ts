@@ -11,6 +11,7 @@ import {
   GetPullRequestCommand,
   PostCommentForPullRequestCommand,
   type PullRequest,
+  UpdatePullRequestApprovalStateCommand,
 } from '@aws-sdk/client-codecommit';
 import type {
   CloneOpts,
@@ -33,7 +34,9 @@ import type {
  * - `clone: false`              — no working-tree path (cloneRepo throws).
  * - `stateComment: 'postgres-only'` — adapter is inert; Postgres canonical.
  * - `approvalEvent: 'codecommit'`   — `UpdatePullRequestApprovalState` is
- *   the eventual target (gated by `codecommit.approvalState`; #74).
+ *   the supported target. Whether the adapter actually calls it on a
+ *   given review is gated by the runtime opt-in
+ *   `CodeCommitVCSOptions.approvalState: 'managed' | 'off'` (issue #74).
  *   `approvalEvent` advertises mapping availability, not opt-in state.
  * - `commitMessages: false`      — no per-PR commit-listing API; the
  *   adapter returns `pr.commitMessages = []`.
@@ -84,24 +87,54 @@ function mapDiffStatus(changeType: string | undefined): DiffFile['status'] {
 
 export type CodeCommitClientLike = Pick<CodeCommitClient, 'send'>;
 
+/**
+ * Operator opt-in for mapping `review.event` to CodeCommit's
+ * `UpdatePullRequestApprovalState` API (issue #74). The capability is
+ * advertised statically via {@link CODECOMMIT_CAPABILITIES.approvalEvent}
+ * (`'codecommit'`) regardless of this flag — the flag only gates whether
+ * the adapter actually issues the API call at `postReview` time.
+ *
+ * - `'off'` (default) — preserve the v0.2 behavior: `review.event` is
+ *   ignored and no approval-state call is made. Operators without an
+ *   approval rule applicable to the agent's IAM principal see no change.
+ * - `'managed'`       — translate `review.event` as follows:
+ *     - `APPROVE`         → `UpdatePullRequestApprovalState(APPROVE)`
+ *     - `REQUEST_CHANGES` → `UpdatePullRequestApprovalState(REVOKE)`
+ *     - `COMMENT`         → no-op (no approval-state call)
+ *   When the SDK call fails (e.g. no approval rule targets the agent),
+ *   the failure is logged via `console.warn` and the rest of `postReview`
+ *   proceeds.
+ */
+export type CodecommitApprovalState = 'managed' | 'off';
+
 export type CodeCommitVCSOptions = {
   /** Override the SDK client. Defaults to a client built from env / SDK chain. */
   readonly client?: CodeCommitClientLike;
   /** Optional client config when not supplying a custom `client`. */
   readonly clientConfig?: CodeCommitClientConfig;
+  /**
+   * Opt-in mapping of `review.event` to `UpdatePullRequestApprovalState`.
+   * See {@link CodecommitApprovalState}. Defaults to `'off'` for
+   * backward compatibility.
+   */
+  readonly approvalState?: CodecommitApprovalState;
 };
 
 export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
   const client =
     opts.client ?? (new CodeCommitClient(opts.clientConfig ?? {}) as CodeCommitClientLike);
+  const approvalStateMode: CodecommitApprovalState = opts.approvalState ?? 'off';
 
-  const getPR = async (ref: PRRef): Promise<PR> => {
-    ensureCodeCommit(ref);
+  const fetchCodeCommitPR = async (ref: PRRef): Promise<PullRequest> => {
     const out = await client.send(
       new GetPullRequestCommand({ pullRequestId: toPullRequestId(ref) }),
     );
     const pr: PullRequest | undefined = out.pullRequest;
     if (!pr) throw new Error(`PR ${ref.number} not found in CodeCommit repo ${ref.repo}`);
+    return pr;
+  };
+
+  const toPR = (ref: PRRef, pr: PullRequest): PR => {
     const target = pr.pullRequestTargets?.[0];
     return {
       ref,
@@ -124,6 +157,12 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
       createdAt: pr.creationDate?.toISOString() ?? new Date(0).toISOString(),
       updatedAt: pr.lastActivityDate?.toISOString() ?? new Date(0).toISOString(),
     };
+  };
+
+  const getPR = async (ref: PRRef): Promise<PR> => {
+    ensureCodeCommit(ref);
+    const pr = await fetchCodeCommitPR(ref);
+    return toPR(ref, pr);
   };
 
   const getDiff = async (ref: PRRef, deltaOpts: GetDiffOpts = {}): Promise<Diff> => {
@@ -174,12 +213,13 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
 
   const postReview = async (ref: PRRef, review: ReviewPayload): Promise<void> => {
     ensureCodeCommit(ref);
-    // `review.event` is honored by the GitHub adapter to drive
-    // `REQUEST_CHANGES`; CodeCommit has no equivalent merge-blocking
-    // review state on the comment API, so we intentionally drop it
-    // here. Operators wanting merge-blocking on CodeCommit must wire
-    // it via approval rules in CodeCommit itself.
-    const pr = await getPR(ref);
+    // Fetch the raw SDK PullRequest once so we have both the
+    // base/head commits (for comment posting) and the `revisionId`
+    // required by `UpdatePullRequestApprovalState` (#74). The mapping
+    // is gated behind the `approvalState: 'managed'` opt-in below;
+    // see the option doc on `CodeCommitVCSOptions.approvalState`.
+    const rawPr = await fetchCodeCommitPR(ref);
+    const pr = toPR(ref, rawPr);
     if (review.summary) {
       await client.send(
         new PostCommentForPullRequestCommand({
@@ -205,6 +245,51 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
           },
           content: c.body,
         }),
+      );
+    }
+    await applyApprovalState(ref, rawPr, review);
+  };
+
+  const applyApprovalState = async (
+    ref: PRRef,
+    rawPr: PullRequest,
+    review: ReviewPayload,
+  ): Promise<void> => {
+    if (approvalStateMode !== 'managed') return;
+    const event = review.event;
+    if (event !== 'APPROVE' && event !== 'REQUEST_CHANGES') return;
+    const revisionId = rawPr.revisionId;
+    if (!revisionId) {
+      // biome-ignore lint/suspicious/noConsole: operator-visible degrade-non-fatal log line
+      console.warn(
+        `[platform-codecommit] skipping UpdatePullRequestApprovalState for PR ${ref.number}: ` +
+          'no revisionId on PullRequest payload',
+      );
+      return;
+    }
+    const desired: 'APPROVE' | 'REVOKE' = event === 'APPROVE' ? 'APPROVE' : 'REVOKE';
+    try {
+      await client.send(
+        new UpdatePullRequestApprovalStateCommand({
+          pullRequestId: toPullRequestId(ref),
+          revisionId,
+          approvalState: desired,
+        }),
+      );
+    } catch (err) {
+      // Operators without an approval rule applicable to the agent's
+      // IAM principal will get a typed SDK error here
+      // (`ApprovalRuleDoesNotExistException`, `InvalidApprovalStateException`,
+      // etc.). Degrade non-fatally — the inline comments above were
+      // posted successfully, and the operator may not have wired an
+      // approval rule yet. Surface the error name so it shows up in
+      // logs without leaking the request payload.
+      const name = err instanceof Error ? err.name : 'UnknownError';
+      const message = err instanceof Error ? err.message : String(err);
+      // biome-ignore lint/suspicious/noConsole: operator-visible degrade-non-fatal log line
+      console.warn(
+        `[platform-codecommit] UpdatePullRequestApprovalState failed for PR ${ref.number} ` +
+          `(approvalState=${desired}): ${name}: ${message}`,
       );
     }
   };

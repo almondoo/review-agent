@@ -85,6 +85,38 @@ Operational implications:
 This trade-off is documented in `docs/deployment/aws.md` under the
 "CodeCommit disaster recovery" section.
 
+## Merge-blocking via approval state (opt-in, #74)
+
+By default the adapter posts inline comments and a summary, but ignores
+`review.event` — preserving the v0.2 behavior where merge-blocking on
+CodeCommit is left entirely to operator-managed approval rules.
+
+When `codecommit.approvalState: 'managed'` is set in `.review-agent.yml`
+(or `approvalState: 'managed'` is passed to `createCodecommitVCS`), the
+adapter additionally maps `review.event` onto CodeCommit's
+[`UpdatePullRequestApprovalState`](https://docs.aws.amazon.com/codecommit/latest/APIReference/API_UpdatePullRequestApprovalState.html)
+API:
+
+| `review.event`     | Adapter action                                       |
+| ------------------ | ---------------------------------------------------- |
+| `APPROVE`          | `UpdatePullRequestApprovalState(APPROVE)`            |
+| `REQUEST_CHANGES`  | `UpdatePullRequestApprovalState(REVOKE)`             |
+| `COMMENT` / unset  | no-op                                                |
+
+**IAM precondition** — the API only has an effect when the agent's IAM
+principal is a target of an approval rule on the PR (either via an
+`ApprovalRuleTemplate` associated with the repository, or a per-PR
+`CreatePullRequestApprovalRule`). When no rule applies, the SDK raises a
+typed error (`ApprovalRuleDoesNotExistException` /
+`InvalidApprovalStateException`); the adapter catches it, logs at
+`warn`, and continues — the inline comments and summary that were posted
+beforehand stay in place. This is a deliberate degrade-non-fatal path so
+operators can roll out the opt-in before wiring the approval rule.
+
+To actually block merges, attach a branch-protection-like approval rule
+to the repository (or the specific PR) that requires approval from the
+IAM principal the agent runs as.
+
 ## Limitations
 
 - `cloneRepo()` throws. The adapter does not shell out to git for

@@ -177,6 +177,22 @@ describe('loadConfigFromYaml — explicit values', () => {
       ConfigError,
     );
   });
+
+  it("defaults codecommit.approvalState to 'off' (v0.2 back-compat)", () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.codecommit.approvalState).toBe('off');
+  });
+
+  it("parses codecommit.approvalState: 'managed'", () => {
+    const cfg = loadConfigFromYaml('codecommit:\n  approvalState: managed\n');
+    expect(cfg.codecommit.approvalState).toBe('managed');
+  });
+
+  it('rejects an unknown codecommit.approvalState value', () => {
+    expect(() => loadConfigFromYaml('codecommit:\n  approvalState: blocking\n')).toThrow(
+      ConfigError,
+    );
+  });
 });
 
 describe('defaultConfig', () => {
