@@ -25,6 +25,7 @@ import {
   runReview,
 } from '@review-agent/runner';
 import type { ActionInputs } from './inputs.js';
+import { withRetry } from './retry.js';
 
 export type RunActionDeps = {
   readonly readFile?: (p: string, enc: 'utf8') => Promise<string>;
@@ -44,6 +45,12 @@ export type RunActionDeps = {
    * the action package stays dependency-free for now.
    */
   readonly logger?: (msg: string, meta?: Record<string, unknown>) => void;
+  /**
+   * Injectable sleep for retry backoff. Production defaults to
+   * setTimeout in `retry.ts`; tests inject a no-op so they don't
+   * pay real wall-clock delays.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
 };
 
 export type ActionContext = {
@@ -158,7 +165,11 @@ export async function runAction(
 
   const result = await runReview(reviewJob, provider);
 
-  await postOrUpdate(vcs, ctx.ref, pr, result, previousState);
+  await postOrUpdate(vcs, ctx.ref, pr, result, previousState, {
+    stateWriteRetries: inputs.stateWriteRetries,
+    log,
+    ...(deps.sleep ? { sleep: deps.sleep } : {}),
+  });
 
   return {
     skipped: false,
@@ -265,6 +276,11 @@ async function postOrUpdate(
   pr: PR,
   result: RunnerResult,
   previousState: ReviewState | null,
+  opts: {
+    readonly stateWriteRetries: number;
+    readonly log: (msg: string, meta?: Record<string, unknown>) => void;
+    readonly sleep?: (ms: number) => Promise<void>;
+  },
 ): Promise<void> {
   const state = buildReviewState({
     previousState,
@@ -275,10 +291,44 @@ async function postOrUpdate(
     tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
     costUsd: result.costUsd,
   });
-  await vcs.postReview(ref, {
-    comments: result.comments,
-    summary: result.summary,
-    state,
-  });
-  await vcs.upsertStateComment(ref, state);
+
+  // postReview ("inline review + summary") is wrapped in the same retry
+  // budget as the state-comment write. On exhaustion, the action fails
+  // — operators want to know that GitHub never received the review,
+  // not silently pass with zero comments posted. The retry helper
+  // takes a total-attempt count; `stateWriteRetries` is the number of
+  // retries on top of the first attempt, so total = retries + 1.
+  const totalAttempts = opts.stateWriteRetries + 1;
+  await withRetry(
+    () =>
+      vcs.postReview(ref, {
+        comments: result.comments,
+        summary: result.summary,
+        state,
+      }),
+    {
+      attempts: totalAttempts,
+      label: 'vcs.postReview',
+      logger: opts.log,
+      ...(opts.sleep ? { sleep: opts.sleep } : {}),
+    },
+  );
+
+  // The state comment is the only record of "what we already reviewed"
+  // in Action mode. Wrap in retry; on exhaustion throw with the
+  // operator-facing message so `core.setFailed` surfaces it in the
+  // run log. Note that even `stateWriteRetries: 0` means one attempt
+  // (no retries) — the state write always runs at least once.
+  try {
+    await withRetry(() => vcs.upsertStateComment(ref, state), {
+      attempts: totalAttempts,
+      label: 'vcs.upsertStateComment',
+      logger: opts.log,
+      ...(opts.sleep ? { sleep: opts.sleep } : {}),
+    });
+  } catch (err) {
+    const message = `State comment write failed after ${opts.stateWriteRetries} retries; next review will be a full re-review.`;
+    opts.log(message, { error: err instanceof Error ? err.message : String(err) });
+    throw new Error(message);
+  }
 }

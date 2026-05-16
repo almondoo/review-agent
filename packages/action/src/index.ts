@@ -11,6 +11,7 @@ async function main(): Promise<void> {
       language: core.getInput('language'),
       'config-path': core.getInput('config-path'),
       'cost-cap-usd': core.getInput('cost-cap-usd'),
+      'state-write-retries': core.getInput('state-write-retries'),
     });
 
     const ctx = github.context;
