@@ -100,17 +100,53 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
       repo: ref.repo,
       pull_number: ref.number,
     });
-    // listCommits is paginated; we cap at COMMIT_MESSAGES_CAP. With
-    // per_page = 100 the typical PR fits in one page. We keep the
-    // *last* N commits (most recent context first reading
-    // newest→oldest in the prompt), since the latest commits carry
-    // the most current author intent.
-    const commitsRaw = await octokit.paginate(octokit.rest.pulls.listCommits, {
-      owner: ref.owner,
-      repo: ref.repo,
-      pull_number: ref.number,
-      per_page: 100,
-    });
+    // We only need the last `COMMIT_MESSAGES_CAP` commits. Fetch a
+    // single page at the tail instead of paginating the whole PR —
+    // a 1000-commit rebase otherwise burns 10× the rate-limit budget
+    // and 5–15 s of latency on every review (reviewer I-1).
+    //
+    // GitHub's `listCommits` returns oldest→newest; the newest are on
+    // the highest-numbered page. With `per_page=100` (Octokit's max)
+    // and `page=ceil(total/100)`, one request covers the tail in the
+    // vast majority of PRs (total ≤ 100 is page 1; total > 100 with a
+    // full last page is also one request). The remaining pathological
+    // case is `total > 100` with a *partial* last page (e.g. 101
+    // commits → page 2 has 1 commit). In that case we also fetch the
+    // penultimate page to fill out the `COMMIT_MESSAGES_CAP` window —
+    // at most 2 API calls total, regardless of PR size.
+    const COMMIT_PAGE_SIZE = 100;
+    // Defensive `?? 0`: Octokit's openapi-types declares
+    // `commits: number` required, but mocks in our own test suite
+    // and third-party API proxies sometimes elide the field. A
+    // missing value collapses to "no commits to fetch" rather than
+    // a NaN page number — and we skip the listCommits call entirely
+    // (no point firing a request we know will return nothing useful).
+    const totalCommits = data.commits ?? 0;
+    let commitsRaw: ReadonlyArray<{
+      readonly sha: string;
+      readonly commit: { readonly message?: string };
+    }> = [];
+    if (totalCommits > 0) {
+      const lastPage = Math.max(1, Math.ceil(totalCommits / COMMIT_PAGE_SIZE));
+      const lastResp = await octokit.rest.pulls.listCommits({
+        owner: ref.owner,
+        repo: ref.repo,
+        pull_number: ref.number,
+        per_page: COMMIT_PAGE_SIZE,
+        page: lastPage,
+      });
+      commitsRaw = lastResp.data;
+      if (lastPage > 1 && commitsRaw.length < COMMIT_MESSAGES_CAP) {
+        const prevResp = await octokit.rest.pulls.listCommits({
+          owner: ref.owner,
+          repo: ref.repo,
+          pull_number: ref.number,
+          per_page: COMMIT_PAGE_SIZE,
+          page: lastPage - 1,
+        });
+        commitsRaw = [...prevResp.data, ...commitsRaw];
+      }
+    }
     const commitMessages = commitsRaw.slice(-COMMIT_MESSAGES_CAP).map((c) => ({
       sha: c.sha,
       message: truncateMessage(c.commit.message ?? ''),

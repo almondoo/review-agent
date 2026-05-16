@@ -97,7 +97,11 @@ describe('getPR', () => {
     expect(pr.draft).toBe(false);
   });
 
-  it('populates commitMessages via paginate(listCommits), keeping the last 20 and truncating each at 5000 chars', async () => {
+  it('fetches the last page of listCommits in a single direct call (no paginate), keeping the last 20 and truncating each at 5000 chars', async () => {
+    // 25-commit PR with per_page=100 fits in one page → one direct
+    // listCommits call. Verifies (a) we did NOT paginate; (b) we
+    // passed the right page (ceil(25/100)=1); (c) the slice(-20) +
+    // truncate work end-to-end.
     const get = vi.fn(async () => ({
       data: {
         title: 'T',
@@ -107,17 +111,17 @@ describe('getPR', () => {
         head: { sha: 'h', ref: 'f' },
         draft: false,
         labels: [],
+        commits: 25,
         created_at: '',
         updated_at: '',
       },
     }));
-    const listCommits = vi.fn();
-    // 25 commits — should keep only the last 20.
     const commits = Array.from({ length: 25 }, (_, i) => ({
       sha: `sha${i.toString().padStart(2, '0')}`,
       commit: { message: i === 24 ? 'x'.repeat(6_000) : `commit ${i}` },
     }));
-    const paginate = vi.fn(async (fn: unknown) => (fn === listCommits ? commits : []));
+    const listCommits = vi.fn(async () => ({ data: commits }));
+    const paginate = vi.fn();
     const vcs = createGithubVCS({
       token: 't',
       octokit: createMockOctokit({
@@ -126,6 +130,9 @@ describe('getPR', () => {
       }),
     });
     const pr = await vcs.getPR(ref);
+    expect(listCommits).toHaveBeenCalledTimes(1);
+    expect(listCommits.mock.calls[0]?.[0]).toMatchObject({ per_page: 100, page: 1 });
+    expect(paginate).not.toHaveBeenCalled();
     expect(pr.commitMessages).toHaveLength(20);
     // Cap: keep the trailing 20 (sha05 .. sha24).
     expect(pr.commitMessages[0]?.sha).toBe('sha05');
@@ -134,6 +141,97 @@ describe('getPR', () => {
     const last = pr.commitMessages[19];
     expect(last?.message.startsWith('x'.repeat(5_000))).toBe(true);
     expect(last?.message).toContain('[...truncated at 5000 chars]');
+  });
+
+  it('fetches the last page only on a 1000-commit PR (page=10, no paginate, no rate-limit blow-up)', async () => {
+    // Pathological case the reviewer flagged: a 1000-commit rebase.
+    // With the old paginate path this took 10 API calls; the fix
+    // brings it to 1 (since 1000 / 100 = 10 fits exactly).
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'b', ref: 'main' },
+        head: { sha: 'h', ref: 'f' },
+        draft: false,
+        labels: [],
+        commits: 1000,
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    // Mock returns the *last-page* slice (commits 901..1000) when
+    // called with page=10. The fetch logic relies on this — full
+    // last page means no second penultimate fetch is needed.
+    const lastPageCommits = Array.from({ length: 100 }, (_, i) => ({
+      sha: `sha${(900 + i).toString().padStart(4, '0')}`,
+      commit: { message: `commit ${900 + i}` },
+    }));
+    const listCommits = vi.fn(async () => ({ data: lastPageCommits }));
+    const paginate = vi.fn();
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get, listCommits },
+        paginate,
+      }),
+    });
+    const pr = await vcs.getPR(ref);
+    expect(listCommits).toHaveBeenCalledTimes(1);
+    expect(listCommits.mock.calls[0]?.[0]).toMatchObject({ per_page: 100, page: 10 });
+    expect(paginate).not.toHaveBeenCalled();
+    expect(pr.commitMessages).toHaveLength(20);
+    // Trailing 20 of commits 900..999 (the lastPageCommits sha tags
+    // count from 900 → indices 80..99 are the trailing 20).
+    expect(pr.commitMessages[0]?.sha).toBe('sha0980');
+    expect(pr.commitMessages[19]?.sha).toBe('sha0999');
+  });
+
+  it('also fetches the penultimate page when the tail page is partial (101-commit PR)', async () => {
+    // 101 commits: last page (page 2) has 1 commit; the previous
+    // page (page 1) has 100. To preserve the COMMIT_MESSAGES_CAP=20
+    // guarantee, the adapter must fetch BOTH and slice the combined
+    // tail. Worst-case path: exactly 2 API calls.
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'b', ref: 'main' },
+        head: { sha: 'h', ref: 'f' },
+        draft: false,
+        labels: [],
+        commits: 101,
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    const page1Commits = Array.from({ length: 100 }, (_, i) => ({
+      sha: `sha${i.toString().padStart(3, '0')}`,
+      commit: { message: `commit ${i}` },
+    }));
+    const page2Commits = [{ sha: 'sha100', commit: { message: 'commit 100' } }];
+    const listCommits = vi.fn(async (opts: { page: number }) => ({
+      data: opts.page === 1 ? page1Commits : page2Commits,
+    }));
+    const paginate = vi.fn();
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get, listCommits },
+        paginate,
+      }),
+    });
+    const pr = await vcs.getPR(ref);
+    expect(listCommits).toHaveBeenCalledTimes(2);
+    expect(listCommits.mock.calls[0]?.[0]).toMatchObject({ per_page: 100, page: 2 });
+    expect(listCommits.mock.calls[1]?.[0]).toMatchObject({ per_page: 100, page: 1 });
+    expect(paginate).not.toHaveBeenCalled();
+    // 20 commits expected: commits 081..100 (sha081..sha099 + sha100).
+    expect(pr.commitMessages).toHaveLength(20);
+    expect(pr.commitMessages[19]?.sha).toBe('sha100');
+    expect(pr.commitMessages[0]?.sha).toBe('sha081');
   });
 
   it('surfaces 404 from Octokit unchanged', async () => {
@@ -161,30 +259,28 @@ describe('getDiff', () => {
         head: { sha: 'H', ref: 'f' },
         draft: false,
         labels: [],
+        commits: 0,
         created_at: '',
         updated_at: '',
       },
     }));
-    const listCommits = vi.fn();
+    // `getDiff` calls `getPR` internally, which now fetches the
+    // commit-messages tail via a single direct `listCommits` call
+    // (no paginate). The diff itself still uses
+    // `paginate(listFiles, …)`. Commits=0 keeps the listCommits
+    // page-1 read returning an empty array.
+    const listCommits = vi.fn(async () => ({ data: [] }));
     const listFiles = vi.fn();
-    // `getDiff` triggers two paginated reads: `getPR` calls
-    // `paginate(listCommits, …)` first to populate `commitMessages`,
-    // then this test's getDiff path calls `paginate(listFiles, …)`
-    // for the diff itself. Dispatch by reference so each lookup
-    // returns a shape matching the call site.
-    const paginate = vi.fn(async (fn: unknown) => {
-      if (fn === listCommits) return [];
-      return [
-        {
-          filename: 'a.ts',
-          previous_filename: null,
-          status: 'modified',
-          additions: 1,
-          deletions: 0,
-          patch: '@@',
-        },
-      ];
-    });
+    const paginate = vi.fn(async () => [
+      {
+        filename: 'a.ts',
+        previous_filename: null,
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        patch: '@@',
+      },
+    ]);
     const vcs = createGithubVCS({
       token: 't',
       octokit: createMockOctokit({
