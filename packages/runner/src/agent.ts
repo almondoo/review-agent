@@ -154,6 +154,11 @@ export async function runReview(
     changedPaths: job.changedPaths ?? [],
     pathInstructions: job.pathInstructions,
     workspaceDir: job.workspaceDir,
+    // Same compiled `denyPatterns` instance the dispatcher uses, so
+    // auto-fetched companion files honor `privacy.deny_paths`. Built-in
+    // `DENY_PATTERNS` are unioned in by `createTools` regardless;
+    // this just closes the operator-extended layer (spec §7.4).
+    denyPatterns,
   });
   const wrappedMetadata = wrapUntrusted(job.prMetadata, {
     files: autoFetch.files,

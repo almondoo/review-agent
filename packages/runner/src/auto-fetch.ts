@@ -57,6 +57,15 @@ export type CollectAutoFetchInput = {
   readonly workspaceDir: string;
   readonly budget?: Partial<AutoFetchBudget>;
   readonly toolDeps?: ToolDeps;
+  /**
+   * Operator-supplied deny patterns (already compiled to `RegExp`)
+   * threaded into the underlying `createTools` so auto-fetched
+   * companion files honor `privacy.deny_paths` the same way the
+   * agent loop's tool dispatch does (spec §7.4 "extend, not relax").
+   * The agent compiles `ReviewJob.privacy.denyPaths` once and reuses
+   * the same instance here. Omitted ⇒ built-in defaults only.
+   */
+  readonly denyPatterns?: ReadonlyArray<RegExp>;
 };
 
 export type AutoFetchedFile = {
@@ -100,7 +109,7 @@ export async function collectAutoFetchContext(
     maxBytesPerFile: input.budget?.maxBytesPerFile ?? DEFAULT_AUTO_FETCH_BUDGET.maxBytesPerFile,
     maxTotalBytes: input.budget?.maxTotalBytes ?? DEFAULT_AUTO_FETCH_BUDGET.maxTotalBytes,
   };
-  const tools = createTools(input.workspaceDir, input.toolDeps);
+  const tools = createTools(input.workspaceDir, input.toolDeps, input.denyPatterns);
 
   // Precompile the patterns that have auto_fetch turned on.
   const compiled = input.pathInstructions
