@@ -6,7 +6,7 @@ operator-facing surface of the spec §7.3 / §7.4 hardening that keeps
 prompt-injected models from exfiltrating PR content through review
 comments.
 
-Today the section ships two keys:
+Today the section ships three keys:
 
 - `allowed_url_prefixes` — closed-world allowlist for any URL the LLM
   emits in `summary` / `body` / `suggestion` (spec §7.3 #4). Implemented
@@ -15,12 +15,11 @@ Today the section ships two keys:
   the LLM's read / glob / grep tools and from the auto-fetch
   companion-file pipeline, on top of the built-in deny list (spec
   §7.4 "extend, not relax"). Implemented in `#86`.
-
-One sibling key is still tracked as a separate issue and will land
-later:
-
-- `privacy.redact_patterns` — additional secret patterns to redact in
-  diff and output scans on top of gitleaks defaults. Tracked as `#87`.
+- `redact_patterns` — additional secret regex patterns lifted into
+  the gitleaks ruleset and the in-process scanner, on top of the
+  built-in detectors. Same "extend, not relax" semantic — operators
+  add detectors, they can't remove built-ins (spec §7.4). Implemented
+  in `#87`.
 
 Spec reference: §7.3 (prompt-injection defense, #4 URL allowlist),
 §7.4 (tool-surface containment), §7.7 (output validation schema).
@@ -346,6 +345,266 @@ configs (same merge semantics as `allowed_url_prefixes`; see
 [`./extends.md`](./extends.md)). Operators get the org's deny floor
 plus their repo's additions, never silently losing the org's
 baseline.
+
+---
+
+## `redact_patterns`
+
+`privacy.redact_patterns` is the operator-extensible secret-pattern
+list that runs on top of gitleaks' built-in ruleset (spec §7.4). It
+exists for the case where an organisation has its own token shape —
+e.g. `INTERNAL-TOKEN-<16 alnum>`, an in-house webhook secret prefix,
+a customer-identifier format that must never appear in code review
+output — that gitleaks' default detectors don't know about.
+
+Each entry is a regular-expression string. The runner lifts every
+entry into a gitleaks `[[rules]]` block (`id = "custom-<index>"`) and
+also compiles it for the in-process `quickScanContent` fallback. Both
+the diff pre-scan (before any byte is sent to the LLM) and the
+output post-scan (before any comment is posted to the PR) run the
+operator patterns in the same pass as the built-ins.
+
+### Scope: where it is enforced
+
+The pattern set runs at two scan boundaries inside `runReview`
+(`packages/runner/src/agent.ts`):
+
+| Boundary | What it scans | Behaviour on match |
+| --- | --- | --- |
+| Diff pre-scan | `job.diffText` before the LLM call. | A custom-N hit is `tags: ["high"]` — the runner aborts the review with `SecretLeakAbortedError(phase='diff')` BEFORE invoking the provider. The LLM never sees the bytes. |
+| Output post-scan | `summary` + every kept comment body after dedup + confidence filter. | A custom-N hit triggers `SecretLeakAbortedError(phase='output')`, mirroring the built-in-rule abort path. No PR comment is posted. |
+
+When `shouldAbortReview` does not fire (e.g. a future relaxation that
+lowers a specific custom rule to a non-`high` tag, or a build-in
+medium-confidence finding alongside the custom hit), `applyRedactions`
+substitutes the matched substring with `[REDACTED:custom-<index>]`.
+
+### Closed-world default — built-in rules always apply
+
+The runner emits the gitleaks config fragment with
+`[extend] useDefault = true`, which is gitleaks' own knob for
+"layer my rules on top of the default ruleset, don't replace it."
+Without that directive `--config` REPLACES the defaults, and the
+built-in AWS / GitHub / Anthropic / OpenAI / PEM detectors would
+silently disappear — the exact "extend, not relax" failure §7.4
+forbids. The in-process `quickScanContent` fallback follows the
+same union semantic: built-ins always run, custom patterns are
+appended.
+
+Operators cannot remove a built-in rule through `redact_patterns`.
+The list is one-way additive by design.
+
+### Redaction format
+
+Findings carry a stable `ruleId` so operators can grep PR-comment
+redactions back to the source config entry:
+
+| Source | `ruleId` shape | Example placeholder |
+| --- | --- | --- |
+| Built-in `quickScanContent` rule | Stable string (`aws-access-key`, `github-pat`, `private-key-block`, ...) | `[REDACTED:aws-access-key]` |
+| Built-in gitleaks rule (subprocess) | gitleaks' own rule id | `[REDACTED:gitleaks-aws-access-key]` (rule-id format follows gitleaks output) |
+| Operator pattern (this section) | `custom-<index>`, where `<index>` is the 0-based position in `privacy.redact_patterns` after the org+repo merge | `[REDACTED:custom-0]`, `[REDACTED:custom-1]` |
+
+The `custom-<index>` form is the runtime contract pinned by
+`gitleaks.test.ts` "produces `[REDACTED:custom-N]` tokens" and
+`agent.test.ts` "redacts a custom-pattern hit in the LLM output".
+Order is the post-merge insertion order — after `extends: org`, org
+entries come first, then repo entries (de-duplicated), so a custom
+pattern's index is stable for a given config pair.
+
+### YAML-load validation
+
+Each entry is validated by the Zod schema at config-load time, via
+`isValidRegex` in `@review-agent/core`. The check rejects three
+shapes up front so the operator sees the failure before any review
+runs:
+
+- Empty strings (`""`).
+- Strings containing a NUL byte (0x00).
+- Strings that `new RegExp(pattern)` cannot compile (unbalanced
+  bracket `[a-z`, lone quantifier `*invalid`, malformed group
+  `(unclosed`, …).
+
+A pattern that survives `isValidRegex` is guaranteed to compile
+under **V8's** regex engine — which is the engine the in-process
+`quickScanContent` uses. The gitleaks subprocess runs Go's RE2,
+which is a strict subset of V8; see the next section.
+
+### RE2 subset caveat — gitleaks rejects some V8-valid patterns
+
+gitleaks compiles every rule with Go's `regexp` package, which uses
+RE2. RE2 deliberately omits regex features that allow exponential
+backtracking, and that set is **not** a subset of what V8 accepts.
+The most common culprits are:
+
+| Feature | V8 (config-load check) | RE2 (gitleaks runtime) |
+| --- | --- | --- |
+| Backreferences (`\1`, `\k<name>`) | accepted | **rejected** |
+| Lookbehind (`(?<=...)`, `(?<!...)`) | accepted | **rejected** |
+| Lookahead (`(?=...)`, `(?!...)`) | accepted | **rejected** |
+| Possessive quantifiers (`a*+`) | parsed as literal | **rejected** when surfaced |
+| Unicode property classes (`\p{Letter}`) | accepted | accepted (with `(?u)` or `--config` flag — varies by gitleaks version) |
+| Inline modifiers (`(?i)`, `(?s)`, `(?m)`) | partial | accepted |
+
+A pattern that passes `isValidRegex` but exercises one of the
+rejected features will compile fine in the in-process scan and then
+crash `scanWorkspaceWithGitleaks` at config-load time. The runner
+catches that error, sniffs stderr for `error parsing regexp` /
+`cannot compile` / `invalid or unsupported perl syntax`, and
+re-throws with a docs pointer:
+
+> Hint: gitleaks compiles patterns with Go's RE2 engine, which is a
+> strict subset of JavaScript regex — backreferences (\1), lookbehind
+> ((?<=…)), and lookahead ((?=…)) are NOT supported. Adjust the
+> offending privacy.redact_patterns entry. See
+> docs/configuration/privacy.md for the RE2 constraints.
+
+**Operator guidance**: keep entries inside the RE2 subset. The
+common workarounds:
+
+- Replace `(?<=PREFIX)TARGET` (lookbehind) with `(?:PREFIX)(TARGET)`
+  and use the capture group when post-processing finds it. For
+  redaction purposes the whole match is the secret anyway — there is
+  rarely a reason to lookbehind in the first place.
+- Replace `TARGET(?=SUFFIX)` (lookahead) with `TARGET(?:SUFFIX)` and
+  redact the longer match. The placeholder `[REDACTED:custom-N]`
+  covers both the secret and the suffix uniformly.
+- Replace `(KEY)=\1\1` (backreference) with the literal expansion
+  you actually need to detect. RE2's design assumption is that
+  every match runs in linear time; backreferences break that and
+  are intentionally absent.
+
+If you cannot express the rule without RE2-unsupported features,
+file an issue — the right fix is usually a different rule shape,
+not a regex-engine swap.
+
+### TOML serialisation caveat — `'''` cannot appear in a pattern
+
+The runner emits each operator pattern into the gitleaks config
+TOML as a **multi-line literal string**:
+
+```toml
+[[rules]]
+id = "custom-0"
+description = "review-agent privacy.redact_patterns[0]"
+regex = '''<your pattern verbatim>'''
+tags = ["high"]
+```
+
+Multi-line literals pass every byte through unchanged — no
+backslash escape, no quote escape, no `$` escape, no newline
+escape. The single sequence a TOML multi-line literal cannot
+contain is its own terminator, `'''` (three consecutive single
+quotes). The runner detects this shape at lift time and throws a
+clear error rather than silently truncating the regex:
+
+> privacy.redact_patterns[N] contains the TOML multi-line literal
+> terminator (''') — gitleaks config syntax cannot represent it.
+> Restructure the pattern to avoid three consecutive single quotes.
+
+This is vanishingly rare in real regex sources (single quotes are
+almost never repeated in a secret-pattern shape), but documented so
+the rejection isn't a surprise.
+
+### ReDoS — pattern design is the operator's responsibility
+
+`isValidRegex` ensures every entry compiles. It does **not** reject
+patterns that are prone to catastrophic backtracking — the classic
+`(a+)+` shape compiles fine and will pin a CPU on a long enough
+adversarial input. The runner provides two structural mitigations:
+
+- The diff pre-scan operates on `job.diffText`, whose size is bounded
+  by `reviews.max_diff_lines` (default 3000 lines).
+- The output post-scan operates on the LLM's response, whose length
+  is bounded by the provider's token budget.
+
+These caps make a malicious-pattern × adversarial-input scenario
+finite but not zero-cost. Operators are responsible for the
+algorithmic safety of every pattern they add. The standard rules of
+thumb:
+
+- Anchor and bound quantifiers (`AKIA[0-9A-Z]{16}` rather than
+  `AKIA[0-9A-Z]+`).
+- Avoid nested or overlapping repetitions (`(a+)+`, `(a|a)+`,
+  `(.*).*`).
+- Test pathological inputs against the pattern in a Node REPL before
+  shipping — if `'a'.repeat(50)` plus one mismatch takes more than a
+  few milliseconds, the pattern is likely vulnerable.
+
+A future hardening pass may add a per-scan execution timeout (via
+`re2` or an equivalent linear-time engine wrapper). For now the
+operator owns the trade-off.
+
+### YAML samples
+
+Closed-world baseline — only built-in detectors active:
+
+```yaml
+privacy:
+  redact_patterns: []
+```
+
+Single operator-internal token shape:
+
+```yaml
+privacy:
+  redact_patterns:
+    - "INTERNAL-TOKEN-[A-Z0-9]{16}"
+```
+
+Multiple shapes, including an entry that intentionally overlaps a
+built-in detector (harmless — both rules fire and the dedup in
+`applyRedactions` collapses to a single placeholder per match):
+
+```yaml
+privacy:
+  redact_patterns:
+    - "INTERNAL-TOKEN-[A-Z0-9]{16}"
+    - "acme_webhook_[A-Za-z0-9]{32}"
+    - "AKIA[0-9A-Z]{16}"          # overlaps built-in aws-access-key
+    - "CUSTOMER-[0-9]{10}-[A-F]{4}"
+```
+
+When `.review-agent.yml` uses `extends: org`, the
+`redact_patterns` lists are **concatenated and de-duplicated**
+across the org and repo configs (same merge semantics as
+`allowed_url_prefixes` / `deny_paths`; see
+[`./extends.md`](./extends.md)). De-dup is by exact string match,
+so two patterns expressing the same shape with different syntax
+(`AKIA[0-9A-Z]{16}` vs `AKIA[A-Z0-9]{16}`) coexist with separate
+`custom-N` ids.
+
+### Known limitations
+
+These limitations are intentional in v1.x. Operators who hit them
+should structure around them rather than working through the
+runner internals.
+
+1. **Regex string only — full gitleaks rule syntax is not exposed.**
+   gitleaks' native config supports per-rule entropy thresholds
+   (`entropy = 4.0`), per-rule allowlists, path-scope restrictions
+   (`path = "..."`), and secret-group selection (`secretGroup = 2`).
+   The runner deliberately exposes only the `regex` field — every
+   other field would have to be validated for prompt-injection
+   resistance and audited for its interaction with the in-process
+   fallback. Patterns that need those features should be promoted
+   to gitleaks built-ins (file a PR) rather than added to operator
+   config.
+2. **No per-pattern timeout.** A ReDoS-prone pattern can in principle
+   pin the scanner for an adversarial diff or LLM response (see the
+   ReDoS section above). The size caps on `diffText` and LLM output
+   bound the worst case; an explicit `re2` wrapper is on the
+   roadmap.
+3. **`tags = ["high"]` is fixed.** Every operator pattern is treated
+   as a high-confidence detector — any match aborts the review the
+   same way a built-in `aws-access-key` match does. There is no knob
+   yet to mark a custom pattern as `medium` (would route through
+   `applyRedactions` without abort). If you need that, file an
+   issue; the simplest path forward is a dedicated `tags:` field
+   on each list entry once the schema grows beyond bare strings.
+4. **No `'''` in regex sources.** The TOML multi-line literal
+   terminator cannot appear inside the pattern. The runner rejects
+   such patterns at lift time. See the TOML caveat above.
 
 ---
 

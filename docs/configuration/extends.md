@@ -49,7 +49,7 @@ When `extends: org` triggers a merge:
 | Nested object (`reviews.auto_review`, `cost`, ...) | Shallow merge, repo keys win. |
 | `provider` (single object) | Repo wins entirely. Set on repo only when you want a per-repo override. |
 | List (`skills`, `reviews.path_filters`, `reviews.path_instructions`, ...) | **Concatenated** — org first, then repo. Downstream code (skill loader, glob matcher) handles duplicate entries. |
-| `reviews.ignore_authors`, `privacy.allowed_url_prefixes`, `privacy.deny_paths` | Concatenated **and de-duplicated** — these are sets in spirit. |
+| `reviews.ignore_authors`, `privacy.allowed_url_prefixes`, `privacy.deny_paths`, `privacy.redact_patterns` | Concatenated **and de-duplicated** — these are sets in spirit. |
 
 Why concat instead of replace? The intent of `extends: org` is "I want
 the org defaults *plus* my repo's additions" — replacing would
