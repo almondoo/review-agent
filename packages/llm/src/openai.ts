@@ -1,9 +1,8 @@
 import { createOpenAI } from '@ai-sdk/openai';
-import { ReviewOutputSchema } from '@review-agent/core';
 import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { getEncoding } from 'js-tiktoken';
 import { OPENAI_PRICING, priceForModel } from './pricing.js';
-import { countToolCalls } from './provider-base.js';
+import { countToolCalls, ProviderOutputShapeSchema } from './provider-base.js';
 import type {
   ErrorClassification,
   LlmProvider,
@@ -157,7 +156,7 @@ export function createOpenAIProvider(
       model: client(config.model),
       tools,
       stopWhen: stepCountIs(maxSteps),
-      experimental_output: Output.object({ schema: ReviewOutputSchema }),
+      experimental_output: Output.object({ schema: ProviderOutputShapeSchema }),
       messages: [
         { role: 'system', content: input.systemPrompt },
         { role: 'user', content: userPrompt },

@@ -1,8 +1,28 @@
-import { ReviewOutputSchema } from '@review-agent/core';
+import { COMMENTS_MAX, InlineCommentSchema, SUMMARY_MAX } from '@review-agent/core';
 import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { getEncoding } from 'js-tiktoken';
+import { z } from 'zod';
 import { type ModelPrice, priceForModel } from './pricing.js';
 import type { ErrorClassification, LlmProvider, ReviewInput, ReviewOutput } from './types.js';
+
+/**
+ * Shape-only schema handed to the AI SDK's `experimental_output` so
+ * the model is steered toward structured JSON without baking in the
+ * URL-allowlist refine (spec §7.3 #4) at the driver level. The full,
+ * context-aware schema — including the URL allowlist — is built per
+ * job in the runner via `createReviewOutputSchema`, where the PR's
+ * `prRepo` / `privacy.allowedUrlPrefixes` are known. Splitting the
+ * two keeps the LLM driver provider-agnostic *and* keeps the agent
+ * loop in charge of retry / graceful-abort on policy-only failures
+ * (a URL violation here would otherwise throw inside the AI SDK and
+ * bypass the agent's retry middleware).
+ */
+export const ProviderOutputShapeSchema = z
+  .object({
+    comments: z.array(InlineCommentSchema).max(COMMENTS_MAX),
+    summary: z.string().min(1).max(SUMMARY_MAX),
+  })
+  .strict();
 
 export type ProviderPricing = Readonly<Record<string, ModelPrice>>;
 
@@ -112,7 +132,7 @@ export function createGenericProvider<TModelArg>(
         model: shape.modelForRequest(model) as Parameters<GenerateTextFn>[0]['model'],
         tools,
         stopWhen: stepCountIs(maxSteps),
-        experimental_output: Output.object({ schema: ReviewOutputSchema }),
+        experimental_output: Output.object({ schema: ProviderOutputShapeSchema }),
         messages: [
           { role: 'system', content: input.systemPrompt },
           { role: 'user', content: userPrompt },
