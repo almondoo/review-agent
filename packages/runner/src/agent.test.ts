@@ -6,7 +6,7 @@ import {
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
-import type { GitleaksFinding } from './gitleaks.js';
+import { CUSTOM_RULE_ID_PREFIX, type GitleaksFinding } from './gitleaks.js';
 import { MAX_TOOL_CALLS } from './tools.js';
 import type { ReviewJob } from './types.js';
 
@@ -653,7 +653,7 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
     await expect(runReview(job, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
     await expect(runReview(job, provider)).rejects.toMatchObject({
       phase: 'diff',
-      ruleIds: ['custom-0'],
+      ruleIds: [`${CUSTOM_RULE_ID_PREFIX}0`],
     });
     // The provider must NOT have been called — the operator's
     // pattern intercepted the diff before any LLM prompt could
@@ -682,7 +682,7 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
     await expect(runReview(job, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
     await expect(runReview(job, provider)).rejects.toMatchObject({
       phase: 'output',
-      ruleIds: ['custom-0'],
+      ruleIds: [`${CUSTOM_RULE_ID_PREFIX}0`],
     });
   });
 
@@ -704,8 +704,8 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
       text.includes(customSecret)
         ? [
             {
-              ruleId: 'custom-0',
-              description: 'Custom rule: custom-0',
+              ruleId: `${CUSTOM_RULE_ID_PREFIX}0`,
+              description: `Custom rule: ${CUSTOM_RULE_ID_PREFIX}0`,
               file: '',
               startLine: 1,
               endLine: 1,
@@ -726,7 +726,7 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
       },
     };
     const result = await runReview(job, provider, { scanContent });
-    expect(result.summary).toBe('LLM saw [REDACTED:custom-0] in passing.');
+    expect(result.summary).toBe(`LLM saw [REDACTED:${CUSTOM_RULE_ID_PREFIX}0] in passing.`);
   });
 
   it('keeps built-in scanning active when redactPatterns is empty (regression)', async () => {
@@ -765,7 +765,7 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
       phase: 'diff',
       // Both rule ids appear; order is insertion-order (built-ins
       // first because `quickScanContent` scans built-ins first).
-      ruleIds: ['aws-access-key', 'custom-0'],
+      ruleIds: ['aws-access-key', `${CUSTOM_RULE_ID_PREFIX}0`],
     });
   });
 });

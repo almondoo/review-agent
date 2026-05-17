@@ -19,14 +19,19 @@ export {
 } from './coordination.js';
 export {
   applyRedactions,
+  CUSTOM_RULE_ID_PREFIX,
+  type CustomRegexFile,
   defaultSpawn,
   type GitleaksFinding,
   type GitleaksResult,
+  liftCustomPatternsToToml,
   quickScanContent,
   type ScanDiffOptions,
   type SpawnFn,
   scanWorkspaceWithGitleaks,
   shouldAbortReview,
+  type WriteCustomRegexFileDeps,
+  writeCustomRegexFile,
 } from './gitleaks.js';
 export {
   type CostGuardOptions,

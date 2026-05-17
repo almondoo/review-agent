@@ -402,7 +402,7 @@ redactions back to the source config entry:
 | Source | `ruleId` shape | Example placeholder |
 | --- | --- | --- |
 | Built-in `quickScanContent` rule | Stable string (`aws-access-key`, `github-pat`, `private-key-block`, ...) | `[REDACTED:aws-access-key]` |
-| Built-in gitleaks rule (subprocess) | gitleaks' own rule id | `[REDACTED:gitleaks-aws-access-key]` (rule-id format follows gitleaks output) |
+| Built-in gitleaks rule (subprocess) | gitleaks' own rule id | `[REDACTED:aws-access-token]` (rule-id format follows gitleaks output verbatim — no `gitleaks-` prefix) |
 | Operator pattern (this section) | `custom-<index>`, where `<index>` is the 0-based position in `privacy.redact_patterns` after the org+repo merge | `[REDACTED:custom-0]`, `[REDACTED:custom-1]` |
 
 The `custom-<index>` form is the runtime contract pinned by
@@ -672,7 +672,7 @@ comment or stdout that adopters can scrape.
 ## Related docs
 
 - [`./extends.md`](./extends.md) — how org and repo
-  `allowed_url_prefixes` / `deny_paths` lists merge.
+  `allowed_url_prefixes` / `deny_paths` / `redact_patterns` lists merge.
 - [`../security/audit.md`](../security/audit.md) — STRIDE walkthrough
   that motivates the closed-world default.
 - [`../specs/review-agent-spec.md`](../specs/review-agent-spec.md)
