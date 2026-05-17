@@ -3,6 +3,7 @@ import {
   type Confidence,
   computeReviewEvent,
   createReviewOutputSchema,
+  globToRegExp,
   SchemaValidationError,
   SecretLeakAbortedError,
   URL_ALLOWLIST_ISSUE_PREFIX,
@@ -109,6 +110,16 @@ export async function runReview(
     );
   }
 
+  // Compile operator-supplied glob deny paths once per review.
+  // Built-in `DENY_PATTERNS` are unioned in by the dispatcher
+  // (spec §7.4 "extend, not relax"); we only need to forward the
+  // operator-extended layer here. globToRegExp throws on
+  // empty / NUL-containing entries, but the YAML schema already
+  // rejects those at load time via `isValidGlob` — so a throw here
+  // would indicate a programmer error upstream (e.g. a caller
+  // bypassing the schema) and should surface, not be swallowed.
+  const denyPatterns: ReadonlyArray<RegExp> = job.privacy.denyPaths.map((g) => globToRegExp(g));
+
   // Counter shared with the AI-SDK tool wrappers so we can attribute
   // tool calls to the agent step that initiated them. The provider
   // also reports `toolCalls` derived from the AI-SDK step results;
@@ -117,6 +128,7 @@ export async function runReview(
   let toolCallCounter = 0;
   const tools = createAiSdkToolset({
     workspace: job.workspaceDir,
+    denyPatterns,
     onCall: (_name: ToolName) => {
       toolCallCounter += 1;
     },
