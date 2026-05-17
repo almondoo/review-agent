@@ -26,7 +26,13 @@
 // `` ` ``). Markdown links of the form `[text](url)` naturally
 // terminate at the `)`, and inline-code spans terminate at the
 // backtick — without us having to parse Markdown.
-const URL_PATTERN = /https?:\/\/[^\s)\]}<>"'`]+/g;
+//
+// `i` flag: schemes are matched case-insensitively. GitHub's Markdown
+// renderer linkifies `HTTPS://...` / `Https://...` exactly like
+// lowercase `https://...`, so the allowlist validator must see those
+// variants too — otherwise a prompt-injection payload using mixed
+// case bypasses the refine and the click-through reaches the user.
+const URL_PATTERN = /https?:\/\/[^\s)\]}<>"'`]+/gi;
 
 // Trailing punctuation that, when adjacent to a URL in prose, is
 // almost always a sentence terminator rather than part of the URL
@@ -70,20 +76,35 @@ export function isPrefixAllowed(url: string, allowedPrefixes: string[]): boolean
 }
 
 /**
- * Returns true iff `url`'s path begins with `/<owner>/<repo>`,
- * regardless of host. Used to grant the PR's own repository
+ * Returns true iff `url` points into the PR's own repository — that
+ * is, its host matches `expected.host` (case-insensitive, exact) AND
+ * its path begins with `/<expected.owner>/<expected.repo>`
+ * (case-insensitive). Used to grant the PR's own repository
  * permanent allowlist status without requiring it in the config
- * (§7.3 #4 "PR's own repo").
+ * (spec §7.3 #4 "PR's own repo").
  *
- * Host is ignored so this predicate works uniformly for github.com
- * and any GitHub Enterprise Server hostname. Comparison is
- * case-insensitive. Query strings and fragments are ignored.
+ * Host MUST match exactly: a previous design that ignored host would
+ * have permitted `https://evil.example/<owner>/<repo>/log?secret=...`
+ * to slip through the allowlist when the PR's repo is
+ * `<owner>/<repo>` — exactly the exfiltration channel §7.3 #4 is
+ * meant to block. Callers pass the actual PR host (github.com for
+ * SaaS, the GHES hostname for Enterprise) so the predicate works
+ * uniformly across deployments.
+ *
+ * `URL` parsing normalizes the scheme casing (`new URL('HTTPS://x')`
+ * yields `protocol === 'https:'`), and `parsed.host` deliberately
+ * excludes any userinfo (`user:pass@evil.com` → `parsed.host` is
+ * `evil.com`), so userinfo spoofing cannot pass as a github.com URL.
+ * Query strings and fragments are ignored.
  *
  * Returns false on inputs that aren't parseable as a URL or whose
  * scheme isn't http/https — anything else would be a category mismatch
  * for "a link into this repo's web UI".
  */
-export function isPrOwnRepoUrl(url: string, owner: string, repo: string): boolean {
+export function isPrOwnRepoUrl(
+  url: string,
+  expected: { host: string; owner: string; repo: string },
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -93,7 +114,10 @@ export function isPrOwnRepoUrl(url: string, owner: string, repo: string): boolea
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return false;
   }
+  if (parsed.host.toLowerCase() !== expected.host.toLowerCase()) {
+    return false;
+  }
   const path = parsed.pathname.toLowerCase();
-  const prefix = `/${owner.toLowerCase()}/${repo.toLowerCase()}`;
+  const prefix = `/${expected.owner.toLowerCase()}/${expected.repo.toLowerCase()}`;
   return path === prefix || path.startsWith(`${prefix}/`);
 }
