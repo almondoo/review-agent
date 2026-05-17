@@ -50,19 +50,25 @@ export const MAX_FILE_SIZE = 1_000_000;
 export const MAX_GREP_PATTERN_LENGTH = 200;
 
 /**
- * `node:fs` error codes that `grepInDir` recognises and handles
- * (instead of swallowing or letting them escape uncategorised).
- * Anything outside this set bubbles up so the caller — and ultimately
- * the LLM via the AI-SDK tool wrapper — sees a real failure rather
- * than an empty result set.
+ * `node:fs` error codes that `grepInDir` discriminates by name. Each
+ * value in this list has a matching `if (code === ...)` branch in
+ * `grepInDir` (skip silently / emit marker). Anything else — including
+ * descriptor exhaustion (EMFILE/ENFILE), I/O failures, mocked test
+ * errors, etc. — has no discriminated case and falls through to the
+ * final `throw err`, surfacing the failure to the caller and ultimately
+ * to the LLM via the AI-SDK tool wrapper.
+ *
+ * Keep this list aligned with the branches below: a code that appears
+ * here but lacks a branch is dead documentation; a branch whose code
+ * is missing here would force a cast.
  */
-const HANDLED_FS_CODES = ['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'EMFILE', 'ENFILE'] as const;
-type FsErrorCode = (typeof HANDLED_FS_CODES)[number];
+const KNOWN_FS_CODES = ['ENOENT', 'EACCES', 'EPERM', 'EISDIR'] as const;
+type FsErrorCode = (typeof KNOWN_FS_CODES)[number];
 
 function fsErrorCode(err: unknown): FsErrorCode | null {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code?: unknown }).code;
-    if (typeof code === 'string' && (HANDLED_FS_CODES as ReadonlyArray<string>).includes(code)) {
+    if (typeof code === 'string' && (KNOWN_FS_CODES as ReadonlyArray<string>).includes(code)) {
       return code as FsErrorCode;
     }
   }
@@ -258,10 +264,12 @@ async function grepInDir(
           out.push(`${rel}:0: [unreadable file: ${code}]`);
           continue;
         }
-        // EMFILE/ENFILE: descriptor exhaustion. Treat as a real
-        // failure and abort — otherwise the LLM gets an arbitrarily
-        // truncated view and may draw the wrong conclusion. Same for
-        // any other unrecognised error.
+        // Anything we did not match above (descriptor exhaustion
+        // EMFILE/ENFILE, EIO, mocked test errors, …) bubbles up.
+        // Silently swallowing here — as the pre-refactor code did
+        // with `.catch(() => '')` — would give the LLM an arbitrarily
+        // truncated view of the workspace and let it draw confident
+        // but wrong conclusions.
         throw err;
       }
       text.split('\n').forEach((line, i) => {

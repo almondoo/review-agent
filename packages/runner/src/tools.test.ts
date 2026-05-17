@@ -273,6 +273,29 @@ describe('grep', () => {
     await expect(tools.grep({ pattern: evil })).rejects.toThrow(/pattern too long/);
   });
 
+  it('skips an entry that became a directory mid-scan silently (EISDIR)', async () => {
+    // Race between `readdir` (which classified `b` as a file) and
+    // `readFile` (which now finds it is a directory). Same outcome as
+    // ENOENT — drop the entry silently rather than emitting a marker
+    // for transient state — but a dedicated case so the OR branch in
+    // `if (code === 'ENOENT' || code === 'EISDIR')` is exercised on
+    // its own.
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async (p: string) => {
+        if (p === '/work/src/a.ts') return 'foo';
+        throw fsError('EISDIR', p, 'read');
+      }) as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('src', 'dir')];
+        if (p === '/work/src') return [dirent('a.ts', 'file'), dirent('b', 'file')];
+        return [];
+      }) as never,
+    });
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual(['src/a.ts:1: foo']);
+  });
+
   it('skips files removed mid-scan silently (ENOENT)', async () => {
     // `b.ts` is in the directory listing but `readFile` raises ENOENT —
     // simulates the common race where readdir saw the entry but the
