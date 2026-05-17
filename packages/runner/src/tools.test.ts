@@ -1,4 +1,4 @@
-import { ToolDispatchRefusedError } from '@review-agent/core';
+import { globToRegExp, ToolDispatchRefusedError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createAiSdkToolset,
@@ -422,5 +422,180 @@ describe('exported limits', () => {
     const core = await import('@review-agent/core');
     expect(MAX_FILE_SIZE).toBe(core.MAX_FILE_SIZE);
     expect(MAX_GREP_PATTERN_LENGTH).toBe(core.MAX_GREP_PATTERN_LENGTH);
+  });
+});
+
+// Spec §7.4 / issue #86: operator-supplied `privacy.deny_paths` is
+// compiled to RegExp (`globToRegExp`) by the agent loop and threaded
+// into the dispatcher via `createTools(_, _, denyPatterns)`. The
+// dispatcher unions it with the built-in `DENY_PATTERNS` — there is
+// intentionally no API to subtract from the built-ins ("extend, not
+// relax"). The tests below pin behavior across all three tools.
+describe('createTools — operator deny_paths (spec §7.4)', () => {
+  // `compliance/**` matches everything below the compliance folder;
+  // `legal/*.pdf` matches one-level PDFs in legal/.
+  const operatorDeny = [globToRegExp('compliance/**'), globToRegExp('legal/*.pdf')];
+
+  it('read_file: rejects an operator-denied path with ToolDispatchRefusedError', async () => {
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({ files: { '/work/compliance/policy.txt': 'secret' } }),
+      operatorDeny,
+    );
+    await expect(tools.read_file({ path: 'compliance/policy.txt' })).rejects.toBeInstanceOf(
+      ToolDispatchRefusedError,
+    );
+    await expect(tools.read_file({ path: 'compliance/policy.txt' })).rejects.toThrow(/deny-list/);
+  });
+
+  it('read_file: still permits paths outside both built-in and operator deny lists', async () => {
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({ files: { '/work/src/a.ts': 'hi' } }),
+      operatorDeny,
+    );
+    expect(await tools.read_file({ path: 'src/a.ts' })).toBe('hi');
+  });
+
+  it('glob: silently drops operator-denied paths from results (no exception)', async () => {
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({
+        tree: {
+          '/work': [dirent('compliance', 'dir'), dirent('src', 'dir'), dirent('legal', 'dir')],
+          '/work/compliance': [dirent('policy.txt', 'file')],
+          '/work/src': [dirent('a.ts', 'file')],
+          '/work/legal': [dirent('contract.pdf', 'file'), dirent('memo.md', 'file')],
+        },
+      }),
+      operatorDeny,
+    );
+    const out = await tools.glob({ pattern: '**/*' });
+    expect(out).toContain('src/a.ts');
+    expect(out).toContain('legal/memo.md');
+    expect(out).not.toContain('compliance/policy.txt');
+    expect(out).not.toContain('legal/contract.pdf');
+  });
+
+  it('grep: silently skips operator-denied files during scan (no marker, no error)', async () => {
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({
+        files: {
+          '/work/compliance/policy.txt': 'TODO investigate',
+          '/work/src/a.ts': 'TODO add tests',
+        },
+        tree: {
+          '/work': [dirent('compliance', 'dir'), dirent('src', 'dir')],
+          '/work/compliance': [dirent('policy.txt', 'file')],
+          '/work/src': [dirent('a.ts', 'file')],
+        },
+      }),
+      operatorDeny,
+    );
+    const out = await tools.grep({ pattern: 'TODO' });
+    expect(out).toEqual(['src/a.ts:1: TODO add tests']);
+  });
+
+  it('grep: refuses an explicit scope argument that maps to a denied path', async () => {
+    // `resolveSafePath` runs `checkDenyList` against the scope, so
+    // calling grep with `path: 'compliance'` (a denied glob target)
+    // produces a hard refusal — same shape read_file gives.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({
+        tree: { '/work/compliance': [dirent('policy.txt', 'file')] },
+      }),
+      [globToRegExp('compliance')],
+    );
+    await expect(tools.grep({ pattern: 'TODO', path: 'compliance' })).rejects.toBeInstanceOf(
+      ToolDispatchRefusedError,
+    );
+  });
+});
+
+describe('createTools — extend-not-relax (spec §7.4)', () => {
+  it("user deny list cannot 'whitelist' a built-in deny (extend, not relax)", async () => {
+    // The user's `**` pattern matches everything — but DENY_PATTERNS
+    // takes precedence in the union, so `.env` is still refused even
+    // when the operator's list is permissive. There is no API
+    // surface that lets a user remove an entry from DENY_PATTERNS.
+    const tools = createTools(WORKSPACE, makeDeps({}), [globToRegExp('**')]);
+    await expect(tools.read_file({ path: '.env' })).rejects.toBeInstanceOf(
+      ToolDispatchRefusedError,
+    );
+    await expect(tools.read_file({ path: 'secrets/db.json' })).rejects.toThrow(/deny-list/);
+  });
+
+  it('empty user deny list behaves identically to omitting the argument', async () => {
+    const explicit = createTools(WORKSPACE, makeDeps({}), []);
+    const implicit = createTools(WORKSPACE, makeDeps({}));
+    // Both still refuse the same built-in deny entry.
+    await expect(explicit.read_file({ path: '.env' })).rejects.toThrow(/deny-list/);
+    await expect(implicit.read_file({ path: '.env' })).rejects.toThrow(/deny-list/);
+    // And both permit the same non-deny path (no fixtures wired here —
+    // the deny check runs before fs access, so ENOENT confirms we got
+    // past the deny gate). Use a sentinel readFile to keep the test
+    // hermetic.
+    const sentinel = makeDeps({ files: { '/work/ok.ts': 'hi' } });
+    expect(await createTools(WORKSPACE, sentinel).read_file({ path: 'ok.ts' })).toBe('hi');
+    expect(await createTools(WORKSPACE, sentinel, []).read_file({ path: 'ok.ts' })).toBe('hi');
+  });
+
+  it('built-in case-insensitive deny still applies when operator pattern is case-sensitive', async () => {
+    // Built-in `/(^|\/)secrets?(\/|$)/i` matches `Secrets/db.json`
+    // by virtue of the `/i` flag — independent of whether the user
+    // also adds a (case-sensitive) entry. The union must preserve
+    // each pattern's compile flags rather than re-normalize them.
+    const tools = createTools(WORKSPACE, makeDeps({}), [globToRegExp('compliance/**')]);
+    await expect(tools.read_file({ path: 'Secrets/db.json' })).rejects.toThrow(/deny-list/);
+  });
+
+  it('user pattern compiled by globToRegExp is case-sensitive by default', async () => {
+    // `Compliance/policy.txt` is NOT denied by `compliance/**` — the
+    // user opts into case-sensitive matching by going through
+    // globToRegExp (whose generated RegExp has no `/i` flag). This
+    // is the documented behavior; case folding requires a separate,
+    // explicit pattern from the operator.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({ files: { '/work/Compliance/policy.txt': 'visible' } }),
+      [globToRegExp('compliance/**')],
+    );
+    expect(await tools.read_file({ path: 'Compliance/policy.txt' })).toBe('visible');
+  });
+
+  it("a 'compliance' pattern matches only the literal entry, not 'compliance/foo'", async () => {
+    // Anchor regression guard: globToRegExp produces `^compliance$`
+    // for the bare token. The dispatcher must NOT accidentally treat
+    // it as a prefix match (which would cause every nested file to
+    // be denied silently). Operators who want recursive denial must
+    // write `compliance/**` explicitly.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({ files: { '/work/compliance/policy.txt': 'data' } }),
+      [globToRegExp('compliance')],
+    );
+    expect(await tools.read_file({ path: 'compliance/policy.txt' })).toBe('data');
+  });
+});
+
+describe('createAiSdkToolset — operator deny_paths forwarding', () => {
+  it('forwards `denyPatterns` into the dispatcher (read_file refusal surfaces through the SDK)', async () => {
+    const set = createAiSdkToolset({
+      workspace: WORKSPACE,
+      toolDeps: makeDeps({ files: { '/work/compliance/policy.txt': 'x' } }),
+      denyPatterns: [globToRegExp('compliance/**')],
+    });
+    const readExec = set.read_file?.execute as (a: unknown, o: unknown) => Promise<string>;
+    await expect(readExec({ path: 'compliance/policy.txt' }, {})).rejects.toBeInstanceOf(
+      ToolDispatchRefusedError,
+    );
+  });
+
+  it('omitting `denyPatterns` keeps the built-in deny list active', async () => {
+    const set = createAiSdkToolset({ workspace: WORKSPACE, toolDeps: makeDeps({}) });
+    const readExec = set.read_file?.execute as (a: unknown, o: unknown) => Promise<string>;
+    await expect(readExec({ path: '.env' }, {})).rejects.toBeInstanceOf(ToolDispatchRefusedError);
   });
 });
