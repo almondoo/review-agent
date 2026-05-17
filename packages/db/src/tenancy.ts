@@ -10,10 +10,10 @@ export const TENANT_GUC = 'app.current_tenant';
 export type TenantTransaction = Parameters<Parameters<DbClient['transaction']>[0]>[0];
 
 // Opens a transaction, sets `app.current_tenant` for its lifetime via
-// `SET LOCAL`, runs `fn` against the scoped transaction, and commits.
-// Throwing inside `fn` rolls back. The GUC is automatically discarded
-// when the transaction ends — `SET LOCAL` does not leak across the
-// connection pool.
+// `set_config(name, value, is_local=true)`, runs `fn` against the scoped
+// transaction, and commits. Throwing inside `fn` rolls back. The GUC is
+// automatically discarded when the transaction ends (`is_local=true`),
+// so it does not leak across the connection pool.
 //
 // Use this from every worker code path that touches tenant-scoped
 // tables. Forgetting it does not silently leak: the policies fail-close
@@ -25,14 +25,19 @@ export async function withTenant<T>(
 ): Promise<T> {
   const id = String(installationId);
   if (!/^\d+$/.test(id)) {
-    // Defence-in-depth: the GUC is interpolated into a SET LOCAL
-    // statement. We accept only digit strings so a hostile caller
-    // cannot inject SQL via the tenant id even if RLS is bypassed by
-    // a misconfigured role.
+    // Defence-in-depth: the value is bound as a query parameter below,
+    // but we additionally reject anything that is not a positive integer
+    // so a hostile caller cannot smuggle non-numeric garbage into the
+    // GUC even if a future refactor regresses the parameterisation.
     throw new Error(`installationId must be a positive integer (got ${id}).`);
   }
   return db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL ${TENANT_GUC} = '${id}';`));
+    // Both the GUC name and value flow through Drizzle's parameter
+    // binding. `SET LOCAL <name> = '<value>'` cannot be parameterised
+    // by libpq (the name and value are part of the parser grammar), so
+    // we go through `set_config()` — a regular function call — which
+    // accepts placeholders for every argument.
+    await tx.execute(sql`SELECT set_config(${TENANT_GUC}, ${id}, true)`);
     return fn(tx);
   });
 }

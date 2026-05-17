@@ -1,8 +1,20 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { ToolDispatchRefusedError } from '@review-agent/core';
+import {
+  MAX_FILE_SIZE,
+  MAX_GREP_PATTERN_LENGTH,
+  ToolDispatchRefusedError,
+} from '@review-agent/core';
 import { type Tool, tool } from 'ai';
 import { z } from 'zod';
+
+// Re-export the limits this module enforces so existing callers
+// (`@review-agent/runner`, tests, and any downstream package that
+// already pulls these from runner) keep working unchanged. The
+// **source of truth is `@review-agent/core/limits.ts`** — the
+// numeric values live there, the enforcement lives here, the
+// dependency direction is runner→core (never the other way).
+export { MAX_FILE_SIZE, MAX_GREP_PATTERN_LENGTH };
 
 const DENY_PATTERNS: ReadonlyArray<RegExp> = [
   /(^|\/)\.env(\..*)?$/,
@@ -30,8 +42,31 @@ export type ToolDeps = {
   readonly readdir?: typeof readdir;
 };
 
-const MAX_FILE_SIZE = 1_000_000;
-const MAX_GREP_PATTERN_LENGTH = 200;
+/**
+ * `node:fs` error codes that `grepInDir` discriminates by name. Each
+ * value in this list has a matching `if (code === ...)` branch in
+ * `grepInDir` (skip silently / emit marker). Anything else — including
+ * descriptor exhaustion (EMFILE/ENFILE), I/O failures, mocked test
+ * errors, etc. — has no discriminated case and falls through to the
+ * final `throw err`, surfacing the failure to the caller and ultimately
+ * to the LLM via the AI-SDK tool wrapper.
+ *
+ * Keep this list aligned with the branches below: a code that appears
+ * here but lacks a branch is dead documentation; a branch whose code
+ * is missing here would force a cast.
+ */
+const KNOWN_FS_CODES = ['ENOENT', 'EACCES', 'EPERM', 'EISDIR'] as const;
+type FsErrorCode = (typeof KNOWN_FS_CODES)[number];
+
+function fsErrorCode(err: unknown): FsErrorCode | null {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string' && (KNOWN_FS_CODES as ReadonlyArray<string>).includes(code)) {
+      return code as FsErrorCode;
+    }
+  }
+  return null;
+}
 
 function checkDenyList(rel: string): void {
   for (const pattern of DENY_PATTERNS) {
@@ -164,19 +199,75 @@ async function grepInDir(
   readFn: (p: string, enc: 'utf8') => Promise<string>,
 ): Promise<string[]> {
   const out: string[] = [];
+  // Minimal Dirent-shape we read off each entry. The `typeof readdir`
+  // overloads union the Buffer-encoding form in, so we cannot reuse
+  // `Awaited<ReturnType<typeof readdirFn>>` here without dropping into
+  // `Buffer`-typed `name` fields.
+  type DirentLike = Readonly<{
+    name: string;
+    isDirectory(): boolean;
+    isFile(): boolean;
+  }>;
   const walkAll = async (dir: string): Promise<void> => {
-    const entries = await readdirFn(dir, { withFileTypes: true }).catch(() => []);
+    let entries: ReadonlyArray<DirentLike>;
+    try {
+      entries = (await readdirFn(dir, { withFileTypes: true })) as ReadonlyArray<DirentLike>;
+    } catch (err) {
+      const code = fsErrorCode(err);
+      // ENOENT: directory removed mid-scan (race). Silently skip — the
+      // alternative is to abort the whole grep over a transient state.
+      if (code === 'ENOENT') return;
+      // EACCES/EPERM: permission denied. The LLM cannot fix this, but
+      // it needs to know that part of the workspace was not searched
+      // — otherwise an empty result is indistinguishable from "no
+      // matches found", which silently weakens the review.
+      if (code === 'EACCES' || code === 'EPERM') {
+        const rel = path.relative(scope, dir) || '.';
+        out.push(`${rel}:0: [unreadable directory: ${code}]`);
+        return;
+      }
+      // Unknown / unexpected: surface it. Previously this branch
+      // swallowed everything (`.catch(() => [])`), which masked real
+      // failures (corrupt fs, descriptor exhaustion under heavy load,
+      // injected mocks throwing arbitrary errors).
+      throw err;
+    }
     for (const e of entries) {
       const full = path.join(dir, e.name);
       const rel = path.relative(scope, full);
       if (DENY_PATTERNS.some((p) => p.test(rel))) continue;
-      if (e.isDirectory()) await walkAll(full);
-      else if (e.isFile()) {
-        const text = await readFn(full, 'utf8').catch(() => '');
-        text.split('\n').forEach((line, i) => {
-          if (re.test(line)) out.push(`${rel}:${i + 1}: ${line}`);
-        });
+      if (e.isDirectory()) {
+        await walkAll(full);
+        continue;
       }
+      if (!e.isFile()) continue;
+      let text: string;
+      try {
+        text = await readFn(full, 'utf8');
+      } catch (err) {
+        const code = fsErrorCode(err);
+        // ENOENT/EISDIR mid-scan: skip silently. The file genuinely is
+        // no longer there (or has become a directory) — emitting a
+        // marker for every transient race would just be noise.
+        if (code === 'ENOENT' || code === 'EISDIR') continue;
+        // EACCES/EPERM: emit a marker so the LLM knows this file was
+        // not searched. Critical for security-sensitive paths the
+        // process couldn't open.
+        if (code === 'EACCES' || code === 'EPERM') {
+          out.push(`${rel}:0: [unreadable file: ${code}]`);
+          continue;
+        }
+        // Anything we did not match above (descriptor exhaustion
+        // EMFILE/ENFILE, EIO, mocked test errors, …) bubbles up.
+        // Silently swallowing here — as the pre-refactor code did
+        // with `.catch(() => '')` — would give the LLM an arbitrarily
+        // truncated view of the workspace and let it draw confident
+        // but wrong conclusions.
+        throw err;
+      }
+      text.split('\n').forEach((line, i) => {
+        if (re.test(line)) out.push(`${rel}:${i + 1}: ${line}`);
+      });
     }
   };
   await walkAll(scope);
@@ -230,8 +321,7 @@ const READ_FILE_DESCRIPTION =
   'Read a UTF-8 text file from the workspace. Path is relative to the workspace root (e.g. "src/index.ts"). Absolute paths, "~", traversal escapes, symlinks, and entries on the deny-list (".env*", "secrets/", ".pem", etc.) are refused.';
 const GLOB_DESCRIPTION =
   'List workspace files matching a glob pattern (e.g. "src/**/*.ts"). "*" matches within a path segment; "**" matches across segments. Returns paths relative to the workspace root. Traversal patterns and deny-listed paths are excluded.';
-const GREP_DESCRIPTION =
-  'Search the workspace for lines matching a JavaScript regular expression. Optional "path" scopes the search to a subdirectory. Returns up to many "<file>:<line>: <text>" matches. Patterns longer than 200 chars are rejected as a ReDoS guard.';
+const GREP_DESCRIPTION = `Search the workspace for lines matching a JavaScript regular expression. Optional "path" scopes the search to a subdirectory. Returns up to many "<file>:<line>: <text>" matches. Patterns longer than ${MAX_GREP_PATTERN_LENGTH} chars are rejected as a ReDoS guard. Files whose contents the process cannot read (EACCES/EPERM) appear as "<file>:0: [unreadable file: <code>]" so missing matches are never silent.`;
 
 const READ_FILE_INPUT = z.object({ path: z.string() }).strict();
 const GLOB_INPUT = z.object({ pattern: z.string() }).strict();

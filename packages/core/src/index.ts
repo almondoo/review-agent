@@ -20,10 +20,14 @@ export {
   decideCostAction,
   type RecordPhaseInput,
 } from './cost.js';
+export { extractMessage, extractStatus } from './error-utils.js';
 export {
   ConfigError,
   ContextLengthError,
   CostExceededError,
+  GITLEAKS_SCAN_FAILURES,
+  GitleaksScanError,
+  type GitleaksScanFailureReason,
   isReviewAgentError,
   ReviewAgentError,
   type ReviewAgentErrorKind,
@@ -38,9 +42,13 @@ export { globToRegExp, isValidGlob } from './glob.js';
 export {
   type ApplyLineShiftInput,
   type ComputeDiffStrategyDeps,
+  classifyGitError,
   computeDiffStrategy,
   type DiffHunk,
   type DiffStrategy,
+  INCREMENTAL_GIT_FAILURES,
+  type IncrementalGitFailure,
+  type IncrementalGitFailureReason,
   type RunGit,
   shiftLineThroughHunks,
 } from './incremental.js';
@@ -54,6 +62,23 @@ export {
   generateDataKey,
   type KmsClient,
 } from './kms/index.js';
+export {
+  AUTO_FETCH_MAX_BYTES_PER_FILE,
+  AUTO_FETCH_MAX_FILES,
+  AUTO_FETCH_MAX_TOTAL_BYTES,
+  BODY_MAX,
+  COMMENTS_MAX,
+  LINE_MAX,
+  MAX_FILE_SIZE,
+  MAX_GREP_PATTERN_LENGTH,
+  MODEL_NAME_MAX,
+  MODEL_NAME_MIN,
+  PATH_MAX,
+  RULE_ID_MAX,
+  RULE_ID_MIN,
+  SUGGESTION_MAX,
+  SUMMARY_MAX,
+} from './limits.js';
 export {
   _resetPlatformRegistryForTests,
   getPlatform,
@@ -70,6 +95,12 @@ export {
   JobMessageSchema,
   type QueueClient,
 } from './queue.js';
+export {
+  type RetryClassifier,
+  type RetryDecision,
+  type RetryOpts,
+  withRetry,
+} from './retry.js';
 export {
   CATEGORIES,
   type Category,

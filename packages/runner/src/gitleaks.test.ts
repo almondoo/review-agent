@@ -1,3 +1,4 @@
+import { GitleaksScanError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyRedactions,
@@ -167,10 +168,66 @@ describe('scanWorkspaceWithGitleaks', () => {
     expect(result.aborted).toBe(true);
   });
 
-  it('tolerates non-JSON output (returns empty)', async () => {
+  it('fails closed on malformed JSON (does not silently treat as clean)', async () => {
     const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: 'gitleaks: error', exitCode: 1 }));
-    const result = await scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
-    expect(result.findings).toHaveLength(0);
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      kind: 'gitleaks-scan-failed',
+      failureReason: 'malformed-json',
+      exitCode: 1,
+      stdoutExcerpt: 'gitleaks: error',
+    });
+  });
+
+  it('fails closed when parsed JSON is not an array', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => ({
+      stdout: JSON.stringify({ findings: [] }),
+      exitCode: 0,
+    }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      failureReason: 'unexpected-shape',
+      exitCode: 0,
+    });
+  });
+
+  it('fails closed when stdout is empty but exit code reports leaks (1)', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: '   \n', exitCode: 1 }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      failureReason: 'empty-stdout-on-leak-exit',
+      exitCode: 1,
+      stdoutExcerpt: '',
+    });
+  });
+
+  it('truncates stdoutExcerpt to a bounded slice on malformed output', async () => {
+    const big = 'x'.repeat(2000);
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: big, exitCode: 1 }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toMatchObject({ failureReason: 'malformed-json' });
+    try {
+      await promise;
+    } catch (err) {
+      const e = err as GitleaksScanError;
+      // The error's stdoutExcerpt must be much smaller than the raw
+      // payload so error logs cannot be used to spam the log pipeline
+      // by feeding a huge garbage stdout.
+      expect(e.stdoutExcerpt.length).toBeLessThanOrEqual(513);
+      expect(e.stdoutExcerpt.endsWith('…')).toBe(true);
+    }
+  });
+
+  it('propagates non-zero-non-1 spawn rejection (fail-closed by error propagation)', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied');
+    });
+    await expect(scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn })).rejects.toThrow(
+      /gitleaks exited 2/,
+    );
   });
 
   it('passes --config when customRegexFile provided', async () => {
@@ -186,4 +243,118 @@ describe('scanWorkspaceWithGitleaks', () => {
     expect(args).toContain('--config');
     expect(args).toContain('/tmp/extra.toml');
   });
+
+  // H-1 (audit-w1 W1-B03 sec): `GitleaksScanError.stdoutExcerpt` is the
+  // most likely place for a real Secret value to leak into shipping
+  // logs. Even though we never silently treat malformed scanner output
+  // as clean any more, callers will typically log the error with all
+  // its structured fields, so the excerpt itself must already be
+  // redacted by the time it leaves this module.
+  it('redacts JSON "Secret" / "Match" key values in stdoutExcerpt', async () => {
+    // Valid JSON shape but wrong top-level type → `unexpected-shape`
+    // path runs through excerptStdout with the secret values present.
+    const payload = JSON.stringify({
+      findings: [
+        {
+          RuleID: 'aws-access-key',
+          Match: 'AKIAIOSFODNN7EXAMPLE',
+          Secret: 'AKIAIOSFODNN7EXAMPLE',
+        },
+        {
+          RuleID: 'anthropic-key',
+          match: `sk-ant-${'a'.repeat(40)}`,
+          secret: `sk-ant-${'a'.repeat(40)}`,
+        },
+      ],
+    });
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: payload, exitCode: 0 }));
+    try {
+      await scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GitleaksScanError;
+      expect(e.failureReason).toBe('unexpected-shape');
+      // Neither raw secret value may survive into the excerpt — that
+      // string is exactly what an attacker can drive the scanner to
+      // emit and is what gets shipped to Sentry / CloudWatch.
+      expect(e.stdoutExcerpt).not.toContain('AKIAIOSFODNN7EXAMPLE');
+      expect(e.stdoutExcerpt).not.toContain('sk-ant-');
+      // Defense-in-depth check: the placeholder is present so we know
+      // redaction actually ran (rather than the excerpt being empty
+      // for an unrelated reason).
+      expect(e.stdoutExcerpt).toContain('[REDACTED');
+    }
+  });
+
+  it('redacts bare AKIA/ghp/sk-ant tokens that appear outside of JSON keys', async () => {
+    // Simulate a crashed gitleaks dumping a stack trace that includes a
+    // raw token (e.g. it was reading the file when it panicked). The
+    // payload is not even valid JSON → malformed-json path. The
+    // excerpt MUST still strip the raw token.
+    const stdout = `panic: ghp_${'A'.repeat(36)} unexpected EOF\n  at runtime.go:42`;
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout, exitCode: 1 }));
+    try {
+      await scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+      throw new Error('expected throw');
+    } catch (err) {
+      const e = err as GitleaksScanError;
+      expect(e.failureReason).toBe('malformed-json');
+      expect(e.stdoutExcerpt).not.toContain(`ghp_${'A'.repeat(36)}`);
+      expect(e.stdoutExcerpt).toContain('[REDACTED:github-pat]');
+    }
+  });
+
+  // H-2 (audit-w1 W1-B03 sec): the in-process stdout buffer must be
+  // capped so a malicious PR cannot OOM the runner by driving gitleaks
+  // into emitting GB-scale output before the 60s timeout fires. We
+  // can't easily test the real `defaultSpawn` here without spawning a
+  // child, so we exercise the cap directly via the exported MAX_STDOUT_BYTES
+  // and a SpawnFn that emulates the overflow rejection.
+  it('exposes MAX_STDOUT_BYTES at a sane order of magnitude', async () => {
+    const { MAX_STDOUT_BYTES } = await import('./gitleaks.js');
+    // Sanity: must be bounded (no Infinity, no 0) and within 1-256 MB.
+    expect(MAX_STDOUT_BYTES).toBeGreaterThan(1024 * 1024);
+    expect(MAX_STDOUT_BYTES).toBeLessThanOrEqual(256 * 1024 * 1024);
+  });
+
+  it('propagates a GitleaksScanError(stdout-too-large) when spawnFn rejects with one', async () => {
+    // This mirrors the behaviour `defaultSpawn` will exhibit when the
+    // child process floods stdout past MAX_STDOUT_BYTES: SIGKILL +
+    // reject with a stdout-too-large error and exitCode=-1.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new GitleaksScanError('stdout-too-large', -1, '');
+    });
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      failureReason: 'stdout-too-large',
+      exitCode: -1,
+      stdoutExcerpt: '',
+    });
+  });
+});
+
+describe('defaultSpawn stdout cap (H-2)', () => {
+  it('kills the child and rejects with stdout-too-large when stdout exceeds MAX_STDOUT_BYTES', async () => {
+    const { defaultSpawn, MAX_STDOUT_BYTES } = await import('./gitleaks.js');
+    // `yes` prints "y\n" forever — perfect cheap stdout flood. Most
+    // POSIX systems ship it; skip the test if not available.
+    const which = await import('node:child_process').then(
+      (cp) => cp.spawnSync('which', ['yes']).status,
+    );
+    if (which !== 0) {
+      // Avoid a noisy fail on minimal CI images.
+      return;
+    }
+    expect(MAX_STDOUT_BYTES).toBeGreaterThan(0);
+    const start = Date.now();
+    await expect(defaultSpawn('yes', [], { timeout: 30_000 })).rejects.toMatchObject({
+      kind: 'gitleaks-scan-failed',
+      failureReason: 'stdout-too-large',
+    });
+    // The cap must kick in well before any reasonable timeout — `yes`
+    // produces ~16 MB in milliseconds on modern hardware. Allow generous
+    // headroom for slow CI runners but still well under the 30s timeout.
+    expect(Date.now() - start).toBeLessThan(25_000);
+  }, 30_000);
 });
