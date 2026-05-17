@@ -12,7 +12,6 @@
     "eval:severity-consistency": "promptfoo eval -c severity-consistency.promptfooconfig.yaml",
     "matrix": "tsx scripts/eval-matrix.ts",
     "matrix:write": "tsx scripts/eval-matrix.ts --write",
-    "matrix:check": "tsx scripts/eval-matrix.ts --check",
     "score:severity-consistency": "tsx scripts/severity-consistency.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -20,8 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "validate:red-team": "tsx scripts/red-team-validate.ts",
     "validate:golden": "tsx scripts/golden-validate.ts",
-    "validate:severity-consistency": "tsx scripts/severity-consistency-validate.ts",
-    "verify:audit": "tsx scripts/verify-audit-chain.ts"
+    "validate:severity-consistency": "tsx scripts/severity-consistency-validate.ts"
   },
   "dependencies": {
     "@review-agent/db": "workspace:*",
