@@ -163,6 +163,7 @@ export async function runAction(
     privacy: {
       allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
       denyPaths: config.privacy.deny_paths,
+      redactPatterns: config.privacy.redact_patterns,
     },
     prRepo: {
       host: inferGithubHost(env),

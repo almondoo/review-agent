@@ -21,7 +21,7 @@ const baseJob: ReviewJob = {
   skills: [],
   language: 'en-US',
   costCapUsd: 2.0,
-  privacy: { allowedUrlPrefixes: [], denyPaths: [] },
+  privacy: { allowedUrlPrefixes: [], denyPaths: [], redactPatterns: [] },
   prRepo: { host: 'github.com', owner: 'test-owner', repo: 'test-repo' },
 };
 
@@ -248,7 +248,11 @@ describe('runReview — URL allowlist retry / graceful abort (spec §7.3 #4)', (
     const provider = makeProvider({ generateReview });
     const job: ReviewJob = {
       ...baseJob,
-      privacy: { allowedUrlPrefixes: ['https://docs.example.com/'], denyPaths: [] },
+      privacy: {
+        allowedUrlPrefixes: ['https://docs.example.com/'],
+        denyPaths: [],
+        redactPatterns: [],
+      },
     };
     const result = await runReview(job, provider);
     expect(generateReview).toHaveBeenCalledTimes(1);
@@ -564,7 +568,7 @@ describe('runReview — operator deny_paths wiring (spec §7.4 / #86)', () => {
     const provider = makeProvider({ generateReview });
     const job: ReviewJob = {
       ...baseJob,
-      privacy: { allowedUrlPrefixes: [], denyPaths: ['org-secrets/**'] },
+      privacy: { allowedUrlPrefixes: [], denyPaths: ['org-secrets/**'], redactPatterns: [] },
     };
     await runReview(job, provider);
     expect(caught).toBeInstanceOf(ToolDispatchRefusedError);
@@ -612,7 +616,7 @@ describe('runReview — operator deny_paths wiring (spec §7.4 / #86)', () => {
     const provider = makeProvider({ generateReview });
     const job: ReviewJob = {
       ...baseJob,
-      privacy: { allowedUrlPrefixes: [], denyPaths: ['org-secrets/**'] },
+      privacy: { allowedUrlPrefixes: [], denyPaths: ['org-secrets/**'], redactPatterns: [] },
     };
     await runReview(job, provider);
     expect(executed).toBe(true);

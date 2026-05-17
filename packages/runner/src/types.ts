@@ -98,17 +98,22 @@ export type ReviewJob = {
   readonly requestChangesOn?: RequestChangesThreshold;
   /**
    * Privacy / data-flow policy for this job. Nested rather than
-   * inlined so future fields from `.review-agent.yml` `privacy.*`
-   * (e.g. `redact_patterns`) can be threaded in without another
-   * schema migration. Current fields:
+   * inlined so the three lists travel together and any future fields
+   * can be threaded in without another schema migration. Current fields:
    *
    *   - `allowedUrlPrefixes`: closed-world URL allowlist consumed
    *     by `createReviewOutputSchema` (spec §7.3 #4 / §7.7).
    *   - `denyPaths`: operator-supplied glob deny list that the
    *     runner unions with the built-in `DENY_PATTERNS` and applies
    *     to every `read_file` / `glob` / `grep` dispatch (spec §7.4
-   *     "extend, not relax"). Both fields are required so the
-   *     closed-world default is guaranteed at the type level.
+   *     "extend, not relax").
+   *   - `redactPatterns`: operator-supplied regex patterns that
+   *     extend the gitleaks built-in ruleset in both the pre-prompt
+   *     (diff) and post-LLM (output) scan passes (spec §7.4 / §7.7).
+   *     Extend, never relax — built-in rules always run.
+   *
+   * All three fields are required so the closed-world defaults are
+   * guaranteed at the type level.
    */
   readonly privacy: {
     /**
@@ -130,6 +135,20 @@ export type ReviewJob = {
      * the built-in defaults active.
      */
     readonly denyPaths: ReadonlyArray<string>;
+    /**
+     * Operator-supplied regex patterns from `.review-agent.yml`
+     * `privacy.redact_patterns` (and any org-level config merged
+     * in by `loadConfigWithOrgFallback`). The runner lifts each
+     * entry into a `[[rules]]` block in the temporary gitleaks
+     * config (`custom-N`) and also feeds it to the in-process
+     * `quickScanContent` fallback, so the operator's redaction
+     * extends the gitleaks built-in ruleset on BOTH the pre-prompt
+     * diff scan and the post-LLM output scan. Built-in rules
+     * always run; this list never relaxes them (spec §7.4 "extend,
+     * not relax"). Validated as compilable JS regexes at
+     * `.review-agent.yml` load time (see `isValidRegex`).
+     */
+    readonly redactPatterns: ReadonlyArray<string>;
   };
   /**
    * The PR's own repository, used by the URL allowlist refine to

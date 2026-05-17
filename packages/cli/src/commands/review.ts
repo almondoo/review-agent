@@ -118,6 +118,7 @@ export async function runReviewCommand(
       privacy: {
         allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
         denyPaths: config.privacy.deny_paths,
+        redactPatterns: config.privacy.redact_patterns,
       },
       prRepo: resolvePrRepo(platform, ref, opts.env),
     },
