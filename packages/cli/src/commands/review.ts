@@ -115,6 +115,8 @@ export async function runReviewCommand(
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
       minConfidence: config.reviews.min_confidence,
       requestChangesOn: config.reviews.request_changes_on,
+      privacy: { allowedUrlPrefixes: config.privacy.allowed_url_prefixes },
+      prRepo: resolvePrRepo(platform, ref, opts.env),
     },
     provider,
   );
@@ -231,6 +233,41 @@ function buildAnthropicProvider(apiKey: string, config: Config): LlmProvider {
 
 function defaultReadFile(p: string, enc: 'utf8'): Promise<string> {
   return fsReadFile(p, enc as BufferEncoding).then(String);
+}
+
+/**
+ * Resolve the PR's host/owner/repo triple consumed by the URL
+ * allowlist refine in `createReviewOutputSchema` (spec §7.3 #4).
+ *
+ * - GitHub: host comes from `GITHUB_SERVER_URL` (GHES) or falls back
+ *   to `github.com`. Owner/repo come from the parsed `--repo` arg.
+ * - CodeCommit: there is no single fixed PR-UI host (the AWS console
+ *   URL is region-scoped, e.g.
+ *   `<region>.console.aws.amazon.com/...`) and the PRRef's `owner`
+ *   is empty by construction. We pass the literal sentinel host
+ *   `'codecommit.invalid'` so the URL refine treats codecommit
+ *   reviews as "no own-repo URLs"; operators who need allowlisted
+ *   AWS console links should add them to `privacy.allowed_url_prefixes`.
+ */
+function resolvePrRepo(
+  platform: ReviewPlatform,
+  ref: PRRef,
+  env: NodeJS.ProcessEnv,
+): { host: string; owner: string; repo: string } {
+  if (platform === 'codecommit') {
+    return { host: 'codecommit.invalid', owner: ref.owner, repo: ref.repo };
+  }
+  return { host: inferGithubHost(env), owner: ref.owner, repo: ref.repo };
+}
+
+function inferGithubHost(env: NodeJS.ProcessEnv): string {
+  const serverUrl = env.GITHUB_SERVER_URL;
+  if (!serverUrl) return 'github.com';
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return 'github.com';
+  }
 }
 
 function printResultSummary(io: ProgramIo, ref: PRRef, pr: PR, result: RunnerResult): void {

@@ -160,6 +160,12 @@ export async function runAction(
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
     requestChangesOn: config.reviews.request_changes_on,
+    privacy: { allowedUrlPrefixes: config.privacy.allowed_url_prefixes },
+    prRepo: {
+      host: inferGithubHost(env),
+      owner: ctx.ref.owner,
+      repo: ctx.ref.repo,
+    },
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;
@@ -240,6 +246,27 @@ async function loadConfigOrDefault(
   if (env.REVIEW_AGENT_MAX_USD_PER_PR)
     overrides.REVIEW_AGENT_MAX_USD_PER_PR = env.REVIEW_AGENT_MAX_USD_PER_PR;
   return mergeWithEnv(base, overrides);
+}
+
+/**
+ * Resolve the GitHub host the Action is running against. GitHub
+ * Actions exports `GITHUB_SERVER_URL` (e.g. `https://github.com` for
+ * SaaS, `https://ghe.example.com` for GHES); we parse it to the host
+ * portion so the runner's URL allowlist refine (spec §7.3 #4) can
+ * match links into the PR's own repo regardless of deployment.
+ *
+ * Falls back to `'github.com'` when the env var is missing or
+ * unparseable — matches the historical assumption and keeps the
+ * Action runnable in test harnesses that don't seed Actions env.
+ */
+function inferGithubHost(env: NodeJS.ProcessEnv): string {
+  const serverUrl = env.GITHUB_SERVER_URL;
+  if (!serverUrl) return 'github.com';
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return 'github.com';
+  }
 }
 
 function defaultLogger(msg: string, meta?: Record<string, unknown>): void {

@@ -96,6 +96,37 @@ export type ReviewJob = {
    * semantic. `'never'` disables the mapping (always `COMMENT`).
    */
   readonly requestChangesOn?: RequestChangesThreshold;
+  /**
+   * Privacy / data-flow policy for this job. Nested rather than
+   * inlined so future fields from `.review-agent.yml` `privacy.*`
+   * (e.g. `deny_paths`, `redact_patterns`) can be threaded in
+   * without another schema migration. The current single field is
+   * the URL allowlist consumed by `createReviewOutputSchema`
+   * (spec §7.3 #4 / §7.7).
+   */
+  readonly privacy: {
+    /**
+     * Whitelisted URL prefixes from `.review-agent.yml`
+     * `privacy.allowed_url_prefixes`. The runner forwards this
+     * directly into `createReviewOutputSchema({ allowedUrlPrefixes })`.
+     * An empty list keeps the closed-world default — only links
+     * into the PR's own repo (see `prRepo`) are permitted.
+     */
+    readonly allowedUrlPrefixes: ReadonlyArray<string>;
+  };
+  /**
+   * The PR's own repository, used by the URL allowlist refine to
+   * grant `<host>/<owner>/<repo>/...` links permanent allowlist
+   * status (spec §7.3 #4 "PR's own repo"). Host is required —
+   * callers derive it from `GITHUB_SERVER_URL` (Action) or the
+   * webhook installation host (Server) so GHES deployments work
+   * uniformly without a code change.
+   */
+  readonly prRepo: {
+    readonly host: string;
+    readonly owner: string;
+    readonly repo: string;
+  };
 };
 
 export type FinalizedComment = InlineComment & {

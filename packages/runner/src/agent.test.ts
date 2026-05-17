@@ -21,6 +21,8 @@ const baseJob: ReviewJob = {
   skills: [],
   language: 'en-US',
   costCapUsd: 2.0,
+  privacy: { allowedUrlPrefixes: [] },
+  prRepo: { host: 'github.com', owner: 'test-owner', repo: 'test-repo' },
 };
 
 const validOutput: ReviewOutput = {
