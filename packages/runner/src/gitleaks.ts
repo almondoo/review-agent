@@ -28,6 +28,15 @@ export type SpawnFn = (
   opts: { readonly timeout?: number; readonly cwd?: string },
 ) => Promise<{ readonly stdout: string; readonly exitCode: number }>;
 
+// Hard cap on buffered stdout from the gitleaks process. Without this a
+// malicious PR can drive gitleaks (or any subprocess masquerading as it
+// via `binaryPath` injection) into emitting gigabytes of bogus output
+// faster than the 60s timeout can fire, OOM-killing the runner. The
+// scanner's legitimate JSON output for a normal PR is well under 1 MB;
+// 16 MB is generous slack for adversarial-but-still-recoverable runs.
+// (audit-w1 W1-B03 sec H-2)
+export const MAX_STDOUT_BYTES = 16 * 1024 * 1024;
+
 export const defaultSpawn: SpawnFn = (command, args, opts) =>
   new Promise((resolve, reject) => {
     const proc = spawn(command, [...args], {
@@ -37,7 +46,23 @@ export const defaultSpawn: SpawnFn = (command, args, opts) =>
     });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => {
+    let stdoutBytes = 0;
+    let killed = false;
+    proc.stdout.on('data', (d: Buffer | string) => {
+      if (killed) return;
+      const chunkBytes = typeof d === 'string' ? Buffer.byteLength(d) : d.length;
+      if (stdoutBytes + chunkBytes > MAX_STDOUT_BYTES) {
+        killed = true;
+        // Drop the buffered payload entirely — we cannot trust any
+        // partial JSON we managed to buffer, and the excerpt would
+        // be likely to contain secret values anyway. SIGKILL because
+        // SIGTERM may be ignored by a misbehaving child.
+        stdout = '';
+        proc.kill('SIGKILL');
+        reject(new GitleaksScanError('stdout-too-large', -1, ''));
+        return;
+      }
+      stdoutBytes += chunkBytes;
       stdout += d.toString();
     });
     proc.stderr.on('data', (d) => {
@@ -45,6 +70,7 @@ export const defaultSpawn: SpawnFn = (command, args, opts) =>
     });
     proc.on('error', reject);
     proc.on('close', (code) => {
+      if (killed) return;
       if (code === 0 || code === 1) {
         resolve({ stdout, exitCode: code ?? 0 });
         return;
@@ -160,9 +186,27 @@ export function shouldAbortReview(findings: ReadonlyArray<GitleaksFinding>): {
 // regardless of how much garbage the process printed.
 const STDOUT_EXCERPT_LIMIT = 512;
 
+// Redact the `"Secret"` / `"Match"` (and lowercase variants) values from
+// a JSON-ish payload BEFORE truncating, so callers that log
+// `GitleaksScanError.stdoutExcerpt` to a shipping pipeline (Sentry /
+// CloudWatch / etc.) cannot exfiltrate the very secrets the scanner was
+// supposed to redact (audit-w1 W1-B03 sec H-1). We also re-run the
+// in-repo `quickScanContent` patterns as a second layer so that bare
+// `AKIA…` / `ghp_…` / `sk-ant-…` tokens that escaped the JSON-key form
+// (e.g. embedded inside an error banner before the scanner crashed) are
+// still neutralised. We intentionally over-redact — the excerpt only
+// needs to identify the *shape* of the failure, not preserve content.
+const SECRET_KEY_VALUE_PATTERN = /"(Secret|Match|secret|match)":\s*"(?:[^"\\]|\\.)*"/g;
+
+function redactExcerpt(raw: string): string {
+  const keyRedacted = raw.replace(SECRET_KEY_VALUE_PATTERN, '"$1":"[REDACTED]"');
+  return applyRedactions(keyRedacted, quickScanContent(keyRedacted));
+}
+
 function excerptStdout(stdout: string): string {
-  if (stdout.length <= STDOUT_EXCERPT_LIMIT) return stdout;
-  return `${stdout.slice(0, STDOUT_EXCERPT_LIMIT)}…`;
+  const safe = redactExcerpt(stdout);
+  if (safe.length <= STDOUT_EXCERPT_LIMIT) return safe;
+  return `${safe.slice(0, STDOUT_EXCERPT_LIMIT)}…`;
 }
 
 async function runGitleaks(

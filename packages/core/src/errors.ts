@@ -114,12 +114,15 @@ export class SecretLeakAbortedError extends ReviewAgentError {
 // that is not the expected top-level array. `empty-stdout-on-leak-exit`
 // covers exitCode=1 (gitleaks: "leaks found") combined with empty stdout —
 // gitleaks claims findings exist but did not emit them, so we cannot
-// redact what we did not see. All three force the caller to surface a
-// scan failure rather than silently treat the run as clean.
+// redact what we did not see. `stdout-too-large` covers a runaway scanner
+// that flooded stdout past the byte cap (DoS / OOM defense) — we kill
+// the process and refuse to keep buffering. All four force the caller to
+// surface a scan failure rather than silently treat the run as clean.
 export const GITLEAKS_SCAN_FAILURES = [
   'malformed-json',
   'unexpected-shape',
   'empty-stdout-on-leak-exit',
+  'stdout-too-large',
 ] as const;
 export type GitleaksScanFailureReason = (typeof GITLEAKS_SCAN_FAILURES)[number];
 
