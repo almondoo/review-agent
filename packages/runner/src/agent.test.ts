@@ -964,6 +964,163 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
     expect(REVIEW_ABORT_REASONS).toContain('max_files_exceeded');
     expect(REVIEW_ABORT_REASONS).toContain('max_diff_lines_exceeded');
   });
+
+  // T4 gap-only additions — boundary / degenerate / operator-widens
+  // / secret-in-excluded-path scenarios that T2 unit tests + the T3
+  // top-of-describe set above did not pin end-to-end.
+
+  it('proceeds at the exact max_files boundary (filtered.length === maxFiles)', async () => {
+    // The check is `filtered.files.length > job.maxFiles`, so equal
+    // counts pass. Pinning the `===` boundary so a future refactor
+    // that flips the comparator to `>=` fails this test rather than
+    // silently locking out PRs that hit the operator's exact limit.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, maxFiles: 2 }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('proceeds at the exact max_diff_lines boundary (countDiffLines === maxDiffLines)', async () => {
+    // Same `>`-vs-`>=` boundary semantic as max_files. 3 `+`-lines
+    // against a cap of 3 must pass; one more flips it to skip.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([{ path: 'src/a.ts', patch: '@@ -1 +1 @@\n+a\n+b\n+c' }]);
+    const result = await runReview({ ...baseJob, diffText, maxDiffLines: 3 }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors a loose operator cap (max_files: 1000) without artificially throttling', async () => {
+    // The cap pipeline does numeric `>` only; it does not impose a
+    // built-in maximum. Operators who widen the limit (e.g. for a
+    // monorepo migration PR) must not get a surprise skip from us.
+    // 60 files easily exceeds the default `50` but is well within
+    // the operator's explicit override.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const files = Array.from({ length: 60 }, (_, i) => ({
+      path: `src/file-${i}.ts`,
+      patch: TINY_ADD,
+    }));
+    const diffText = buildDiff(files);
+    const result = await runReview({ ...baseJob, diffText, maxFiles: 1000 }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('proceeds with an empty diff payload when path_filters excludes every file', async () => {
+    // Operator chose to exclude every path in the PR. The cap
+    // pipeline sees `filtered.files.length === 0`, both caps pass,
+    // and the LLM receives a diff payload with no file segments.
+    // We do NOT skip in this case — the operator effectively asked
+    // "review the metadata only" and the LLM can still emit a
+    // summary. Pinning this prevents an over-eager future `if
+    // (filtered.files.length === 0) return skip` from being added.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'vendor/a.js', patch: TINY_ADD },
+      { path: 'vendor/b.js', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, pathFilters: ['vendor/**'] }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    const callArgs = generateReview.mock.calls[0]?.[0];
+    // Reassembled diff is empty when every file is excluded — none
+    // of the original paths appear in the prompt.
+    expect(callArgs?.diffText).not.toContain('vendor/a.js');
+    expect(callArgs?.diffText).not.toContain('vendor/b.js');
+  });
+
+  it('does NOT trigger SecretLeakAbortedError when the AKIA token lives only in an excluded path', async () => {
+    // Companion to "cap-skip BEATS gitleaks pre-scan" above, from
+    // the other direction: when the diff is small enough to pass
+    // both caps, but a secret-shaped string lives in a path the
+    // operator excluded, the gitleaks pre-scan must not see it
+    // (because `applyPathFilters` already removed the file from
+    // the diff payload). Operators who explicitly drop a path tree
+    // from review (e.g. third-party `vendor/`) are signing off on
+    // its content — the agent does not second-guess them.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'vendor/secrets.js', patch: '@@ -1 +1 @@\n+const k = "AKIAIOSFODNN7EXAMPLE";' },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, pathFilters: ['vendor/**'] }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    const callArgs = generateReview.mock.calls[0]?.[0];
+    expect(callArgs?.diffText).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    expect(callArgs?.diffText).not.toContain('vendor/secrets.js');
+  });
+
+  it('does not count `\\ No newline at end of file` markers toward max_diff_lines (integration pin)', async () => {
+    // Mirrors a `countDiffLines` unit test in diff-filter.test.ts
+    // but pins the contract end-to-end through the agent loop so a
+    // refactor that swapped the counter for a naive `body.split('\n')`
+    // would fail here, not only in the unit test. The body has 1
+    // `+` line + 1 `\` marker; cap is 1; without the skip the cap
+    // would fire as "2 > 1".
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      {
+        path: 'src/a.ts',
+        patch: '@@ -1 +1 @@\n+last-line\n\\ No newline at end of file',
+      },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, maxDiffLines: 1 }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes a rename-only / binary entry (empty body, 0 diff lines) untouched', async () => {
+    // GitHub's `pulls.listFiles` returns `null` patch for binary or
+    // pure-rename entries; action / cli forward that as an empty
+    // body. The cap pipeline must not crash on an empty body, must
+    // count it as 0 toward `max_diff_lines`, and must include it
+    // in `max_files`. Pin all three with a tight cap that would
+    // otherwise miscount.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    // Two files: one rename-only with empty body, one tiny add.
+    // Cap is 1 diff line — total is 1 (only the tiny add counts).
+    const diffText = `--- assets/logo.png\n--- src/a.ts\n${TINY_ADD}`;
+    const result = await runReview({ ...baseJob, diffText, maxDiffLines: 1 }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a preamble-only diff anomaly as a 0-file / 0-line payload', async () => {
+    // Test fixtures elsewhere in this file pass diffText strings
+    // like `'diff --git a/x b/x'` that contain no `--- ` markers.
+    // The parser lands the whole thing in `preamble`, the file list
+    // is empty, and both caps see 0. The cap pipeline must NOT skip
+    // such input (operator might be intentionally feeding a
+    // metadata-only review, e.g. for an empty merge commit), and
+    // the LLM must receive the preamble unchanged. Pin both by
+    // exercising the existing baseJob fixture explicitly — a
+    // refactor that started rejecting "0 files" would break every
+    // other test in this file, but the failure mode would be loud
+    // and confusing without this explicit anchor.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(
+      { ...baseJob, diffText: 'diff --git a/x b/x', maxFiles: 0, maxDiffLines: 0 },
+      provider,
+    );
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    const callArgs = generateReview.mock.calls[0]?.[0];
+    expect(callArgs?.diffText).toContain('diff --git a/x b/x');
+  });
 });
 
 describe('runReview — reviewEvent mapping (#65)', () => {
