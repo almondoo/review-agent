@@ -97,6 +97,40 @@ export type ReviewJob = {
    */
   readonly requestChangesOn?: RequestChangesThreshold;
   /**
+   * Operator-configured exclude globs from `.review-agent.yml`
+   * `reviews.path_filters` (and any org-level config merged by
+   * `loadConfigWithOrgFallback`). Files in the diff whose path
+   * matches any pattern are dropped before the runner enforces the
+   * `maxFiles` / `maxDiffLines` caps and before they enter the LLM
+   * prompt (spec §10 L1435 — operator's "ignore this path tree"
+   * lever). An empty list keeps every file in scope. Required so
+   * the closed-world default is guaranteed at the type level — see
+   * the matching closed-world pattern on `privacy.allowedUrlPrefixes`
+   * / `privacy.denyPaths` / `privacy.redactPatterns`.
+   */
+  readonly pathFilters: ReadonlyArray<string>;
+  /**
+   * Hard cap on the number of files the runner will hand to the LLM
+   * for a single review (`.review-agent.yml` `reviews.max_files`,
+   * spec §10 L1449, default 50). When the post-`pathFilters` file
+   * list exceeds this cap, the runner short-circuits the agent loop
+   * — no LLM call, no cost — and surfaces an `aborted`-shape result
+   * carrying an operator-facing skip notice. Required so the cap is
+   * type-level guaranteed; the action / cli entry points thread
+   * `config.reviews.max_files` into here.
+   */
+  readonly maxFiles: number;
+  /**
+   * Hard cap on the total number of diff lines (added + removed,
+   * counted across every kept file's hunks) the runner will hand to
+   * the LLM (`.review-agent.yml` `reviews.max_diff_lines`, spec §10
+   * L1450, default 3000). Same short-circuit semantics as `maxFiles`:
+   * an over-cap diff aborts the run without an LLM call and emits a
+   * graceful skip summary. Required so the cap is type-level
+   * guaranteed.
+   */
+  readonly maxDiffLines: number;
+  /**
    * Privacy / data-flow policy for this job. Nested rather than
    * inlined so the three lists travel together and any future fields
    * can be threaded in without another schema migration. Current fields:

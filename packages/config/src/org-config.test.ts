@@ -185,6 +185,31 @@ provider:
     expect(merged.provider?.type).toBe('anthropic');
   });
 
+  it('dedups reviews.path_filters across org and repo (#88)', () => {
+    // Same symmetry as deny_paths / allowed_url_prefixes / redact_patterns:
+    // the runner compiles every entry into a glob regex and unions them
+    // into one filter set. Duplicate entries declared in both org + repo
+    // are silently collapsed so the operator does not need to maintain
+    // a strict org/repo split to avoid runtime warnings.
+    const org = loadConfigFromYaml(
+      `reviews:
+  path_filters:
+    - "vendor/**"
+    - "dist/**"
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+reviews:
+  path_filters:
+    - "dist/**"
+    - "node_modules/**"
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.path_filters).toEqual(['vendor/**', 'dist/**', 'node_modules/**']);
+  });
+
   it('dedups privacy.redact_patterns across org and repo (#87)', () => {
     // The org and repo both declare the same AWS access-key pattern;
     // without dedup the runner would lift two identical custom rules

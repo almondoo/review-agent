@@ -21,6 +21,9 @@ const baseJob: ReviewJob = {
   skills: [],
   language: 'en-US',
   costCapUsd: 2.0,
+  pathFilters: [],
+  maxFiles: 50,
+  maxDiffLines: 3000,
   privacy: { allowedUrlPrefixes: [], denyPaths: [], redactPatterns: [] },
   prRepo: { host: 'github.com', owner: 'test-owner', repo: 'test-repo' },
 };

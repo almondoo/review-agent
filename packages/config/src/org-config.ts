@@ -101,9 +101,21 @@ export async function loadConfigWithOrgFallback(
 }
 
 // repo wins on scalars / nested objects; lists are concatenated
-// (org first, then repo). Duplicate skill names / path patterns are
-// expected — downstream code (skill loader, glob compiler) handles
-// duplicates.
+// (org first, then repo). For lists where downstream code rejects
+// duplicates (gitleaks custom-rule ids, deny_paths, allowed URL
+// prefixes, path_filters), we additionally dedup so an operator
+// declaring the same entry in both org + repo doesn't blow up at
+// runtime — mirrors the #87 / #88 closed-world hardening.
+//
+// Scalar overrides (`max_files`, `max_diff_lines`) follow the
+// established "repo wins" rule rather than "stricter wins": operators
+// expect their repo `.review-agent.yml` to be the final word over an
+// org default, and the merge semantics stay consistent across all
+// scalar fields. Operators who want a hard floor enforced from the
+// org level should not allow repos to extend it (i.e. omit `extends:
+// org` from the repo file, which puts the resolver in `'repo'`
+// source mode and ignores org entirely — see
+// `loadConfigWithOrgFallback`).
 export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config {
   const merged: ConfigInput = {
     extends: null,
@@ -112,7 +124,7 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     provider: repoConfig.provider ?? orgConfig.provider,
     reviews: {
       auto_review: { ...orgConfig.reviews.auto_review, ...repoConfig.reviews.auto_review },
-      path_filters: [...orgConfig.reviews.path_filters, ...repoConfig.reviews.path_filters],
+      path_filters: dedup([...orgConfig.reviews.path_filters, ...repoConfig.reviews.path_filters]),
       path_instructions: [
         ...orgConfig.reviews.path_instructions,
         ...repoConfig.reviews.path_instructions,

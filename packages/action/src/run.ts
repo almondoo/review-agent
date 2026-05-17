@@ -160,6 +160,9 @@ export async function runAction(
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
     requestChangesOn: config.reviews.request_changes_on,
+    pathFilters: config.reviews.path_filters,
+    maxFiles: config.reviews.max_files,
+    maxDiffLines: config.reviews.max_diff_lines,
     privacy: {
       allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
       denyPaths: config.privacy.deny_paths,
