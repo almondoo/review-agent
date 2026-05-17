@@ -18,6 +18,14 @@ export {
   renderDeferralSummary,
 } from './coordination.js';
 export {
+  applyPathFilters,
+  countDiffLines,
+  type ParsedDiff,
+  type ParsedDiffFile,
+  parseDiffByFile,
+  reassembleDiff,
+} from './diff-filter.js';
+export {
   applyRedactions,
   CUSTOM_RULE_ID_PREFIX,
   type CustomRegexFile,
