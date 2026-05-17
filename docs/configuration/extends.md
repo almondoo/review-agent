@@ -45,11 +45,11 @@ When `extends: org` triggers a merge:
 
 | Field type | Behaviour |
 |---|---|
-| Scalar (`language`, `profile`, `cost.max_usd_per_pr`, ...) | **Repo wins.** Org provides the floor; repo can raise / lower freely. |
+| Scalar (`language`, `profile`, `cost.max_usd_per_pr`, `reviews.max_files`, `reviews.max_diff_lines`, ...) | **Repo wins.** Org provides the floor; repo can raise / lower freely. The two `reviews.max_*` fields follow the same rule for consistency — see [`reviews.md` → Why scalars are "repo wins"](./reviews.md#why-scalars-are-repo-wins-and-not-stricter-wins) for the rationale. |
 | Nested object (`reviews.auto_review`, `cost`, ...) | Shallow merge, repo keys win. |
 | `provider` (single object) | Repo wins entirely. Set on repo only when you want a per-repo override. |
-| List (`skills`, `reviews.path_filters`, `reviews.path_instructions`, ...) | **Concatenated** — org first, then repo. Downstream code (skill loader, glob matcher) handles duplicate entries. |
-| `reviews.ignore_authors`, `privacy.allowed_url_prefixes`, `privacy.deny_paths`, `privacy.redact_patterns` | Concatenated **and de-duplicated** — these are sets in spirit. |
+| List (`skills`, `reviews.path_instructions`, ...) | **Concatenated** — org first, then repo. Downstream code (skill loader, glob matcher) handles duplicate entries. |
+| `reviews.ignore_authors`, `reviews.path_filters`, `privacy.allowed_url_prefixes`, `privacy.deny_paths`, `privacy.redact_patterns` | Concatenated **and de-duplicated** — these are sets in spirit. |
 
 Why concat instead of replace? The intent of `extends: org` is "I want
 the org defaults *plus* my repo's additions" — replacing would

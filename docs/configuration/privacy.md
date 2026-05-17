@@ -673,6 +673,12 @@ comment or stdout that adopters can scrape.
 
 - [`./extends.md`](./extends.md) — how org and repo
   `allowed_url_prefixes` / `deny_paths` / `redact_patterns` lists merge.
+- [`./reviews.md`](./reviews.md) — `reviews.path_filters` is the
+  scope-level companion to `deny_paths` (path globs that drop a file
+  from the **review entirely**, including the gitleaks scan and the
+  LLM prompt). Use `path_filters` when "we trust this directory,
+  skip it" and `deny_paths` when "tools must refuse to read this
+  even if the LLM asks".
 - [`../security/audit.md`](../security/audit.md) — STRIDE walkthrough
   that motivates the closed-world default.
 - [`../specs/review-agent-spec.md`](../specs/review-agent-spec.md)
