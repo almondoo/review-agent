@@ -3,6 +3,8 @@ import {
   ConfigError,
   ContextLengthError,
   CostExceededError,
+  GITLEAKS_SCAN_FAILURES,
+  GitleaksScanError,
   isReviewAgentError,
   ReviewAgentError,
   SchemaValidationError,
@@ -20,6 +22,7 @@ describe('ReviewAgentError hierarchy', () => {
     expect(
       isReviewAgentError(new SecretLeakAbortedError('output', 1, ['aws-access-key'], 'r')),
     ).toBe(true);
+    expect(isReviewAgentError(new GitleaksScanError('malformed-json', 1, 'x'))).toBe(true);
   });
 
   it('non-ReviewAgentError values are rejected by the type guard', () => {
@@ -132,6 +135,32 @@ describe('SecretLeakAbortedError', () => {
   it('preserves cause', () => {
     const cause = new Error('scanner failure');
     const err = new SecretLeakAbortedError('output', 1, ['github-pat'], 'r', { cause });
+    expect(err.cause).toBe(cause);
+  });
+});
+
+describe('GitleaksScanError', () => {
+  it('exposes kind, failureReason, exitCode, and stdoutExcerpt', () => {
+    const err = new GitleaksScanError('malformed-json', 1, 'gitleaks: panic');
+    expect(err.kind).toBe('gitleaks-scan-failed');
+    expect(err.failureReason).toBe('malformed-json');
+    expect(err.exitCode).toBe(1);
+    expect(err.stdoutExcerpt).toBe('gitleaks: panic');
+    expect(err.message).toContain('Gitleaks scan failed');
+    expect(err.message).toContain('malformed-json');
+    expect(err.message).toContain('exit=1');
+  });
+
+  it('accepts every failure reason in GITLEAKS_SCAN_FAILURES', () => {
+    for (const reason of GITLEAKS_SCAN_FAILURES) {
+      const err = new GitleaksScanError(reason, 0, '');
+      expect(err.failureReason).toBe(reason);
+    }
+  });
+
+  it('preserves cause', () => {
+    const cause = new SyntaxError('Unexpected token');
+    const err = new GitleaksScanError('malformed-json', 1, '...', { cause });
     expect(err.cause).toBe(cause);
   });
 });

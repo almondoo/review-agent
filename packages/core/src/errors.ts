@@ -4,7 +4,8 @@ export type ReviewAgentErrorKind =
   | 'cost-exceeded'
   | 'context-length'
   | 'tool-dispatch-refused'
-  | 'secret-leak-aborted';
+  | 'secret-leak-aborted'
+  | 'gitleaks-scan-failed';
 
 export abstract class ReviewAgentError extends Error {
   abstract readonly kind: ReviewAgentErrorKind;
@@ -103,6 +104,44 @@ export class SecretLeakAbortedError extends ReviewAgentError {
     this.findingsCount = findingsCount;
     this.ruleIds = ruleIds;
     this.reason = reason;
+  }
+}
+
+// Fail-closed reasons emitted when the gitleaks post-scan cannot be trusted.
+// `malformed-json` covers a stdout payload that did not parse as JSON; the
+// scanner may have crashed mid-write or had its output corrupted, so we
+// cannot infer "no leaks" from it. `unexpected-shape` covers parsed JSON
+// that is not the expected top-level array. `empty-stdout-on-leak-exit`
+// covers exitCode=1 (gitleaks: "leaks found") combined with empty stdout —
+// gitleaks claims findings exist but did not emit them, so we cannot
+// redact what we did not see. All three force the caller to surface a
+// scan failure rather than silently treat the run as clean.
+export const GITLEAKS_SCAN_FAILURES = [
+  'malformed-json',
+  'unexpected-shape',
+  'empty-stdout-on-leak-exit',
+] as const;
+export type GitleaksScanFailureReason = (typeof GITLEAKS_SCAN_FAILURES)[number];
+
+export class GitleaksScanError extends ReviewAgentError {
+  readonly kind = 'gitleaks-scan-failed' as const;
+  readonly failureReason: GitleaksScanFailureReason;
+  readonly exitCode: number;
+  readonly stdoutExcerpt: string;
+
+  constructor(
+    failureReason: GitleaksScanFailureReason,
+    exitCode: number,
+    stdoutExcerpt: string,
+    options?: { cause?: unknown },
+  ) {
+    super(
+      `Gitleaks scan failed (${failureReason}, exit=${exitCode}); failing review closed`,
+      options,
+    );
+    this.failureReason = failureReason;
+    this.exitCode = exitCode;
+    this.stdoutExcerpt = stdoutExcerpt;
   }
 }
 

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { GitleaksScanError } from '@review-agent/core';
 
 export type GitleaksFinding = {
   readonly ruleId: string;
@@ -153,22 +154,48 @@ export function shouldAbortReview(findings: ReadonlyArray<GitleaksFinding>): {
   return { abort: false, reason: null };
 }
 
+// Cap on the stdout slice we surface in `GitleaksScanError.stdoutExcerpt`.
+// Large enough to recognise gitleaks' usual error prefixes and short
+// crash banners, small enough that the error message stays bounded
+// regardless of how much garbage the process printed.
+const STDOUT_EXCERPT_LIMIT = 512;
+
+function excerptStdout(stdout: string): string {
+  if (stdout.length <= STDOUT_EXCERPT_LIMIT) return stdout;
+  return `${stdout.slice(0, STDOUT_EXCERPT_LIMIT)}…`;
+}
+
 async function runGitleaks(
   spawnFn: SpawnFn,
   binary: string,
   args: ReadonlyArray<string>,
 ): Promise<GitleaksResult> {
   const result = await spawnFn(binary, args, { timeout: 60_000 });
-  if (!result.stdout.trim()) {
-    return { findings: [], aborted: false, reason: null };
+  const stdoutTrimmed = result.stdout.trim();
+  // exit 0 + empty stdout is the legitimate "no findings" case. exit 1
+  // with empty stdout means gitleaks reported leaks via its exit code
+  // but did not emit them — we cannot trust the run as clean, so we
+  // fail closed.
+  if (!stdoutTrimmed) {
+    if (result.exitCode === 0) {
+      return { findings: [], aborted: false, reason: null };
+    }
+    throw new GitleaksScanError('empty-stdout-on-leak-exit', result.exitCode, '');
   }
   let raw: unknown;
   try {
     raw = JSON.parse(result.stdout);
-  } catch {
-    return { findings: [], aborted: false, reason: null };
+  } catch (cause) {
+    // Previously this was silently swallowed as "no findings", which
+    // meant a corrupted scanner output looked identical to a clean run
+    // and could hide a leak (audit-w1 W1-B03 / spec §7).
+    throw new GitleaksScanError('malformed-json', result.exitCode, excerptStdout(result.stdout), {
+      cause,
+    });
   }
-  if (!Array.isArray(raw)) return { findings: [], aborted: false, reason: null };
+  if (!Array.isArray(raw)) {
+    throw new GitleaksScanError('unexpected-shape', result.exitCode, excerptStdout(result.stdout));
+  }
   const findings = raw.filter(isFindingShape).map(toFinding);
   const decision = shouldAbortReview(findings);
   return { findings, aborted: decision.abort, reason: decision.reason };

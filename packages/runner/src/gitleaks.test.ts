@@ -1,3 +1,4 @@
+import { GitleaksScanError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyRedactions,
@@ -167,10 +168,66 @@ describe('scanWorkspaceWithGitleaks', () => {
     expect(result.aborted).toBe(true);
   });
 
-  it('tolerates non-JSON output (returns empty)', async () => {
+  it('fails closed on malformed JSON (does not silently treat as clean)', async () => {
     const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: 'gitleaks: error', exitCode: 1 }));
-    const result = await scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
-    expect(result.findings).toHaveLength(0);
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      kind: 'gitleaks-scan-failed',
+      failureReason: 'malformed-json',
+      exitCode: 1,
+      stdoutExcerpt: 'gitleaks: error',
+    });
+  });
+
+  it('fails closed when parsed JSON is not an array', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => ({
+      stdout: JSON.stringify({ findings: [] }),
+      exitCode: 0,
+    }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      failureReason: 'unexpected-shape',
+      exitCode: 0,
+    });
+  });
+
+  it('fails closed when stdout is empty but exit code reports leaks (1)', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: '   \n', exitCode: 1 }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toBeInstanceOf(GitleaksScanError);
+    await expect(promise).rejects.toMatchObject({
+      failureReason: 'empty-stdout-on-leak-exit',
+      exitCode: 1,
+      stdoutExcerpt: '',
+    });
+  });
+
+  it('truncates stdoutExcerpt to a bounded slice on malformed output', async () => {
+    const big = 'x'.repeat(2000);
+    const spawnFn: SpawnFn = vi.fn(async () => ({ stdout: big, exitCode: 1 }));
+    const promise = scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn });
+    await expect(promise).rejects.toMatchObject({ failureReason: 'malformed-json' });
+    try {
+      await promise;
+    } catch (err) {
+      const e = err as GitleaksScanError;
+      // The error's stdoutExcerpt must be much smaller than the raw
+      // payload so error logs cannot be used to spam the log pipeline
+      // by feeding a huge garbage stdout.
+      expect(e.stdoutExcerpt.length).toBeLessThanOrEqual(513);
+      expect(e.stdoutExcerpt.endsWith('…')).toBe(true);
+    }
+  });
+
+  it('propagates non-zero-non-1 spawn rejection (fail-closed by error propagation)', async () => {
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied');
+    });
+    await expect(scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn })).rejects.toThrow(
+      /gitleaks exited 2/,
+    );
   });
 
   it('passes --config when customRegexFile provided', async () => {
