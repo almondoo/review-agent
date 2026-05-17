@@ -17,14 +17,6 @@ export {
   decideCoordination,
   renderDeferralSummary,
 } from './coordination.js';
-export { createCostKillSwitch, type KillSwitchOpts } from './cost-kill-switch.js';
-export {
-  assertDailyCapNotExceeded,
-  type PreflightDecision,
-  type PreflightDeps,
-  type PreflightInput,
-  preflightDailyCap,
-} from './cost-preflight.js';
 export {
   applyRedactions,
   defaultSpawn,
