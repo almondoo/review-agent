@@ -82,10 +82,14 @@ Each entry is matched against the candidate URL with `String.prototype.startsWit
 - Comparison is exact-string — there is no normalization, no `*`
   glob, and no scheme inference. Configure full prefixes including
   the scheme (`https://...`).
-- Scheme letter case is folded by the URL extractor before the
-  allowlist runs (`HTTPS://docs.example.com/x` is treated the same
-  as `https://docs.example.com/x`), so allowlist entries should use
-  lowercase `https://` / `http://`.
+- Comparison is case-sensitive: `String.prototype.startsWith`
+  compares the literal bytes. Allowlist entries should be written
+  in lowercase (`https://...`) because that is what well-behaved
+  LLMs emit. URL extraction itself is case-insensitive, so
+  prompt-injected uppercase variants like
+  `HTTPS://attacker.example/x` are still detected — but they will
+  not match a lowercase allowlist entry. They fail validation and
+  route through the retry → graceful abort flow (fail-secure).
 - Trailing slashes matter for the prefix semantics. Listing
   `https://docs.example.com/` matches every path under that origin;
   listing `https://docs.example.com/api/` restricts to the `/api/`
@@ -137,9 +141,10 @@ When the model emits a URL that fails both the own-repo check and
 the allowlist, the runner follows the retry-then-abort sequence from
 spec §7.3 #4:
 
-1. **First attempt fails** — the runner logs the violation
-   internally and retries `generateReview` once with a corrective
-   prompt suffix asking the model to produce strictly valid output.
+1. **First attempt fails** — the runner captures the violation as
+   a `SchemaValidationError` and retries `generateReview` once with
+   a corrective prompt suffix asking the model to produce strictly
+   valid output.
 2. **Retry succeeds** — the review proceeds normally with the
    second attempt's output.
 3. **Retry also fails** — the runner aborts the review gracefully.
