@@ -109,7 +109,22 @@ const CostSchema = z
 const PrivacySchema = z
   .object({
     redact_patterns: z.array(z.string().min(1)).default([]),
-    deny_paths: z.array(z.string().min(1)).default([]),
+    // Each entry is a glob pattern compiled by `globToRegExp` at
+    // runtime (`packages/runner/src/agent.ts`) and unioned with the
+    // built-in `DENY_PATTERNS` in the tool dispatcher (spec §7.4
+    // "extend, not relax"). `.refine(isValidGlob)` mirrors
+    // `path_instructions[*].path` so a typo like `secrets/[abc]/`
+    // (unsupported character class) or a NUL-containing entry fails
+    // at YAML-load time with a clear message rather than silently
+    // matching nothing.
+    deny_paths: z
+      .array(
+        z.string().min(1).refine(isValidGlob, {
+          message:
+            'must be a valid glob pattern (`*` within a segment, `**` across segments, no NUL bytes)',
+        }),
+      )
+      .default([]),
     allowed_url_prefixes: z.array(z.string().url()).default([]),
   })
   .strict();

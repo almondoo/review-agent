@@ -82,6 +82,22 @@ describe('loadConfigFromYaml — explicit values', () => {
     ).toThrow(ConfigError);
   });
 
+  it('rejects a privacy.deny_paths entry that is not a valid glob (M-1)', () => {
+    // Mirrors the path_instructions[*].path validation: the runner
+    // compiles each deny_paths entry with the same globToRegExp on
+    // every review. A NUL-containing pattern would throw at runtime
+    // and fail the whole review loudly; better to fail at YAML load
+    // so the operator sees the misconfiguration before any review
+    // runs. The empty-string branch is already covered by `.min(1)`.
+    const NUL = String.fromCharCode(0);
+    const yaml = `privacy:\n  deny_paths:\n    - "compliance/${NUL}.txt"\n`;
+    expect(() => loadConfigFromYaml(yaml)).toThrow(ConfigError);
+  });
+
+  it('rejects an empty privacy.deny_paths entry', () => {
+    expect(() => loadConfigFromYaml('privacy:\n  deny_paths:\n    - ""\n')).toThrow(ConfigError);
+  });
+
   it('parses path_instructions[*].auto_fetch with explicit fields', () => {
     const cfg = loadConfigFromYaml(
       [

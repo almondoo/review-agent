@@ -113,11 +113,11 @@ export async function runReview(
   // Compile operator-supplied glob deny paths once per review.
   // Built-in `DENY_PATTERNS` are unioned in by the dispatcher
   // (spec §7.4 "extend, not relax"); we only need to forward the
-  // operator-extended layer here. globToRegExp throws on
-  // empty / NUL-containing entries, but the YAML schema already
-  // rejects those at load time via `isValidGlob` — so a throw here
+  // operator-extended layer here. The YAML schema rejects invalid
+  // entries up front via `z.string().min(1).refine(isValidGlob)`
+  // on `PrivacySchema.deny_paths`, so a `globToRegExp` throw here
   // would indicate a programmer error upstream (e.g. a caller
-  // bypassing the schema) and should surface, not be swallowed.
+  // bypassing the schema) and should fail loudly, not be swallowed.
   const denyPatterns: ReadonlyArray<RegExp> = job.privacy.denyPaths.map((g) => globToRegExp(g));
 
   // Counter shared with the AI-SDK tool wrappers so we can attribute
