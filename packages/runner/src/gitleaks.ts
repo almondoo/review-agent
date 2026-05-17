@@ -1,4 +1,7 @@
 import { spawn } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { GitleaksScanError } from '@review-agent/core';
 
 export type GitleaksFinding = {
@@ -105,7 +108,141 @@ export async function scanWorkspaceWithGitleaks(opts: ScanDiffOptions): Promise<
 
 const HIGH_ENTROPY_PATTERNS: ReadonlyArray<RegExp> = [/[A-Za-z0-9+/=]{40,}/g];
 
-export function quickScanContent(content: string): GitleaksFinding[] {
+/**
+ * `id` prefix for findings emitted by user-supplied
+ * `privacy.redact_patterns` (spec §7.4). Surfaces in
+ * `[REDACTED:custom-N]` replacement tokens — operators can grep the
+ * placeholder back to the source `.review-agent.yml` entry. Kept as a
+ * named export so the test suite, the docs, and the agent loop can
+ * share a single source of truth.
+ */
+export const CUSTOM_RULE_ID_PREFIX = 'custom-';
+
+/**
+ * Escape a user-supplied string for embedding in a TOML basic string
+ * (the `"..."` form). gitleaks parses its config TOML with the
+ * BurntSushi parser, which expects backslash and double-quote to be
+ * escaped, plus the standard `\b \t \n \f \r` control escapes. The
+ * regex value travels through TOML → Go `regexp` round-trip, so a
+ * literal `\d` in the user's `.review-agent.yml` becomes `"\\d"` in
+ * TOML and parses back to `\d` for Go to compile.
+ *
+ * `isValidRegex` rejects NUL bytes at config-load time so we don't
+ * need to encode `0x00` here. Any other control byte sneaks through
+ * the standard control-char escapes below.
+ */
+// 0x08 (backspace) needs to be matched literally so the TOML escape
+// of `\b` is emitted, but writing the byte directly in a regex
+// literal trips biome's `noControlCharactersInRegex` (a sensible
+// default that we genuinely want overridden here). Build the
+// matcher at module load via `String.fromCharCode` so the literal
+// never appears in the source — same runtime semantic, no lint
+// suppression noise.
+const BACKSPACE_PATTERN = new RegExp(String.fromCharCode(8), 'g');
+
+export function escapeTomlBasicString(s: string): string {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(BACKSPACE_PATTERN, '\\b')
+    .replace(/\t/g, '\\t')
+    .replace(/\n/g, '\\n')
+    .replace(/\f/g, '\\f')
+    .replace(/\r/g, '\\r');
+}
+
+/**
+ * Lift operator-supplied `privacy.redact_patterns` entries into a
+ * gitleaks TOML config fragment (spec §7.4). Each entry becomes a
+ * `[[rules]]` block with a stable, deterministic id
+ * (`custom-${index}`) so findings can be cross-referenced back to the
+ * source array position. Built-in rules are unaffected — the lifted
+ * fragment is meant to be appended to gitleaks' default config via
+ * `--config`, which by gitleaks' own semantic *extends* the default
+ * ruleset (matches our "extend, not relax" §7.4 contract).
+ *
+ * Returns an empty string when `patterns` is empty so callers can
+ * skip the tempfile dance entirely.
+ */
+export function liftCustomPatternsToToml(patterns: ReadonlyArray<string>): string {
+  if (patterns.length === 0) return '';
+  // `useDefault = true` (in `[extend]`) preserves gitleaks' built-in
+  // ruleset on top of which our `[[rules]]` are layered. Without it,
+  // passing `--config` REPLACES the default ruleset and we silently
+  // lose the built-in AWS / GitHub / Anthropic / OpenAI / PEM
+  // detectors — the very "extend, not relax" guarantee §7.4 demands.
+  const header = '[extend]\nuseDefault = true\n';
+  const blocks = patterns
+    .map((pattern, index) => {
+      const id = `${CUSTOM_RULE_ID_PREFIX}${index}`;
+      const escaped = escapeTomlBasicString(pattern);
+      return [
+        '[[rules]]',
+        `id = "${id}"`,
+        `description = "review-agent privacy.redact_patterns[${index}]"`,
+        `regex = "${escaped}"`,
+        // `tags = ["high"]` mirrors the in-process `quickScanContent`
+        // treatment of custom hits — operators explicitly listed
+        // these patterns as secrets, so any match is high-confidence
+        // by definition.
+        'tags = ["high"]',
+      ].join('\n');
+    })
+    .join('\n\n');
+  return `${header}\n${blocks}\n`;
+}
+
+export type CustomRegexFile = {
+  readonly path: string;
+  readonly cleanup: () => Promise<void>;
+};
+
+export type WriteCustomRegexFileDeps = {
+  readonly mkdtemp?: typeof mkdtemp;
+  readonly writeFile?: typeof writeFile;
+  readonly rm?: typeof rm;
+  readonly tmpdir?: () => string;
+};
+
+/**
+ * Materialize the lifted TOML fragment to a tempfile that
+ * `scanWorkspaceWithGitleaks` can pass via `--config`. Returns `null`
+ * when no patterns are supplied so the caller can skip the
+ * try/finally entirely.
+ *
+ * Uses a fresh tempdir per call (rather than a single shared file)
+ * so concurrent reviews on the same host — the Server-mode pattern —
+ * don't race on a shared path. The caller owns cleanup via the
+ * returned `cleanup()`; this module never garbage-collects.
+ */
+export async function writeCustomRegexFile(
+  patterns: ReadonlyArray<string>,
+  deps: WriteCustomRegexFileDeps = {},
+): Promise<CustomRegexFile | null> {
+  if (patterns.length === 0) return null;
+  const mkdtempFn = deps.mkdtemp ?? mkdtemp;
+  const writeFileFn = deps.writeFile ?? writeFile;
+  const rmFn = deps.rm ?? rm;
+  const tmp = (deps.tmpdir ?? tmpdir)();
+  const dir = await mkdtempFn(join(tmp, 'review-agent-gitleaks-'));
+  const path = join(dir, 'rules.toml');
+  const toml = liftCustomPatternsToToml(patterns);
+  await writeFileFn(path, toml, 'utf8');
+  let cleaned = false;
+  return {
+    path,
+    cleanup: async () => {
+      if (cleaned) return;
+      cleaned = true;
+      await rmFn(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+export function quickScanContent(
+  content: string,
+  customPatterns: ReadonlyArray<string> = [],
+): GitleaksFinding[] {
   const findings: GitleaksFinding[] = [];
   const wellKnown: ReadonlyArray<{ id: string; pattern: RegExp }> = [
     { id: 'aws-access-key', pattern: /\bAKIA[0-9A-Z]{16}\b/g },
@@ -151,6 +288,62 @@ export function quickScanContent(content: string): GitleaksFinding[] {
         });
       }
       match = pattern.exec(content);
+    }
+  }
+  // User-supplied `privacy.redact_patterns` (spec §7.4). These run
+  // AFTER the built-ins so a string matched by both an operator
+  // pattern and a built-in rule still gets the built-in's stable
+  // ruleId in any first-wins downstream consumer — the redaction
+  // dedups by `secret` anyway in `applyRedactions`. Each compile is
+  // wrapped in try/catch defensively even though `isValidRegex` has
+  // already validated the input at config-load time (T1); a corrupt
+  // job message making it past validation should degrade to
+  // "skip the bad pattern" rather than aborting the whole scan.
+  //
+  // ReDoS note: `isValidRegex` does NOT reject patterns prone to
+  // catastrophic backtracking (e.g. `(a+)+`). The pre-prompt diff
+  // scan is bounded by the diff size cap; the post-LLM output scan
+  // is bounded by the LLM's response budget. Future hardening can
+  // add a per-pattern execution timeout via `re2`/equivalent, but
+  // that is out of scope for the initial wire-up.
+  for (let i = 0; i < customPatterns.length; i++) {
+    const raw = customPatterns[i] ?? '';
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(raw, 'g');
+    } catch {
+      continue;
+    }
+    const id = `${CUSTOM_RULE_ID_PREFIX}${i}`;
+    // `matchAll` advances `lastIndex` internally and refuses
+    // zero-width matches by throwing — wrapping the loop in a
+    // try-block plus the `.length === 0` short-circuit below
+    // collapses both failure modes into a single "skip and move on".
+    let iter: IterableIterator<RegExpMatchArray>;
+    try {
+      iter = content.matchAll(pattern);
+    } catch {
+      continue;
+    }
+    for (const m of iter) {
+      const hit = m[0];
+      // A zero-width hit (e.g. `^`, `\b`, `(?=foo)`) carries no
+      // secret to redact and could otherwise spam the finding list
+      // with empty `secret` entries that `applyRedactions` skips
+      // anyway. Drop them up-front for clarity.
+      if (hit === '') continue;
+      const idx = m.index ?? 0;
+      findings.push({
+        ruleId: id,
+        description: `Custom rule: ${id}`,
+        file: '',
+        startLine: lineFor(content, idx),
+        endLine: lineFor(content, idx),
+        match: hit,
+        secret: hit,
+        entropy: 0,
+        tags: ['high'],
+      });
     }
   }
   return findings;

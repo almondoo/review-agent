@@ -2,10 +2,14 @@ import { GitleaksScanError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyRedactions,
+  CUSTOM_RULE_ID_PREFIX,
+  escapeTomlBasicString,
+  liftCustomPatternsToToml,
   quickScanContent,
   type SpawnFn,
   scanWorkspaceWithGitleaks,
   shouldAbortReview,
+  writeCustomRegexFile,
 } from './gitleaks.js';
 
 describe('quickScanContent — well-known secret patterns', () => {
@@ -52,6 +56,177 @@ describe('quickScanContent — well-known secret patterns', () => {
 
   it('returns empty for benign text', () => {
     expect(quickScanContent('hello world\nconst x = 1;\n')).toHaveLength(0);
+  });
+});
+
+describe('quickScanContent — custom redact_patterns (#87)', () => {
+  it('emits findings tagged with the custom-N rule id when a custom pattern hits', () => {
+    const findings = quickScanContent('INTERNAL-TOKEN-12345 in code', ['INTERNAL-TOKEN-\\d+']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.ruleId).toBe(`${CUSTOM_RULE_ID_PREFIX}0`);
+    expect(findings[0]?.secret).toBe('INTERNAL-TOKEN-12345');
+    expect(findings[0]?.tags).toEqual(['high']);
+  });
+
+  it('uses positional ids so multiple custom patterns are distinguishable', () => {
+    const findings = quickScanContent('FOO-1 then BAR-2', ['FOO-\\d', 'BAR-\\d']);
+    expect(findings.map((f) => f.ruleId).sort()).toEqual([
+      `${CUSTOM_RULE_ID_PREFIX}0`,
+      `${CUSTOM_RULE_ID_PREFIX}1`,
+    ]);
+  });
+
+  it('keeps built-in matches active alongside custom patterns (overlap case)', () => {
+    // `AKIA...` hits the built-in aws-access-key rule AND the operator's
+    // custom `AKIA.*` rule. Both should appear — operators should see
+    // their custom rule fire even when a built-in already caught it,
+    // since the redaction layer dedups by secret string anyway.
+    const findings = quickScanContent('AKIAIOSFODNN7EXAMPLE', ['AKIA[A-Z0-9]+']);
+    const ids = findings.map((f) => f.ruleId);
+    expect(ids).toContain('aws-access-key');
+    expect(ids).toContain(`${CUSTOM_RULE_ID_PREFIX}0`);
+  });
+
+  it('matches every occurrence of a custom pattern (global flag)', () => {
+    const findings = quickScanContent('X-1 X-2 X-3', ['X-\\d']);
+    expect(findings.filter((f) => f.ruleId === `${CUSTOM_RULE_ID_PREFIX}0`)).toHaveLength(3);
+  });
+
+  it('drops zero-width custom patterns without infinite looping', () => {
+    // `^` matches an empty position. Without the zero-width guard the
+    // matchAll loop or its underlying engine would spin or emit empty
+    // findings; with it, the pattern is silently dropped.
+    const findings = quickScanContent('abc', ['^']);
+    expect(findings).toHaveLength(0);
+  });
+
+  it('defaults customPatterns to [] (built-in scan still runs)', () => {
+    // Back-compat assertion: existing call sites that pass only the
+    // content arg must keep working.
+    const findings = quickScanContent('AKIAIOSFODNN7EXAMPLE');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.ruleId).toBe('aws-access-key');
+  });
+
+  it('produces [REDACTED:custom-N] tokens when threaded through applyRedactions', () => {
+    const input = 'leak INTERNAL-TOKEN-12345 leak';
+    const findings = quickScanContent(input, ['INTERNAL-TOKEN-\\d+']);
+    const out = applyRedactions(input, findings);
+    expect(out).not.toContain('INTERNAL-TOKEN-12345');
+    expect(out).toContain(`[REDACTED:${CUSTOM_RULE_ID_PREFIX}0]`);
+  });
+});
+
+describe('escapeTomlBasicString (#87)', () => {
+  it('escapes backslash and double-quote for TOML basic strings', () => {
+    expect(escapeTomlBasicString('a"b\\c')).toBe('a\\"b\\\\c');
+  });
+
+  it('escapes a backslash BEFORE the quote so `\\"` does not round-trip wrong', () => {
+    // Order matters: replace `\\` first, then `"`. The other way around
+    // would double-escape the backslash injected by `\\"`.
+    expect(escapeTomlBasicString('\\"')).toBe('\\\\\\"');
+  });
+
+  it('escapes common control bytes (tab, CR, LF, backspace, form-feed)', () => {
+    expect(escapeTomlBasicString('a\tb\nc\rd\fe\bf')).toBe('a\\tb\\nc\\rd\\fe\\bf');
+  });
+
+  it('leaves benign ascii unchanged', () => {
+    expect(escapeTomlBasicString('AKIA[0-9A-Z]{16}')).toBe('AKIA[0-9A-Z]{16}');
+  });
+});
+
+describe('liftCustomPatternsToToml (#87)', () => {
+  it('returns empty string for an empty list (caller skips tempfile)', () => {
+    expect(liftCustomPatternsToToml([])).toBe('');
+  });
+
+  it('emits one [[rules]] block per pattern with positional ids and the regex value', () => {
+    const out = liftCustomPatternsToToml(['AKIA[0-9A-Z]{16}', 'ghp_[A-Za-z0-9]{36}']);
+    expect(out).toContain('[[rules]]');
+    expect(out).toContain('id = "custom-0"');
+    expect(out).toContain('id = "custom-1"');
+    expect(out).toContain('regex = "AKIA[0-9A-Z]{16}"');
+    expect(out).toContain('regex = "ghp_[A-Za-z0-9]{36}"');
+    // Both blocks must be present.
+    expect(out.match(/\[\[rules\]\]/g)).toHaveLength(2);
+  });
+
+  it('keeps gitleaks built-in rules active via [extend] useDefault = true', () => {
+    // Spec §7.4 "extend, not relax": without `useDefault = true`, the
+    // gitleaks --config flag REPLACES the default ruleset and we
+    // silently lose every built-in AWS/GitHub/Anthropic/OpenAI/PEM
+    // detector. This is the most important invariant of the helper.
+    const out = liftCustomPatternsToToml(['anything']);
+    expect(out).toMatch(/\[extend\]/);
+    expect(out).toMatch(/useDefault\s*=\s*true/);
+  });
+
+  it('escapes backslashes in regex literals so `\\d` round-trips through TOML', () => {
+    const out = liftCustomPatternsToToml(['\\d{4}-\\d{4}']);
+    // The TOML serialiser must double the backslashes so the TOML
+    // parser unescapes them back to single backslashes before passing
+    // the regex to Go's `regexp.Compile`.
+    expect(out).toContain('regex = "\\\\d{4}-\\\\d{4}"');
+  });
+
+  it('escapes embedded double quotes', () => {
+    const out = liftCustomPatternsToToml(['"quoted"']);
+    expect(out).toContain('regex = "\\"quoted\\""');
+  });
+
+  it('tags every custom rule "high" so any match aborts the review like a built-in high-confidence hit', () => {
+    const out = liftCustomPatternsToToml(['anything']);
+    expect(out).toContain('tags = ["high"]');
+  });
+});
+
+describe('writeCustomRegexFile (#87)', () => {
+  it('returns null for an empty pattern list (caller skips try/finally)', async () => {
+    const result = await writeCustomRegexFile([]);
+    expect(result).toBeNull();
+  });
+
+  it('writes the lifted TOML to a fresh tempdir and exposes cleanup', async () => {
+    const writeFile = vi.fn<(p: string, c: string, e: string) => Promise<void>>(async () => {});
+    const mkdtemp = vi.fn<(prefix: string) => Promise<string>>(async () => '/tmp/ra-fake-abc');
+    const rmFn = vi.fn<(p: string, opts: object) => Promise<void>>(async () => {});
+    const result = await writeCustomRegexFile(['AKIA[0-9A-Z]{16}'], {
+      writeFile: writeFile as unknown as typeof import('node:fs/promises').writeFile,
+      mkdtemp: mkdtemp as unknown as typeof import('node:fs/promises').mkdtemp,
+      rm: rmFn as unknown as typeof import('node:fs/promises').rm,
+      tmpdir: () => '/tmp',
+    });
+    expect(result).not.toBeNull();
+    expect(result?.path).toBe('/tmp/ra-fake-abc/rules.toml');
+    // mkdtemp got a prefix path under our injected tmpdir.
+    expect(mkdtemp).toHaveBeenCalledWith('/tmp/review-agent-gitleaks-');
+    // The TOML body contains the rule we asked to lift.
+    const [, body] = writeFile.mock.calls[0] ?? [];
+    expect(body).toContain('id = "custom-0"');
+    expect(body).toContain('regex = "AKIA[0-9A-Z]{16}"');
+    expect(body).toContain('useDefault = true');
+    // cleanup() removes the dir.
+    await result?.cleanup();
+    expect(rmFn).toHaveBeenCalledWith('/tmp/ra-fake-abc', {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('cleanup() is idempotent (second call is a no-op)', async () => {
+    const rmFn = vi.fn<(p: string, opts: object) => Promise<void>>(async () => {});
+    const result = await writeCustomRegexFile(['x'], {
+      writeFile: (async () => {}) as unknown as typeof import('node:fs/promises').writeFile,
+      mkdtemp: (async () =>
+        '/tmp/ra-fake-xyz') as unknown as typeof import('node:fs/promises').mkdtemp,
+      rm: rmFn as unknown as typeof import('node:fs/promises').rm,
+      tmpdir: () => '/tmp',
+    });
+    await result?.cleanup();
+    await result?.cleanup();
+    expect(rmFn).toHaveBeenCalledTimes(1);
   });
 });
 
