@@ -1,6 +1,13 @@
 import { ToolDispatchRefusedError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
-import { createAiSdkToolset, createTools, dispatchTool, MAX_TOOL_CALLS } from './tools.js';
+import {
+  createAiSdkToolset,
+  createTools,
+  dispatchTool,
+  MAX_FILE_SIZE,
+  MAX_GREP_PATTERN_LENGTH,
+  MAX_TOOL_CALLS,
+} from './tools.js';
 
 type DirentLike = {
   name: string;
@@ -16,6 +23,15 @@ function dirent(name: string, kind: 'file' | 'dir'): DirentLike {
   };
 }
 
+// Build a fs-style error that carries the same `.code` property the
+// real `node:fs` errors do — `grepInDir` keys off this field to
+// classify the failure (skip silently / emit marker / rethrow).
+function fsError(code: string, path: string, syscall = 'open'): NodeJS.ErrnoException {
+  const err = new Error(`${code}: simulated, ${syscall} '${path}'`) as NodeJS.ErrnoException;
+  err.code = code;
+  return err;
+}
+
 const WORKSPACE = '/work';
 
 function makeDeps(opts: {
@@ -29,7 +45,7 @@ function makeDeps(opts: {
   return {
     readFile: vi.fn(async (p: string) => {
       const value = files[p];
-      if (value === undefined) throw new Error(`ENOENT ${p}`);
+      if (value === undefined) throw fsError('ENOENT', p);
       return value;
     }),
     lstat: vi.fn(async (p: string) => ({
@@ -255,5 +271,126 @@ describe('grep', () => {
     const evil = `${'a?'.repeat(120)}${'a'.repeat(120)}`;
     await expect(tools.grep({ pattern: evil })).rejects.toBeInstanceOf(ToolDispatchRefusedError);
     await expect(tools.grep({ pattern: evil })).rejects.toThrow(/pattern too long/);
+  });
+
+  it('skips files removed mid-scan silently (ENOENT)', async () => {
+    // `b.ts` is in the directory listing but `readFile` raises ENOENT —
+    // simulates the common race where readdir saw the entry but the
+    // file was unlinked before grep got around to opening it.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({
+        files: { '/work/src/a.ts': 'foo' },
+        tree: {
+          '/work': [dirent('src', 'dir')],
+          '/work/src': [dirent('a.ts', 'file'), dirent('b.ts', 'file')],
+        },
+      }),
+    );
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual(['src/a.ts:1: foo']);
+  });
+
+  it('emits an unreadable-file marker for EACCES so missing matches are not silent', async () => {
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async (p: string) => {
+        if (p === '/work/src/a.ts') return 'foo';
+        throw fsError('EACCES', p);
+      }) as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('src', 'dir')];
+        if (p === '/work/src') return [dirent('a.ts', 'file'), dirent('locked.ts', 'file')];
+        return [];
+      }) as never,
+    });
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual(['src/a.ts:1: foo', 'src/locked.ts:0: [unreadable file: EACCES]']);
+  });
+
+  it('treats EPERM on readFile the same as EACCES (separate code, same outcome)', async () => {
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async (p: string) => {
+        throw fsError('EPERM', p);
+      }) as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('locked.ts', 'file')];
+        return [];
+      }) as never,
+    });
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual(['locked.ts:0: [unreadable file: EPERM]']);
+  });
+
+  it('emits an unreadable-directory marker for EACCES on readdir', async () => {
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async () => '') as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('locked', 'dir')];
+        if (p === '/work/locked') throw fsError('EACCES', p, 'scandir');
+        return [];
+      }) as never,
+    });
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual(['locked:0: [unreadable directory: EACCES]']);
+  });
+
+  it('silently skips an ENOENT directory race (no marker, no error)', async () => {
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async () => '') as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('gone', 'dir')];
+        if (p === '/work/gone') throw fsError('ENOENT', p, 'scandir');
+        return [];
+      }) as never,
+    });
+    const out = await tools.grep({ pattern: 'foo' });
+    expect(out).toEqual([]);
+  });
+
+  it('propagates unexpected fs errors instead of silently swallowing them', async () => {
+    // Used to be `.catch(() => [])` — that hid disk failures, mock
+    // mistakes, descriptor exhaustion, etc. behind an empty result.
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async () => '') as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async () => {
+        throw new Error('disk failure');
+      }) as never,
+    });
+    await expect(tools.grep({ pattern: 'foo' })).rejects.toThrow(/disk failure/);
+  });
+
+  it('propagates unexpected readFile errors instead of silently swallowing them', async () => {
+    const tools = createTools(WORKSPACE, {
+      readFile: vi.fn(async () => {
+        throw new Error('disk failure');
+      }) as never,
+      lstat: vi.fn(async () => ({ isSymbolicLink: () => false })) as never,
+      readdir: vi.fn(async (p: string) => {
+        if (p === '/work') return [dirent('a.ts', 'file')];
+        return [];
+      }) as never,
+    });
+    await expect(tools.grep({ pattern: 'foo' })).rejects.toThrow(/disk failure/);
+  });
+});
+
+describe('exported limits', () => {
+  // W2-R06 re-exports these from `@review-agent/core/limits`. Until that
+  // lands, callers reach for them on `@review-agent/runner` directly —
+  // these tests pin the shape so the re-export wiring has something
+  // stable to bind against.
+  it('exposes MAX_FILE_SIZE as a positive integer', () => {
+    expect(Number.isInteger(MAX_FILE_SIZE)).toBe(true);
+    expect(MAX_FILE_SIZE).toBeGreaterThan(0);
+  });
+
+  it('exposes MAX_GREP_PATTERN_LENGTH as a positive integer', () => {
+    expect(Number.isInteger(MAX_GREP_PATTERN_LENGTH)).toBe(true);
+    expect(MAX_GREP_PATTERN_LENGTH).toBeGreaterThan(0);
   });
 });
