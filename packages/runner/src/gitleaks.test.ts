@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applyRedactions,
   CUSTOM_RULE_ID_PREFIX,
-  escapeTomlBasicString,
   liftCustomPatternsToToml,
   quickScanContent,
   type SpawnFn,
@@ -117,26 +116,6 @@ describe('quickScanContent — custom redact_patterns (#87)', () => {
   });
 });
 
-describe('escapeTomlBasicString (#87)', () => {
-  it('escapes backslash and double-quote for TOML basic strings', () => {
-    expect(escapeTomlBasicString('a"b\\c')).toBe('a\\"b\\\\c');
-  });
-
-  it('escapes a backslash BEFORE the quote so `\\"` does not round-trip wrong', () => {
-    // Order matters: replace `\\` first, then `"`. The other way around
-    // would double-escape the backslash injected by `\\"`.
-    expect(escapeTomlBasicString('\\"')).toBe('\\\\\\"');
-  });
-
-  it('escapes common control bytes (tab, CR, LF, backspace, form-feed)', () => {
-    expect(escapeTomlBasicString('a\tb\nc\rd\fe\bf')).toBe('a\\tb\\nc\\rd\\fe\\bf');
-  });
-
-  it('leaves benign ascii unchanged', () => {
-    expect(escapeTomlBasicString('AKIA[0-9A-Z]{16}')).toBe('AKIA[0-9A-Z]{16}');
-  });
-});
-
 describe('liftCustomPatternsToToml (#87)', () => {
   it('returns empty string for an empty list (caller skips tempfile)', () => {
     expect(liftCustomPatternsToToml([])).toBe('');
@@ -147,9 +126,9 @@ describe('liftCustomPatternsToToml (#87)', () => {
     expect(out).toContain('[[rules]]');
     expect(out).toContain('id = "custom-0"');
     expect(out).toContain('id = "custom-1"');
-    expect(out).toContain('regex = "AKIA[0-9A-Z]{16}"');
-    expect(out).toContain('regex = "ghp_[A-Za-z0-9]{36}"');
-    // Both blocks must be present.
+    // Multi-line literal form — no escapes inside the regex value.
+    expect(out).toContain("regex = '''AKIA[0-9A-Z]{16}'''");
+    expect(out).toContain("regex = '''ghp_[A-Za-z0-9]{36}'''");
     expect(out.match(/\[\[rules\]\]/g)).toHaveLength(2);
   });
 
@@ -163,17 +142,41 @@ describe('liftCustomPatternsToToml (#87)', () => {
     expect(out).toMatch(/useDefault\s*=\s*true/);
   });
 
-  it('escapes backslashes in regex literals so `\\d` round-trips through TOML', () => {
+  it("emits regex values as TOML '''literal''' strings so backslashes survive verbatim (reviewer M-2)", () => {
+    // Reviewer M-2: basic strings ("…") force a \\ / \" / \n escape
+    // pass that is easy to get wrong. Multi-line literals ('''…''')
+    // pass every byte through unchanged, so `\d{4}` written in YAML
+    // arrives at Go's RE2 compiler as exactly `\d{4}`.
     const out = liftCustomPatternsToToml(['\\d{4}-\\d{4}']);
-    // The TOML serialiser must double the backslashes so the TOML
-    // parser unescapes them back to single backslashes before passing
-    // the regex to Go's `regexp.Compile`.
-    expect(out).toContain('regex = "\\\\d{4}-\\\\d{4}"');
+    expect(out).toContain("regex = '''\\d{4}-\\d{4}'''");
   });
 
-  it('escapes embedded double quotes', () => {
+  it('round-trips a double-quote without escape (literal-string semantic)', () => {
     const out = liftCustomPatternsToToml(['"quoted"']);
-    expect(out).toContain('regex = "\\"quoted\\""');
+    expect(out).toContain("regex = '''\"quoted\"'''");
+  });
+
+  it('round-trips a dollar sign without escape', () => {
+    // `$` is not special in any TOML string form, but it IS special
+    // in some shells / templating engines — pin it so a future
+    // misguided escape doesn't slip in.
+    const out = liftCustomPatternsToToml(['^password=\\$secret']);
+    expect(out).toContain("regex = '''^password=\\$secret'''");
+  });
+
+  it('round-trips an embedded newline as a literal byte (multi-line literal allows it)', () => {
+    const out = liftCustomPatternsToToml(['line1\nline2']);
+    expect(out).toContain("regex = '''line1\nline2'''");
+  });
+
+  it("rejects a pattern containing the TOML literal terminator ''' (reviewer M-2 edge case)", () => {
+    // Multi-line literal strings cannot contain `'''`. Rather than
+    // re-encode to basic-string form (which re-introduces the
+    // escape footgun the literal form was meant to dodge), throw a
+    // clear error so the operator restructures the pattern.
+    expect(() => liftCustomPatternsToToml(["foo'''bar"])).toThrow(
+      /TOML multi-line literal terminator/,
+    );
   });
 
   it('tags every custom rule "high" so any match aborts the review like a built-in high-confidence hit', () => {
@@ -205,7 +208,7 @@ describe('writeCustomRegexFile (#87)', () => {
     // The TOML body contains the rule we asked to lift.
     const [, body] = writeFile.mock.calls[0] ?? [];
     expect(body).toContain('id = "custom-0"');
-    expect(body).toContain('regex = "AKIA[0-9A-Z]{16}"');
+    expect(body).toContain("regex = '''AKIA[0-9A-Z]{16}'''");
     expect(body).toContain('useDefault = true');
     // cleanup() removes the dir.
     await result?.cleanup();
@@ -417,6 +420,62 @@ describe('scanWorkspaceWithGitleaks', () => {
     const args = spawnFn.mock.calls[0]?.[1] as ReadonlyArray<string>;
     expect(args).toContain('--config');
     expect(args).toContain('/tmp/extra.toml');
+  });
+
+  it('wraps a gitleaks regex-compile failure with a RE2-subset docs hint (#87 reviewer M-1)', async () => {
+    // gitleaks compiles patterns with Go's RE2, which is a strict
+    // subset of V8 regex — backreferences / lookbehind / lookahead
+    // are rejected even though `isValidRegex` accepts them. When
+    // that fires we want the operator to see a docs pointer, not
+    // a raw Go runtime backtrace.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error(
+        'gitleaks exited 2: error parsing regexp: invalid or unsupported Perl syntax: `(?<=`',
+      );
+    });
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/RE2 engine.*subset of JavaScript regex/s);
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/docs\/configuration\/privacy\.md/);
+  });
+
+  it('leaves the bare error alone when no customRegexFile is in play (reviewer M-1)', async () => {
+    // Without operator-supplied patterns there is no RE2 subset
+    // mismatch to hint at — surface the raw error so the operator
+    // sees the actual underlying cause.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied');
+    });
+    await expect(scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn })).rejects.toThrow(
+      /^gitleaks exited 2: permission denied$/,
+    );
+  });
+
+  it('does not falsely tag a non-regex error as an RE2 mismatch (reviewer M-1)', async () => {
+    // The wrap only fires when stderr mentions parse/regex/regexp/
+    // compile keywords. Other errors that surface via the catch
+    // branch (permission denied, missing binary, etc.) must pass
+    // through verbatim even when `customRegexFile` is set.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied opening source directory');
+    });
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/^gitleaks exited 2: permission denied opening source directory$/);
   });
 
   // H-1 (audit-w1 W1-B03 sec): `GitleaksScanError.stdoutExcerpt` is the

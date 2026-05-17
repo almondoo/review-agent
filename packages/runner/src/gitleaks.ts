@@ -103,7 +103,33 @@ export async function scanWorkspaceWithGitleaks(opts: ScanDiffOptions): Promise<
     '1',
   ];
   if (opts.customRegexFile) args.push('--config', opts.customRegexFile);
-  return runGitleaks(spawnFn, binary, args);
+  try {
+    return await runGitleaks(spawnFn, binary, args);
+  } catch (err) {
+    // gitleaks exits non-0/non-1 when its config fails to load — the
+    // most common cause once `customRegexFile` is wired in is an
+    // operator pattern that compiles under V8 (the engine
+    // `isValidRegex` uses) but not under Go's RE2 (the engine
+    // gitleaks uses). Backreferences (`\1`), lookbehind (`(?<=…)`),
+    // and lookahead (`(?=…)`) are the usual culprits. Catch the
+    // bare Error, sniff stderr for the giveaway phrases, and
+    // re-throw with a docs pointer so the operator does not have
+    // to decode raw Go runtime output. Errors that don't look like
+    // a regex parse failure pass through unchanged.
+    if (opts.customRegexFile && err instanceof Error && !(err instanceof GitleaksScanError)) {
+      const msg = err.message.toLowerCase();
+      if (
+        msg.includes('error parsing regexp') ||
+        msg.includes('cannot compile') ||
+        msg.includes('invalid or unsupported perl syntax')
+      ) {
+        throw new Error(
+          `${err.message}\n\nHint: gitleaks compiles patterns with Go's RE2 engine, which is a strict subset of JavaScript regex — backreferences (\\1), lookbehind ((?<=…)), and lookahead ((?=…)) are NOT supported. Adjust the offending privacy.redact_patterns entry. See docs/configuration/privacy.md for the RE2 constraints.`,
+        );
+      }
+    }
+    throw err;
+  }
 }
 
 const HIGH_ENTROPY_PATTERNS: ReadonlyArray<RegExp> = [/[A-Za-z0-9+/=]{40,}/g];
@@ -119,68 +145,71 @@ const HIGH_ENTROPY_PATTERNS: ReadonlyArray<RegExp> = [/[A-Za-z0-9+/=]{40,}/g];
 export const CUSTOM_RULE_ID_PREFIX = 'custom-';
 
 /**
- * Escape a user-supplied string for embedding in a TOML basic string
- * (the `"..."` form). gitleaks parses its config TOML with the
- * BurntSushi parser, which expects backslash and double-quote to be
- * escaped, plus the standard `\b \t \n \f \r` control escapes. The
- * regex value travels through TOML → Go `regexp` round-trip, so a
- * literal `\d` in the user's `.review-agent.yml` becomes `"\\d"` in
- * TOML and parses back to `\d` for Go to compile.
- *
- * `isValidRegex` rejects NUL bytes at config-load time so we don't
- * need to encode `0x00` here. Any other control byte sneaks through
- * the standard control-char escapes below.
+ * Sentinel sequence the TOML multi-line literal form (`'''…'''`)
+ * cannot contain. `liftCustomPatternsToToml` rejects patterns
+ * carrying this sequence rather than silently truncating the regex
+ * at the terminator boundary — operators must restructure those
+ * exotic patterns. `isValidRegex` accepts `'''` (it is valid JS
+ * regex source), so this check is the only line of defence against
+ * a config-load syntax error inside gitleaks.
  */
-// 0x08 (backspace) needs to be matched literally so the TOML escape
-// of `\b` is emitted, but writing the byte directly in a regex
-// literal trips biome's `noControlCharactersInRegex` (a sensible
-// default that we genuinely want overridden here). Build the
-// matcher at module load via `String.fromCharCode` so the literal
-// never appears in the source — same runtime semantic, no lint
-// suppression noise.
-const BACKSPACE_PATTERN = new RegExp(String.fromCharCode(8), 'g');
-
-export function escapeTomlBasicString(s: string): string {
-  return s
-    .replace(/\\/g, '\\\\')
-    .replace(/"/g, '\\"')
-    .replace(BACKSPACE_PATTERN, '\\b')
-    .replace(/\t/g, '\\t')
-    .replace(/\n/g, '\\n')
-    .replace(/\f/g, '\\f')
-    .replace(/\r/g, '\\r');
-}
+const TOML_LITERAL_TERMINATOR = "'''";
 
 /**
  * Lift operator-supplied `privacy.redact_patterns` entries into a
  * gitleaks TOML config fragment (spec §7.4). Each entry becomes a
  * `[[rules]]` block with a stable, deterministic id
- * (`custom-${index}`) so findings can be cross-referenced back to the
- * source array position. Built-in rules are unaffected — the lifted
- * fragment is meant to be appended to gitleaks' default config via
- * `--config`, which by gitleaks' own semantic *extends* the default
- * ruleset (matches our "extend, not relax" §7.4 contract).
+ * (`custom-${index}`) so findings can be cross-referenced back to
+ * the source array position. Built-in rules are unaffected — the
+ * lifted fragment is layered on top of gitleaks' default ruleset
+ * via the `[extend] useDefault = true` directive, because gitleaks'
+ * `--config` flag REPLACES the default ruleset without that flag
+ * (which would silently drop every built-in AWS / GitHub /
+ * Anthropic / OpenAI / PEM detector — the exact "extend, not relax"
+ * failure §7.4 forbids).
+ *
+ * Regex values are emitted as TOML **multi-line literal strings**
+ * (`'''…'''`) so backslash, double-quote, dollar-sign, and embedded
+ * newlines pass through verbatim — `\d{4}` written in YAML reaches
+ * Go's RE2 compiler as exactly `\d{4}`, no double-escape footgun.
+ * The one shape literal strings cannot carry is the terminator
+ * `'''` itself; we throw a clear error when a pattern contains it
+ * so gitleaks never sees malformed TOML.
  *
  * Returns an empty string when `patterns` is empty so callers can
  * skip the tempfile dance entirely.
+ *
+ * RE2 subset note: `isValidRegex` validates patterns under V8's
+ * regex engine (correct for the in-process `quickScanContent`
+ * fallback), but gitleaks runs Go's RE2, a strict subset of V8.
+ * Features like backreferences (`\1`), lookbehind (`(?<=…)`), and
+ * lookahead (`(?=…)`) compile here but reject inside gitleaks.
+ * `scanWorkspaceWithGitleaks` surfaces the resulting config-load
+ * failure with a docs hint (see the stderr-inspection wrapper
+ * around `runGitleaks`); `docs/configuration/privacy.md`
+ * reproduces the constraint for operators.
  */
 export function liftCustomPatternsToToml(patterns: ReadonlyArray<string>): string {
   if (patterns.length === 0) return '';
-  // `useDefault = true` (in `[extend]`) preserves gitleaks' built-in
-  // ruleset on top of which our `[[rules]]` are layered. Without it,
-  // passing `--config` REPLACES the default ruleset and we silently
-  // lose the built-in AWS / GitHub / Anthropic / OpenAI / PEM
-  // detectors — the very "extend, not relax" guarantee §7.4 demands.
   const header = '[extend]\nuseDefault = true\n';
   const blocks = patterns
     .map((pattern, index) => {
+      if (pattern.includes(TOML_LITERAL_TERMINATOR)) {
+        throw new Error(
+          `privacy.redact_patterns[${index}] contains the TOML multi-line literal terminator (''') — gitleaks config syntax cannot represent it. Restructure the pattern to avoid three consecutive single quotes.`,
+        );
+      }
       const id = `${CUSTOM_RULE_ID_PREFIX}${index}`;
-      const escaped = escapeTomlBasicString(pattern);
       return [
         '[[rules]]',
         `id = "${id}"`,
         `description = "review-agent privacy.redact_patterns[${index}]"`,
-        `regex = "${escaped}"`,
+        // Multi-line literal strings emit characters verbatim, no
+        // escape pass at all — exactly the regex-source semantic we
+        // want. A leading newline immediately after the opening
+        // `'''` is trimmed by the TOML parser, so we keep the value
+        // on the same line as the opening delimiter.
+        `regex = '''${pattern}'''`,
         // `tags = ["high"]` mirrors the in-process `quickScanContent`
         // treatment of custom hits — operators explicitly listed
         // these patterns as secrets, so any match is high-confidence
