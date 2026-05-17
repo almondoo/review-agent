@@ -105,7 +105,6 @@ export {
   type CostLedgerRow,
   type CostLedgerStatus,
   computeReviewEvent,
-  formatCategoryRollup,
   type InlineComment,
   REQUEST_CHANGES_THRESHOLDS,
   REVIEW_EVENTS,
