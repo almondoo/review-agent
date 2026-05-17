@@ -22,6 +22,16 @@ const RULE_ID_PATTERN = /^[a-z][a-z0-9-]+$/;
 
 export const REVIEW_STATE_SCHEMA_VERSION = 1;
 
+/**
+ * Prefix the URL allowlist refine prepends to every issue message it
+ * emits. Exported so downstream consumers (notably the runner's
+ * `classifyAbort`) can detect a URL-allowlist failure without
+ * duplicating the literal — keeping both sides in sync prevents a
+ * silent classification regression if the message format ever
+ * changes (e.g. localization, additional context).
+ */
+export const URL_ALLOWLIST_ISSUE_PREFIX = 'URL not in allowlist:';
+
 function notBroadcastMention(text: string): boolean {
   return !text.includes('@everyone') && !text.includes('@channel');
 }
@@ -140,7 +150,7 @@ export function createReviewOutputSchema(opts: CreateReviewOutputSchemaOpts) {
         // the operator is reading.
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `URL not in allowlist: ${url} (expected host '${prRepo.host}' or a configured allowed_url_prefixes entry)`,
+          message: `${URL_ALLOWLIST_ISSUE_PREFIX} ${url} (expected host '${prRepo.host}' or a configured allowed_url_prefixes entry)`,
           path,
         });
       }

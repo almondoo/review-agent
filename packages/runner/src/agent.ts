@@ -5,6 +5,7 @@ import {
   createReviewOutputSchema,
   SchemaValidationError,
   SecretLeakAbortedError,
+  URL_ALLOWLIST_ISSUE_PREFIX,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { collectAutoFetchContext } from './auto-fetch.js';
@@ -58,7 +59,7 @@ function classifyAbort(err: SchemaValidationError): {
   reason: ReviewAbortReason;
   summary: string;
 } {
-  if (err.issues.some((i) => i.message.startsWith('URL not in allowlist:'))) {
+  if (err.issues.some((i) => i.message.startsWith(URL_ALLOWLIST_ISSUE_PREFIX))) {
     return { reason: 'url_allowlist', summary: URL_ALLOWLIST_ABORT_SUMMARY };
   }
   return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
