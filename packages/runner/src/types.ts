@@ -204,8 +204,11 @@ export type FinalizedComment = InlineComment & {
 };
 
 /**
- * Reasons the agent loop can give up on a review after schema
- * validation fails twice in a row (spec §7.3 #4 retry-then-abort).
+ * Reasons the agent loop can give up on a review without posting any
+ * inline comments. Two families share this discriminator:
+ *
+ * Schema-validation failures (spec §7.3 #4 retry-then-abort — the LLM
+ * produced output that twice failed the response schema):
  *
  * - `url_allowlist`: the second-attempt output contained at least one
  *   URL that the closed-world allowlist refine rejected (the most
@@ -213,12 +216,27 @@ export type FinalizedComment = InlineComment & {
  * - `schema_violation`: any other schema failure (broadcast mention,
  *   shell `curl http`, style-severity cap, etc.) survived the retry.
  *
+ * Cap-skip pre-LLM short-circuits (spec §10 — `.review-agent.yml`
+ * `reviews.max_files` / `reviews.max_diff_lines`). Both fire BEFORE
+ * the gitleaks pre-scan and the LLM call so an over-size PR costs
+ * nothing to refuse:
+ *
+ * - `max_files_exceeded`: the post-`path_filters` file count is
+ *   greater than `job.maxFiles`.
+ * - `max_diff_lines_exceeded`: the post-`path_filters` total `+`/`-`
+ *   line count is greater than `job.maxDiffLines`.
+ *
  * Surfaced on `RunnerResult.aborted.reason` so the caller (Action,
  * CLI) can pick a downstream behavior — at minimum, surface the
  * reason in the posted summary; eventually also gate state-comment
  * writes / cost reporting.
  */
-export const REVIEW_ABORT_REASONS = ['url_allowlist', 'schema_violation'] as const;
+export const REVIEW_ABORT_REASONS = [
+  'url_allowlist',
+  'schema_violation',
+  'max_files_exceeded',
+  'max_diff_lines_exceeded',
+] as const;
 export type ReviewAbortReason = (typeof REVIEW_ABORT_REASONS)[number];
 
 export type RunnerResult = {

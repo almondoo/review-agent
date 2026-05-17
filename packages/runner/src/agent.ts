@@ -11,6 +11,12 @@ import {
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { collectAutoFetchContext } from './auto-fetch.js';
 import {
+  applyPathFilters,
+  countDiffLines,
+  parseDiffByFile,
+  reassembleDiff,
+} from './diff-filter.js';
+import {
   applyRedactions,
   type GitleaksFinding,
   quickScanContent,
@@ -48,6 +54,62 @@ const URL_ALLOWLIST_ABORT_SUMMARY =
   'Review aborted: LLM produced output that violates the URL allowlist after one retry. See spec §7.3.';
 const SCHEMA_ABORT_SUMMARY =
   'Review aborted: LLM produced output that fails schema validation after one retry. See spec §7.3.';
+
+/**
+ * Operator-facing summary text for the two pre-LLM cap-skip cases
+ * (spec §10 `.review-agent.yml` `reviews.max_files` /
+ * `reviews.max_diff_lines`). Only numeric counts and operator-set
+ * limits are interpolated — no file paths, hunk contents, or URLs
+ * — so the resulting string is safe to post verbatim to a public
+ * PR comment without re-introducing prompt-injection or
+ * exfiltration surface (mirrors the audit / output-only-summary
+ * discipline pinned by spec §7.3 #4 and #87).
+ */
+function maxFilesSkipSummary(fileCount: number, cap: number): string {
+  return `Review skipped: PR exceeds the max_files cap (${fileCount} files > limit ${cap}). Adjust reviews.max_files in .review-agent.yml or reduce PR scope.`;
+}
+function maxDiffLinesSkipSummary(lineCount: number, cap: number): string {
+  return `Review skipped: PR exceeds the max_diff_lines cap (${lineCount} lines > limit ${cap}). Adjust reviews.max_diff_lines in .review-agent.yml or reduce PR scope.`;
+}
+
+/**
+ * Build the `RunnerResult` returned by the cap-skip short-circuits.
+ * The shape mirrors the schema-abort path (`comments: []` +
+ * `aborted.{reason, internalIssues}`) so existing callers
+ * (`postOrUpdate` in action / cli) need no branching to handle it.
+ *
+ * Cost / tokens / tool-calls are all zero by construction — the
+ * cap fires before the gitleaks pre-scan, before auto-fetch, and
+ * before any `provider.generateReview` call, so the cost-guard
+ * middleware never even runs. `reviewEvent` is hard-coded to
+ * `'COMMENT'` because zero kept comments cannot drive
+ * `REQUEST_CHANGES`.
+ *
+ * `internalIssues` is an empty list for cap-skips. The
+ * operator-facing reason already lives in `summary` (which is the
+ * only string that may be posted to a PR), and there are no raw
+ * Zod issues to carry through — the audit trail for cap-skip is
+ * the `reason` discriminator plus the counts already embedded in
+ * `summary`.
+ */
+function buildCapSkipResult(
+  provider: LlmProvider,
+  reason: ReviewAbortReason,
+  summary: string,
+): RunnerResult {
+  return {
+    comments: [],
+    summary,
+    costUsd: 0,
+    tokensUsed: { input: 0, output: 0 },
+    model: provider.model,
+    provider: provider.name,
+    droppedDuplicates: 0,
+    toolCalls: 0,
+    reviewEvent: 'COMMENT',
+    aborted: { reason, internalIssues: [] },
+  };
+}
 
 /**
  * Decide which abort path a `SchemaValidationError` belongs to. URL
@@ -107,7 +169,64 @@ export async function runReview(
   const scanContent =
     deps.scanContent ?? ((text: string) => quickScanContent(text, customRedactPatterns));
 
-  const diffFindings = [...scanContent(job.diffText)];
+  // Cap pipeline (spec §10) — runs BEFORE the gitleaks pre-scan and
+  // before the LLM call so an over-size PR costs nothing to refuse.
+  //
+  // Order of operations:
+  //   1. parseDiffByFile  — split job.diffText into per-file segments
+  //   2. applyPathFilters — drop files matching reviews.path_filters
+  //                         (exclude semantics, spec §10 L1435)
+  //   3. max_files cap    — skip if filtered.files.length > maxFiles
+  //   4. max_diff_lines   — skip if countDiffLines(filtered) > cap
+  //
+  // Caps fire BEFORE secret scanning. Rationale: an operator who
+  // configured `max_files: 50` is asking "don't even look at PRs
+  // bigger than this." Scanning a 5000-file PR for secrets, only to
+  // then skip the LLM call, would burn gitleaks CPU and run a
+  // `SecretLeakAbortedError` exit path that surfaces a finding the
+  // operator already opted out of acting on. The cap-skip path
+  // returns `aborted.reason = 'max_files_exceeded'` /
+  // `'max_diff_lines_exceeded'` instead — the operator sees the
+  // size signal, and the secret-scan budget is preserved for PRs
+  // that will actually go through the LLM. Test
+  // `runReview — reviews.{max_files,max_diff_lines} caps` pins
+  // both this priority and the cost-zero invariant.
+  //
+  // `applyPathFilters` returns the same reference when no file
+  // matched any filter (or filters is empty). We use that as the
+  // "is the diff payload unchanged?" check: when nothing was
+  // dropped, the downstream code paths see `job.diffText` and
+  // `job.changedPaths` exactly as upstream sent them. Only when a
+  // file was actually filtered out do we reassemble the diff (so
+  // the LLM and the diff pre-scan never see the excluded content)
+  // and shrink `changedPaths` (so `collectAutoFetchContext` does
+  // not pull companion files for paths the operator excluded —
+  // path_filters is a "ignore this path tree entirely" lever, not
+  // a "still fetch siblings but hide the change" one).
+  const parsedDiff = parseDiffByFile(job.diffText);
+  const filteredDiff = applyPathFilters(parsedDiff, job.pathFilters);
+  if (filteredDiff.files.length > job.maxFiles) {
+    return buildCapSkipResult(
+      provider,
+      'max_files_exceeded',
+      maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
+    );
+  }
+  const diffLineCount = countDiffLines(filteredDiff);
+  if (diffLineCount > job.maxDiffLines) {
+    return buildCapSkipResult(
+      provider,
+      'max_diff_lines_exceeded',
+      maxDiffLinesSkipSummary(diffLineCount, job.maxDiffLines),
+    );
+  }
+  const filtersApplied = filteredDiff !== parsedDiff;
+  const effectiveDiffText = filtersApplied ? reassembleDiff(filteredDiff) : job.diffText;
+  const effectiveChangedPaths = filtersApplied
+    ? filteredDiff.files.map((f) => f.path)
+    : (job.changedPaths ?? []);
+
+  const diffFindings = [...scanContent(effectiveDiffText)];
   const diffDecision = shouldAbortReview(diffFindings);
   if (diffDecision.abort) {
     throw new SecretLeakAbortedError(
@@ -159,7 +278,7 @@ export async function runReview(
   // original #70 commit as I-1; the fix moves the rendering into
   // the wrapper.
   const autoFetch = await collectAutoFetchContext({
-    changedPaths: job.changedPaths ?? [],
+    changedPaths: effectiveChangedPaths,
     pathInstructions: job.pathInstructions,
     workspaceDir: job.workspaceDir,
     // Same compiled `denyPatterns` instance the dispatcher uses, so
@@ -173,7 +292,7 @@ export async function runReview(
     hitBudgetLimit: autoFetch.hitBudgetLimit,
     totalBytes: autoFetch.totalBytes,
   });
-  const diffPayload = `${wrappedMetadata}\n\n${job.diffText}`;
+  const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
 
   const baseInput: ReviewInput = {
     systemPrompt,

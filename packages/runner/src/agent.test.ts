@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
 import { CUSTOM_RULE_ID_PREFIX, type GitleaksFinding } from './gitleaks.js';
 import { MAX_TOOL_CALLS } from './tools.js';
-import type { ReviewJob } from './types.js';
+import { REVIEW_ABORT_REASONS, type ReviewJob } from './types.js';
 
 const baseJob: ReviewJob = {
   jobId: 'job-1',
@@ -770,6 +770,199 @@ describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () 
       // first because `quickScanContent` scans built-ins first).
       ruleIds: ['aws-access-key', `${CUSTOM_RULE_ID_PREFIX}0`],
     });
+  });
+});
+
+describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#88)', () => {
+  // The cap pipeline runs BEFORE the gitleaks pre-scan and BEFORE the
+  // LLM call, so an over-size PR costs nothing to refuse. Tests pin:
+  //   1. each cap fires independently with a graceful summary
+  //   2. path_filters runs first and shrinks the file set the caps see
+  //   3. cap-skip beats the secret-scan abort (cost-guard alignment)
+  //   4. cap-skip suppresses provider.generateReview entirely
+  //   5. default caps (50 / 3000) let small diffs through untouched
+
+  // Helper: build a `--- ${path}\n${patch}` joined-by-`\n` diff payload
+  // that matches what action / cli emit, so the parser actually
+  // recognizes files in the cap pipeline.
+  function buildDiff(
+    files: ReadonlyArray<{ readonly path: string; readonly patch: string }>,
+  ): string {
+    return files.map((f) => `--- ${f.path}\n${f.patch}`).join('\n');
+  }
+
+  // Standard single-add hunk used as the per-file patch. Counts 1
+  // `+`-line toward `countDiffLines`.
+  const TINY_ADD = '@@ -1 +1 @@\n+line';
+
+  it('skips with `max_files_exceeded` when filtered file count exceeds maxFiles', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, maxFiles: 2 }, provider);
+    expect(result.aborted?.reason).toBe('max_files_exceeded');
+    expect(result.summary).toBe(
+      'Review skipped: PR exceeds the max_files cap (3 files > limit 2). Adjust reviews.max_files in .review-agent.yml or reduce PR scope.',
+    );
+    expect(result.comments).toEqual([]);
+    expect(result.costUsd).toBe(0);
+    expect(result.tokensUsed).toEqual({ input: 0, output: 0 });
+    expect(result.toolCalls).toBe(0);
+    expect(result.reviewEvent).toBe('COMMENT');
+    expect(generateReview).not.toHaveBeenCalled();
+  });
+
+  it('skips with `max_diff_lines_exceeded` when total +/- lines exceed maxDiffLines', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    // Four `+` lines spread across two files — `+a\n+b\n+c\n+d`
+    // counts as 4 against the cap.
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: '@@ -1 +1 @@\n+a\n+b' },
+      { path: 'src/b.ts', patch: '@@ -1 +1 @@\n+c\n+d' },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, maxDiffLines: 3 }, provider);
+    expect(result.aborted?.reason).toBe('max_diff_lines_exceeded');
+    expect(result.summary).toBe(
+      'Review skipped: PR exceeds the max_diff_lines cap (4 lines > limit 3). Adjust reviews.max_diff_lines in .review-agent.yml or reduce PR scope.',
+    );
+    expect(generateReview).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when the diff is within both caps', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([{ path: 'src/a.ts', patch: TINY_ADD }]);
+    const result = await runReview({ ...baseJob, diffText }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies path_filters BEFORE checking max_files (excluded files do not count)', async () => {
+    // 3 files in the diff, but `vendor/**` filters one out. Cap is 2;
+    // post-filter count is 2 → review proceeds.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'vendor/lib.js', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      { ...baseJob, diffText, pathFilters: ['vendor/**'], maxFiles: 2 },
+      provider,
+    );
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies path_filters BEFORE checking max_diff_lines (excluded lines do not count)', async () => {
+    // The vendor file contributes 4 + lines; src/a.ts contributes 1.
+    // Cap is 3. Without the filter, total = 5 → skip. With the filter,
+    // total = 1 → proceed.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'vendor/lib.js', patch: '@@ -1 +1 @@\n+a\n+b\n+c\n+d' },
+    ]);
+    const result = await runReview(
+      { ...baseJob, diffText, pathFilters: ['vendor/**'], maxDiffLines: 3 },
+      provider,
+    );
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('feeds the LLM the filtered diff (excluded files do not appear in diffText)', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'vendor/lib.js', patch: '@@ -1 +1 @@\n+SECRET_TOKEN_marker' },
+    ]);
+    await runReview({ ...baseJob, diffText, pathFilters: ['vendor/**'] }, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0];
+    expect(callArgs?.diffText).toContain('src/a.ts');
+    expect(callArgs?.diffText).not.toContain('vendor/lib.js');
+    expect(callArgs?.diffText).not.toContain('SECRET_TOKEN_marker');
+  });
+
+  it('checks max_files BEFORE max_diff_lines (file-count over-cap takes precedence)', async () => {
+    // Both caps would fire. The order is documented: max_files first,
+    // then max_diff_lines. Pinning here so a future refactor cannot
+    // silently swap the priority and emit a confusing summary.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: '@@ -1 +1 @@\n+a\n+b\n+c' },
+      { path: 'src/b.ts', patch: '@@ -1 +1 @@\n+d\n+e\n+f' },
+    ]);
+    const result = await runReview(
+      { ...baseJob, diffText, maxFiles: 1, maxDiffLines: 1 },
+      provider,
+    );
+    expect(result.aborted?.reason).toBe('max_files_exceeded');
+  });
+
+  it('cap-skip BEATS the gitleaks diff pre-scan (cost-guard alignment)', async () => {
+    // The diff contains an AWS-key shape that the built-in scanner
+    // would normally surface as a `SecretLeakAbortedError`. Because
+    // the cap pipeline runs first and the file count exceeds
+    // `maxFiles`, the scan never runs and the result is a graceful
+    // skip — NOT a thrown error. Operators get a single,
+    // actionable signal ("PR too big") instead of a stack trace
+    // for a finding they opted out of acting on by setting the cap.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: '@@ -1 +1 @@\n+const k = "AKIAIOSFODNN7EXAMPLE";' },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...baseJob, diffText, maxFiles: 2 }, provider);
+    expect(result.aborted?.reason).toBe('max_files_exceeded');
+    expect(generateReview).not.toHaveBeenCalled();
+  });
+
+  it('default caps (50 / 3000) let an ordinary small diff through', async () => {
+    // baseJob's T1 fixture sets maxFiles=50 and maxDiffLines=3000.
+    // A single-file 1-line diff is well within both caps — pinned
+    // here so a future tightening of the defaults is visible.
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider);
+    expect(result.aborted).toBeUndefined();
+  });
+
+  it('preserves diffText untouched when no filter matches (no needless reassembly)', async () => {
+    // Round-trip robustness: when path_filters is configured but
+    // matches nothing in this PR, the diff payload sent to the LLM
+    // must be byte-identical to the original. The `filtered ===
+    // parsed` short-circuit in `applyPathFilters` is what makes that
+    // possible; this test pins it against a fixture whose
+    // `parseDiffByFile -> reassembleDiff` round-trip would lose the
+    // trailing-newline ambiguity that some diff payloads carry.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = `${buildDiff([{ path: 'src/a.ts', patch: TINY_ADD }])}\n`; // trailing \n
+    await runReview({ ...baseJob, diffText, pathFilters: ['nothing-matches/**'] }, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0];
+    expect(callArgs?.diffText).toContain(diffText);
+  });
+
+  it('exposes `max_files_exceeded` / `max_diff_lines_exceeded` in REVIEW_ABORT_REASONS', () => {
+    // The discriminator is part of the public API surface
+    // (`RunnerResult.aborted.reason`); a typed call site like the
+    // action's audit log uses the const tuple to exhaustively
+    // switch. Pin both new members so a future refactor that
+    // re-orders or renames them fails this test rather than
+    // silently breaking downstream consumers.
+    expect(REVIEW_ABORT_REASONS).toContain('max_files_exceeded');
+    expect(REVIEW_ABORT_REASONS).toContain('max_diff_lines_exceeded');
   });
 });
 
