@@ -12,6 +12,7 @@ import {
   SUMMARY_MAX,
 } from './limits.js';
 import { CATEGORIES, CONFIDENCES, SEVERITIES, SIDES } from './review.js';
+import { extractUrls, isPrefixAllowed, isPrOwnRepoUrl } from './url.js';
 
 const NO_NUL = /^[^\0]+$/;
 const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
@@ -65,12 +66,80 @@ export const InlineCommentSchema = z
     },
   );
 
-export const ReviewOutputSchema = z
-  .object({
-    comments: z.array(InlineCommentSchema).max(COMMENTS_MAX),
-    summary: z.string().min(1).max(SUMMARY_MAX),
-  })
-  .strict();
+/**
+ * Inputs that {@link createReviewOutputSchema} bakes into its URL
+ * allowlist refinement. Both fields are required so callers commit
+ * to a closed-world policy: an empty `allowedUrlPrefixes` permits
+ * only links into the PR's own repository (spec §7.3 #4).
+ */
+export type CreateReviewOutputSchemaOpts = {
+  /**
+   * Whitelisted URL prefixes from `.review-agent.yml`
+   * `privacy.allowed_url_prefixes`. Matched with `startsWith` on
+   * each extracted URL.
+   */
+  allowedUrlPrefixes: readonly string[];
+  /**
+   * The PR's own repository. Any URL whose host matches `host`
+   * (case-insensitive) and whose path begins with `/<owner>/<repo>`
+   * is implicitly allowed. The host is required (not inferred) so
+   * GHES installations work without code changes — callers derive
+   * it from `GITHUB_SERVER_URL` (Action) or the installation host
+   * (webhook server).
+   */
+  prRepo: { host: string; owner: string; repo: string };
+};
+
+/**
+ * Build a `ReviewOutputSchema` instance bound to a specific PR's
+ * URL allowlist. The returned schema is the union of:
+ *
+ * - The base shape (`comments: InlineComment[]`, `summary: string`).
+ * - The InlineComment-level refines (broadcast mentions, shell
+ *   `curl http`, style-severity cap) which are unaware of allowlist
+ *   context and therefore live on `InlineCommentSchema`.
+ * - A factory-level `superRefine` that scans every comment `body`
+ *   and the `summary` for http(s) URLs and rejects any URL that
+ *   isn't (a) under the PR's own repo or (b) prefixed by an entry
+ *   in `allowedUrlPrefixes`. Each disallowed URL produces its own
+ *   issue so callers see the full list, not just the first hit.
+ *
+ * Per spec §7.3 #4, this URL allowlist is the hard backstop against
+ * the LLM exfiltrating PR content through prompt injection — keep
+ * it factory-bound rather than module-global so the policy travels
+ * with the request.
+ */
+export function createReviewOutputSchema(opts: CreateReviewOutputSchemaOpts) {
+  const base = z
+    .object({
+      comments: z.array(InlineCommentSchema).max(COMMENTS_MAX),
+      summary: z.string().min(1).max(SUMMARY_MAX),
+    })
+    .strict();
+  // Snapshot policy inputs at construction time. Callers reuse a
+  // schema across multiple parses for one PR, so we materialize a
+  // mutable array (the helper signature expects `string[]`) and
+  // pull `owner` / `repo` out of the options object once.
+  const allowedPrefixes = [...opts.allowedUrlPrefixes];
+  const prRepo = opts.prRepo;
+  return base.superRefine((output, ctx) => {
+    const reportBadUrls = (text: string, path: (string | number)[]) => {
+      for (const url of extractUrls(text)) {
+        if (isPrOwnRepoUrl(url, prRepo)) continue;
+        if (isPrefixAllowed(url, allowedPrefixes)) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `URL not in allowlist: ${url}`,
+          path,
+        });
+      }
+    };
+    output.comments.forEach((comment, i) => {
+      reportBadUrls(comment.body, ['comments', i, 'body']);
+    });
+    reportBadUrls(output.summary, ['summary']);
+  });
+}
 
 export const ReviewStateSchema = z
   .object({
@@ -86,5 +155,8 @@ export const ReviewStateSchema = z
   .strict();
 
 export type InlineCommentInput = z.input<typeof InlineCommentSchema>;
-export type ReviewOutputInput = z.input<typeof ReviewOutputSchema>;
+// `superRefine` doesn't change the input shape, so the input type is
+// stable across any `opts` choice. Tying it to the factory return
+// type means callers never need to track the inner ZodObject by hand.
+export type ReviewOutputInput = z.input<ReturnType<typeof createReviewOutputSchema>>;
 export type ReviewStateInput = z.input<typeof ReviewStateSchema>;

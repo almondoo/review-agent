@@ -120,11 +120,12 @@ export {
   type WorkspaceStrategy,
 } from './review.js';
 export {
+  type CreateReviewOutputSchemaOpts,
+  createReviewOutputSchema,
   type InlineCommentInput,
   InlineCommentSchema,
   REVIEW_STATE_SCHEMA_VERSION,
   type ReviewOutputInput,
-  ReviewOutputSchema,
   type ReviewStateInput,
   ReviewStateSchema,
 } from './schemas.js';
