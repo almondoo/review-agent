@@ -17,7 +17,7 @@ const baseJob: ReviewJob = {
   skills: [],
   language: 'en-US',
   costCapUsd: 2.0,
-  privacy: { allowedUrlPrefixes: [] },
+  privacy: { allowedUrlPrefixes: [], denyPaths: [] },
   prRepo: { host: 'github.com', owner: 'test-owner', repo: 'test-repo' },
 };
 
@@ -244,7 +244,7 @@ describe('runReview — URL allowlist retry / graceful abort (spec §7.3 #4)', (
     const provider = makeProvider({ generateReview });
     const job: ReviewJob = {
       ...baseJob,
-      privacy: { allowedUrlPrefixes: ['https://docs.example.com/'] },
+      privacy: { allowedUrlPrefixes: ['https://docs.example.com/'], denyPaths: [] },
     };
     const result = await runReview(job, provider);
     expect(generateReview).toHaveBeenCalledTimes(1);

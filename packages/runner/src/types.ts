@@ -99,10 +99,16 @@ export type ReviewJob = {
   /**
    * Privacy / data-flow policy for this job. Nested rather than
    * inlined so future fields from `.review-agent.yml` `privacy.*`
-   * (e.g. `deny_paths`, `redact_patterns`) can be threaded in
-   * without another schema migration. The current single field is
-   * the URL allowlist consumed by `createReviewOutputSchema`
-   * (spec §7.3 #4 / §7.7).
+   * (e.g. `redact_patterns`) can be threaded in without another
+   * schema migration. Current fields:
+   *
+   *   - `allowedUrlPrefixes`: closed-world URL allowlist consumed
+   *     by `createReviewOutputSchema` (spec §7.3 #4 / §7.7).
+   *   - `denyPaths`: operator-supplied glob deny list that the
+   *     runner unions with the built-in `DENY_PATTERNS` and applies
+   *     to every `read_file` / `glob` / `grep` dispatch (spec §7.4
+   *     "extend, not relax"). Both fields are required so the
+   *     closed-world default is guaranteed at the type level.
    */
   readonly privacy: {
     /**
@@ -113,6 +119,17 @@ export type ReviewJob = {
      * into the PR's own repo (see `prRepo`) are permitted.
      */
     readonly allowedUrlPrefixes: ReadonlyArray<string>;
+    /**
+     * Operator-supplied glob patterns from `.review-agent.yml`
+     * `privacy.deny_paths` (and any org-level config merged in by
+     * `loadConfigWithOrgFallback`). The runner compiles each entry
+     * via `globToRegExp` and **unions** the result with the
+     * built-in `DENY_PATTERNS` before every tool dispatch —
+     * operators can extend the deny list but never shrink it
+     * (spec §7.4 "extend, not relax"). An empty list keeps only
+     * the built-in defaults active.
+     */
+    readonly denyPaths: ReadonlyArray<string>;
   };
   /**
    * The PR's own repository, used by the URL allowlist refine to

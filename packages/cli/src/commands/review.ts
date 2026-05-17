@@ -115,7 +115,10 @@ export async function runReviewCommand(
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
       minConfidence: config.reviews.min_confidence,
       requestChangesOn: config.reviews.request_changes_on,
-      privacy: { allowedUrlPrefixes: config.privacy.allowed_url_prefixes },
+      privacy: {
+        allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
+        denyPaths: config.privacy.deny_paths,
+      },
       prRepo: resolvePrRepo(platform, ref, opts.env),
     },
     provider,

@@ -160,7 +160,10 @@ export async function runAction(
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
     requestChangesOn: config.reviews.request_changes_on,
-    privacy: { allowedUrlPrefixes: config.privacy.allowed_url_prefixes },
+    privacy: {
+      allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
+      denyPaths: config.privacy.deny_paths,
+    },
     prRepo: {
       host: inferGithubHost(env),
       owner: ctx.ref.owner,
