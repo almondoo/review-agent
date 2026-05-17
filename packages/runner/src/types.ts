@@ -133,6 +133,24 @@ export type FinalizedComment = InlineComment & {
   readonly title?: string;
 };
 
+/**
+ * Reasons the agent loop can give up on a review after schema
+ * validation fails twice in a row (spec §7.3 #4 retry-then-abort).
+ *
+ * - `url_allowlist`: the second-attempt output contained at least one
+ *   URL that the closed-world allowlist refine rejected (the most
+ *   common case for prompt-injected output).
+ * - `schema_violation`: any other schema failure (broadcast mention,
+ *   shell `curl http`, style-severity cap, etc.) survived the retry.
+ *
+ * Surfaced on `RunnerResult.aborted.reason` so the caller (Action,
+ * CLI) can pick a downstream behavior — at minimum, surface the
+ * reason in the posted summary; eventually also gate state-comment
+ * writes / cost reporting.
+ */
+export const REVIEW_ABORT_REASONS = ['url_allowlist', 'schema_violation'] as const;
+export type ReviewAbortReason = (typeof REVIEW_ABORT_REASONS)[number];
+
 export type RunnerResult = {
   readonly comments: ReadonlyArray<InlineComment>;
   readonly summary: string;
@@ -157,6 +175,32 @@ export type RunnerResult = {
    * underlying `pulls.createReview` event.
    */
   readonly reviewEvent: ReviewEvent;
+  /**
+   * Set when the agent loop gracefully aborted (spec §7.3 #4): the
+   * LLM produced output that failed the response schema twice — once
+   * on the first attempt and again on the retry that injects the
+   * corrective prompt. `comments` will be empty and `summary` will
+   * carry the operator-facing abort notice. Callers that need to
+   * distinguish "no findings" from "we gave up" should check this
+   * field rather than `comments.length === 0`.
+   *
+   * `internalIssues` carries the raw Zod issue list from the second
+   * failure for **internal use only** (audit log, telemetry, server
+   * stdout, debugger). It MUST NOT be echoed into any user-facing
+   * channel (PR comment, summary post, public CLI stdout) because
+   * the rejected URL message can include attacker-injected secrets
+   * — e.g. `?token=...` query strings that the URL allowlist
+   * specifically blocked from being clickable, and posting them
+   * verbatim in a public comment would reopen the exfiltration
+   * channel. The `summary` field is the only string safe to publish.
+   */
+  readonly aborted?: {
+    readonly reason: ReviewAbortReason;
+    readonly internalIssues: ReadonlyArray<{
+      readonly path: string;
+      readonly message: string;
+    }>;
+  };
 };
 
 export type RunReviewDeps = {

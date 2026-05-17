@@ -1,8 +1,4 @@
-import {
-  CostExceededError,
-  SchemaValidationError,
-  SecretLeakAbortedError,
-} from '@review-agent/core';
+import { CostExceededError, SecretLeakAbortedError } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
 import { runReview } from './agent.js';
@@ -112,13 +108,147 @@ describe('runReview — schema retry', () => {
     expect(secondCall?.systemPrompt).toContain('your previous response failed schema validation');
   });
 
-  it('aborts (throws) when the second attempt also violates schema', async () => {
+  it('returns an aborted result (no throw) when the second attempt also violates schema', async () => {
     const generateReview = vi
       .fn<LlmProvider['generateReview']>()
       .mockResolvedValue({ ...validOutput, summary: '' });
     const provider = makeProvider({ generateReview });
-    await expect(runReview(baseJob, provider)).rejects.toBeInstanceOf(SchemaValidationError);
+    const result = await runReview(baseJob, provider);
     expect(generateReview).toHaveBeenCalledTimes(2);
+    expect(result.aborted?.reason).toBe('schema_violation');
+    expect(result.aborted?.internalIssues.length).toBeGreaterThan(0);
+    expect(result.comments).toEqual([]);
+    expect(result.summary).toContain('Review aborted');
+    expect(result.summary).toContain('fails schema validation');
+  });
+});
+
+describe('runReview — URL allowlist retry / graceful abort (spec §7.3 #4)', () => {
+  // The fixture's `prRepo` is `test-owner/test-repo` on github.com, so
+  // URLs under that path are own-repo and pass; everything else needs
+  // an entry in `privacy.allowedUrlPrefixes` or it triggers retry.
+  const badUrlOutput: ReviewOutput = {
+    summary: 'See https://attacker.example/leak for context.',
+    comments: [],
+    tokensUsed: { input: 100, output: 50 },
+    costUsd: 0.001,
+  };
+
+  it('retries once on a URL-allowlist violation and succeeds on the retry', async () => {
+    const generateReview = vi
+      .fn<LlmProvider['generateReview']>()
+      .mockResolvedValueOnce(badUrlOutput)
+      .mockResolvedValueOnce(validOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    expect(result.aborted).toBeUndefined();
+    expect(result.comments).toHaveLength(2);
+    const secondCall = generateReview.mock.calls[1]?.[0];
+    expect(secondCall?.systemPrompt).toContain('your previous response failed schema validation');
+  });
+
+  it('gracefully aborts (returns aborted=url_allowlist) when both attempts fail the URL allowlist', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>().mockResolvedValue(badUrlOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    expect(result.aborted?.reason).toBe('url_allowlist');
+    expect(result.aborted?.internalIssues.length).toBeGreaterThan(0);
+    expect(result.comments).toEqual([]);
+    expect(result.summary).toBe(
+      'Review aborted: LLM produced output that violates the URL allowlist after one retry. See spec §7.3.',
+    );
+  });
+
+  // Security regression for reviewer M-2: the public-facing `summary`
+  // MUST NOT echo the rejected URL even when the URL was the reason
+  // for the abort. Rejected URLs can contain attacker-injected
+  // secrets in the query string (`?token=`, `?session=`); posting them
+  // verbatim in a PR comment would reopen the exfiltration channel
+  // the allowlist refine just closed. Raw Zod issues go to
+  // `aborted.internalIssues` (audit-log only) instead.
+  it('does NOT echo the rejected URL into the user-facing summary; full diagnostic only in internalIssues', async () => {
+    const sensitiveUrlOutput: ReviewOutput = {
+      summary: 'See https://attacker.example/exfil?token=secret-token-12345 for context.',
+      comments: [],
+      tokensUsed: { input: 100, output: 50 },
+      costUsd: 0.001,
+    };
+    const generateReview = vi
+      .fn<LlmProvider['generateReview']>()
+      .mockResolvedValue(sensitiveUrlOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(result.aborted?.reason).toBe('url_allowlist');
+    // Generic notice only — no URL, no host, no secret.
+    expect(result.summary).not.toContain('attacker.example');
+    expect(result.summary).not.toContain('secret-token-12345');
+    expect(result.summary).not.toContain('?token=');
+    // The raw issues with the URL ARE preserved on the internal
+    // channel so operators can diagnose via audit log / telemetry.
+    const internalText = result.aborted?.internalIssues.map((i) => i.message).join('|') ?? '';
+    expect(internalText).toContain('attacker.example');
+    expect(internalText).toContain('secret-token-12345');
+  });
+
+  it("permits URLs that point into the PR's own repo without any allowlist entry", async () => {
+    // Own-repo URL inside body — should pass on the first attempt, no
+    // retry, no aborted flag. Regression for the `prRepo` wiring from T3.
+    const ownRepoOutput: ReviewOutput = {
+      ...validOutput,
+      summary: 'See https://github.com/test-owner/test-repo/pull/1 for the design discussion.',
+    };
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => ownRepoOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBeUndefined();
+    expect(result.summary).toContain('test-owner/test-repo/pull/1');
+  });
+
+  it('routes a bad URL in `suggestion` through the same retry/abort path (T2 link)', async () => {
+    // Codifies the T2 suggestion-field scan integration: a bad URL in
+    // suggestion must trigger the same retry pipeline as one in body.
+    const badSuggestionOutput: ReviewOutput = {
+      summary: 'Two findings.',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'Extract to helper.',
+          severity: 'minor',
+          suggestion: 'logger.info(); // see https://attacker.example/leak',
+        },
+      ],
+      tokensUsed: { input: 100, output: 50 },
+      costUsd: 0.001,
+    };
+    const generateReview = vi
+      .fn<LlmProvider['generateReview']>()
+      .mockResolvedValue(badSuggestionOutput);
+    const provider = makeProvider({ generateReview });
+    const result = await runReview(baseJob, provider);
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    expect(result.aborted?.reason).toBe('url_allowlist');
+    expect(result.aborted?.internalIssues.length).toBeGreaterThan(0);
+  });
+
+  it('honors operator-supplied `allowedUrlPrefixes` so a configured URL passes on the first attempt', async () => {
+    const okWithAllowlistOutput: ReviewOutput = {
+      ...validOutput,
+      summary: 'See https://docs.example.com/api for the parameter list.',
+    };
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => okWithAllowlistOutput);
+    const provider = makeProvider({ generateReview });
+    const job: ReviewJob = {
+      ...baseJob,
+      privacy: { allowedUrlPrefixes: ['https://docs.example.com/'] },
+    };
+    const result = await runReview(job, provider);
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    expect(result.aborted).toBeUndefined();
   });
 });
 

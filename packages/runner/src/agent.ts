@@ -2,7 +2,7 @@ import {
   CONFIDENCES,
   type Confidence,
   computeReviewEvent,
-  ReviewOutputSchema,
+  createReviewOutputSchema,
   SchemaValidationError,
   SecretLeakAbortedError,
 } from '@review-agent/core';
@@ -23,10 +23,46 @@ import {
 import { composeSystemPrompt } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
-import type { Middleware, MiddlewareCtx, ReviewJob, RunnerResult, RunReviewDeps } from './types.js';
+import type {
+  Middleware,
+  MiddlewareCtx,
+  ReviewAbortReason,
+  ReviewJob,
+  RunnerResult,
+  RunReviewDeps,
+} from './types.js';
 
 const RETRY_PROMPT_SUFFIX =
   '\n\nIMPORTANT: your previous response failed schema validation. Produce strictly valid output that matches the configured schema.';
+
+/**
+ * Operator-facing summary text for the two retry-then-abort cases
+ * (spec §7.3 #4). English is hard-coded per CLAUDE.md "internal
+ * prompts / system-facing strings are always English" rule; the
+ * post-translation language-aware summary is the caller's
+ * responsibility once a feature exists for it.
+ */
+const URL_ALLOWLIST_ABORT_SUMMARY =
+  'Review aborted: LLM produced output that violates the URL allowlist after one retry. See spec §7.3.';
+const SCHEMA_ABORT_SUMMARY =
+  'Review aborted: LLM produced output that fails schema validation after one retry. See spec §7.3.';
+
+/**
+ * Decide which abort path a `SchemaValidationError` belongs to. URL
+ * allowlist failures are diagnostically distinct (operators want to
+ * see "your model is leaking links" vs. "your model is breaking
+ * shape") so the summary text and the `aborted.reason` discriminator
+ * branch on the issue message prefix produced by `schemas.ts`.
+ */
+function classifyAbort(err: SchemaValidationError): {
+  reason: ReviewAbortReason;
+  summary: string;
+} {
+  if (err.issues.some((i) => i.message.startsWith('URL not in allowlist:'))) {
+    return { reason: 'url_allowlist', summary: URL_ALLOWLIST_ABORT_SUMMARY };
+  }
+  return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
+}
 
 export async function runReview(
   job: ReviewJob,
@@ -129,11 +165,19 @@ export async function runReview(
     createCostGuard({ state: costState }),
   ];
 
+  // Build the per-job factory schema once and reuse for both the
+  // first attempt and the retry. `prRepo` / `privacy.allowedUrlPrefixes`
+  // are wired by T3 through ReviewJob; no env lookup happens here.
+  const outputSchema = createReviewOutputSchema({
+    allowedUrlPrefixes: job.privacy.allowedUrlPrefixes,
+    prRepo: job.prRepo,
+  });
+
   const ctx: MiddlewareCtx = { job, input: baseInput, provider };
   const main = async (): Promise<ReviewOutput> => {
     try {
       const out = await provider.generateReview(ctx.input);
-      validateOutput(out);
+      validateOutput(outputSchema, out);
       return out;
     } catch (err) {
       if (!(err instanceof SchemaValidationError)) throw err;
@@ -141,12 +185,51 @@ export async function runReview(
         ...ctx.input,
         systemPrompt: ctx.input.systemPrompt + RETRY_PROMPT_SUFFIX,
       });
-      validateOutput(retried);
+      validateOutput(outputSchema, retried);
       return retried;
     }
   };
 
-  const result = await compose(middlewares, ctx, main);
+  // Graceful abort path (spec §7.3 #4): when the second attempt also
+  // fails schema validation we DO NOT throw — surfacing the abort as
+  // an exception would crash the Action / CLI and leave the PR
+  // without any signal. Instead we collapse to an empty-comments
+  // RunnerResult whose `summary` is the operator-facing notice and
+  // whose `aborted.reason` discriminates URL allowlist vs other
+  // schema failures. Cost accounting is preserved (the cost-guard
+  // middleware has already accumulated both attempts into
+  // `costState`).
+  let result: ReviewOutput;
+  try {
+    result = await compose(middlewares, ctx, main);
+  } catch (err) {
+    if (err instanceof SchemaValidationError) {
+      const { reason, summary } = classifyAbort(err);
+      return {
+        comments: [],
+        // The summary is the ONLY string that will reach a public
+        // surface (PR comment via vcs.postReview). It's a generic
+        // notice with no URL substring — see `classifyAbort` and the
+        // `*_ABORT_SUMMARY` constants. The raw Zod issues (which
+        // contain the rejected URL, potentially with attacker-
+        // injected secrets in the query string) go on
+        // `aborted.internalIssues` strictly for audit / telemetry.
+        summary,
+        costUsd: costState.totalCostUsd,
+        tokensUsed: { input: 0, output: 0 },
+        model: provider.model,
+        provider: provider.name,
+        droppedDuplicates: 0,
+        toolCalls: toolCallCounter,
+        reviewEvent: 'COMMENT',
+        aborted: {
+          reason,
+          internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
+        },
+      };
+    }
+    throw err;
+  }
   const dedup = dedupComments(result, { previousState: job.previousState });
 
   // Apply the operator-configured confidence floor *after* dedup so the
@@ -216,8 +299,11 @@ function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<
   return [...seen];
 }
 
-function validateOutput(out: ReviewOutput): void {
-  const parsed = ReviewOutputSchema.safeParse({
+function validateOutput(
+  schema: ReturnType<typeof createReviewOutputSchema>,
+  out: ReviewOutput,
+): void {
+  const parsed = schema.safeParse({
     summary: out.summary,
     comments: out.comments.map((c) => ({
       path: c.path,
