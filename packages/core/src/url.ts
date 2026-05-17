@@ -14,10 +14,11 @@
  * 2. {@link isPrefixAllowed} answers whether a URL begins with any of
  *    the configured `privacy.allowed_url_prefixes` entries.
  * 3. {@link isPrOwnRepoUrl} answers whether a URL points into the PR's
- *    own `<owner>/<repo>` path, regardless of host. Hosts are ignored
- *    so the same predicate works for github.com and GitHub Enterprise
- *    Server installations without requiring callers to enumerate
- *    GHES hostnames.
+ *    own `<owner>/<repo>` path on the expected host. The host must
+ *    match exactly (case-insensitive); callers pass `github.com` for
+ *    SaaS or the GHES hostname for Enterprise. A previous host-agnostic
+ *    design would have permitted `https://evil/<owner>/<repo>/...` to
+ *    bypass the allowlist — see the inline note on `isPrOwnRepoUrl`.
  */
 
 // The URL deny set inside the character class excludes whitespace,
@@ -100,6 +101,11 @@ export function isPrefixAllowed(url: string, allowedPrefixes: string[]): boolean
  * Returns false on inputs that aren't parseable as a URL or whose
  * scheme isn't http/https — anything else would be a category mismatch
  * for "a link into this repo's web UI".
+ *
+ * @param expected.host - hostname (case-insensitive). Include the port
+ *   for non-default ports (e.g. `'ghe.example.com:8443'`). Recommended
+ *   derivation: `new URL(pr.html_url).host` so the port is included
+ *   automatically when present.
  */
 export function isPrOwnRepoUrl(
   url: string,
