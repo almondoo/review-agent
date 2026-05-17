@@ -126,10 +126,10 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     },
     cost: { ...orgConfig.cost, ...repoConfig.cost },
     privacy: {
-      redact_patterns: [
+      redact_patterns: dedup([
         ...orgConfig.privacy.redact_patterns,
         ...repoConfig.privacy.redact_patterns,
-      ],
+      ]),
       deny_paths: dedup([...orgConfig.privacy.deny_paths, ...repoConfig.privacy.deny_paths]),
       allowed_url_prefixes: dedup([
         ...orgConfig.privacy.allowed_url_prefixes,

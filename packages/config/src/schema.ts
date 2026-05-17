@@ -1,6 +1,7 @@
 import {
   CONFIDENCES,
   isValidGlob,
+  isValidRegex,
   REQUEST_CHANGES_THRESHOLDS,
   WORKSPACE_STRATEGIES,
 } from '@review-agent/core';
@@ -108,7 +109,21 @@ const CostSchema = z
 
 const PrivacySchema = z
   .object({
-    redact_patterns: z.array(z.string().min(1)).default([]),
+    // Each entry is a regular-expression pattern lifted into a
+    // gitleaks `[[rules]]` custom-rule block by the runner (spec
+    // §7.4) and also applied in-process by `quickScanContent` when
+    // gitleaks itself is unavailable. `.refine(isValidRegex)` rejects
+    // empty strings (also caught by `.min(1)`), NUL-byte payloads,
+    // and patterns `new RegExp` cannot compile (unbalanced bracket,
+    // lone quantifier, etc.) at YAML load time so the operator sees
+    // the misconfiguration immediately rather than at scan time.
+    redact_patterns: z
+      .array(
+        z.string().min(1).refine(isValidRegex, {
+          message: 'redact_patterns entry must be a valid regular expression',
+        }),
+      )
+      .default([]),
     // Each entry is a glob pattern compiled by `globToRegExp` at
     // runtime (`packages/runner/src/agent.ts`) and unioned with the
     // built-in `DENY_PATTERNS` in the tool dispatcher (spec §7.4

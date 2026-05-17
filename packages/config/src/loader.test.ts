@@ -98,6 +98,27 @@ describe('loadConfigFromYaml — explicit values', () => {
     expect(() => loadConfigFromYaml('privacy:\n  deny_paths:\n    - ""\n')).toThrow(ConfigError);
   });
 
+  it('parses a privacy.redact_patterns entry that compiles as a regex (#87)', () => {
+    const cfg = loadConfigFromYaml('privacy:\n  redact_patterns:\n    - "AKIA[0-9A-Z]{16}"\n');
+    expect(cfg.privacy.redact_patterns).toEqual(['AKIA[0-9A-Z]{16}']);
+  });
+
+  it('rejects a privacy.redact_patterns entry that is not a valid regex (#87)', () => {
+    // `[a-z` has an unbalanced bracket — `new RegExp` throws
+    // SyntaxError, so we surface that at YAML load time instead of
+    // letting the runner crash mid-scan when it lifts the pattern
+    // into a gitleaks `[[rules]]` block.
+    expect(() => loadConfigFromYaml('privacy:\n  redact_patterns:\n    - "[a-z"\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects an empty privacy.redact_patterns entry (#87)', () => {
+    expect(() => loadConfigFromYaml('privacy:\n  redact_patterns:\n    - ""\n')).toThrow(
+      ConfigError,
+    );
+  });
+
   it('parses path_instructions[*].auto_fetch with explicit fields', () => {
     const cfg = loadConfigFromYaml(
       [

@@ -88,6 +88,7 @@ export {
   JobMessageSchema,
   type QueueClient,
 } from './queue.js';
+export { isValidRegex } from './regex.js';
 export {
   type RetryClassifier,
   type RetryDecision,

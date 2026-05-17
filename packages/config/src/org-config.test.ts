@@ -184,4 +184,32 @@ provider:
     const merged = mergeOrgIntoRepo(org, repo);
     expect(merged.provider?.type).toBe('anthropic');
   });
+
+  it('dedups privacy.redact_patterns across org and repo (#87)', () => {
+    // The org and repo both declare the same AWS access-key pattern;
+    // without dedup the runner would lift two identical custom rules
+    // into gitleaks TOML and gitleaks rejects duplicate rule ids.
+    // This mirrors the deny_paths / allowed_url_prefixes treatment.
+    const org = loadConfigFromYaml(
+      `privacy:
+  redact_patterns:
+    - "AKIA[0-9A-Z]{16}"
+    - "ghp_[A-Za-z0-9]{36}"
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+privacy:
+  redact_patterns:
+    - "AKIA[0-9A-Z]{16}"
+    - "xoxb-[A-Za-z0-9-]+"
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.privacy.redact_patterns).toEqual([
+      'AKIA[0-9A-Z]{16}',
+      'ghp_[A-Za-z0-9]{36}',
+      'xoxb-[A-Za-z0-9-]+',
+    ]);
+  });
 });
