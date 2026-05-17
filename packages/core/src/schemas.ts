@@ -98,11 +98,16 @@ export type CreateReviewOutputSchemaOpts = {
  * - The InlineComment-level refines (broadcast mentions, shell
  *   `curl http`, style-severity cap) which are unaware of allowlist
  *   context and therefore live on `InlineCommentSchema`.
- * - A factory-level `superRefine` that scans every comment `body`
- *   and the `summary` for http(s) URLs and rejects any URL that
- *   isn't (a) under the PR's own repo or (b) prefixed by an entry
- *   in `allowedUrlPrefixes`. Each disallowed URL produces its own
- *   issue so callers see the full list, not just the first hit.
+ * - A factory-level `superRefine` that scans every comment `body`,
+ *   every comment `suggestion`, and the `summary` for http(s) URLs
+ *   and rejects any URL that isn't (a) under the PR's own repo or
+ *   (b) prefixed by an entry in `allowedUrlPrefixes`. The
+ *   `suggestion` field is scanned because GitHub's Apply-suggestion
+ *   button copies its body verbatim into the repo — letting an
+ *   LLM-emitted bad URL through `suggestion` would be a one-click
+ *   path to persisting an exfiltration link in source. Each
+ *   disallowed URL produces its own issue so callers see the full
+ *   list, not just the first hit.
  *
  * Per spec §7.3 #4, this URL allowlist is the hard backstop against
  * the LLM exfiltrating PR content through prompt injection — keep
@@ -127,15 +132,27 @@ export function createReviewOutputSchema(opts: CreateReviewOutputSchemaOpts) {
       for (const url of extractUrls(text)) {
         if (isPrOwnRepoUrl(url, prRepo)) continue;
         if (isPrefixAllowed(url, allowedPrefixes)) continue;
+        // The error message includes the expected `host` and a hint
+        // so operators looking at a failed Zod parse can immediately
+        // see (a) which URL was rejected and (b) the PR's host they
+        // should compare it against. `<owner>/<repo>` is omitted from
+        // the hint because the path was already encoded in the URL
+        // the operator is reading.
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: `URL not in allowlist: ${url}`,
+          message: `URL not in allowlist: ${url} (expected host '${prRepo.host}' or a configured allowed_url_prefixes entry)`,
           path,
         });
       }
     };
     output.comments.forEach((comment, i) => {
       reportBadUrls(comment.body, ['comments', i, 'body']);
+      // `suggestion` is optional on InlineCommentSchema, so guard the
+      // scan. When present, the field is scanned identically to body
+      // (see overview JSDoc for why suggestion needs the same check).
+      if (comment.suggestion !== undefined) {
+        reportBadUrls(comment.suggestion, ['comments', i, 'suggestion']);
+      }
     });
     reportBadUrls(output.summary, ['summary']);
   });

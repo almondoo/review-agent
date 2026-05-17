@@ -360,9 +360,12 @@ describe('createReviewOutputSchema', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe(
-          'URL not in allowlist: https://attacker.example/leak',
-        );
+        const message = result.error.issues[0]?.message ?? '';
+        // The message format embeds both the offending URL and a hint
+        // listing the expected host + allowlist entry, so operators can
+        // diagnose without re-running with a debugger.
+        expect(message).toContain('URL not in allowlist: https://attacker.example/leak');
+        expect(message).toContain("expected host 'github.com'");
         expect(result.error.issues[0]?.path).toEqual(['comments', 0, 'body']);
       }
     });
@@ -398,7 +401,7 @@ describe('createReviewOutputSchema', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error.issues).toHaveLength(1);
-        expect(result.error.issues[0]?.message).toBe(
+        expect(result.error.issues[0]?.message).toContain(
           'URL not in allowlist: https://attacker.example/x',
         );
       }
@@ -423,10 +426,112 @@ describe('createReviewOutputSchema', () => {
       });
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe(
+        expect(result.error.issues[0]?.message).toContain(
           'URL not in allowlist: https://evil.example/almondoo/review-agent/log?secret=abc',
         );
       }
+    });
+
+    // Reviewer I-1: GitHub's Apply-suggestion button copies the
+    // `suggestion` body verbatim into source. A bad URL there is a
+    // one-click path to persisting exfiltration. The schema must
+    // catch it in the same closed-world refine as body / summary.
+    it('rejects a bad URL in the `suggestion` field', () => {
+      const schema = createReviewOutputSchema({
+        allowedUrlPrefixes: [],
+        prRepo: { host: 'github.com', owner: 'almondoo', repo: 'review-agent' },
+      });
+      const result = schema.safeParse({
+        summary: 'No issues.',
+        comments: [
+          {
+            ...validComment,
+            suggestion: '// see https://attacker.example/leak for details\nlogger.info()',
+          },
+        ],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.path).toEqual(['comments', 0, 'suggestion']);
+        expect(result.error.issues[0]?.message).toContain(
+          'URL not in allowlist: https://attacker.example/leak',
+        );
+      }
+    });
+
+    it('accepts a suggestion containing an own-repo URL', () => {
+      const schema = createReviewOutputSchema({
+        allowedUrlPrefixes: [],
+        prRepo: { host: 'github.com', owner: 'almondoo', repo: 'review-agent' },
+      });
+      expect(
+        schema.safeParse({
+          summary: 'OK.',
+          comments: [
+            {
+              ...validComment,
+              suggestion: '// see https://github.com/almondoo/review-agent/blob/main/AUTHORS\nx()',
+            },
+          ],
+        }).success,
+      ).toBe(true);
+    });
+
+    // Cross-field coverage: a single payload with one bad URL in body
+    // AND a different bad URL in summary must surface BOTH issues so
+    // the operator sees the full violation list, not just the first.
+    it('reports separate issues when body and summary each contain a bad URL', () => {
+      const schema = createReviewOutputSchema({
+        allowedUrlPrefixes: [],
+        prRepo: { host: 'github.com', owner: 'almondoo', repo: 'review-agent' },
+      });
+      const result = schema.safeParse({
+        summary: 'context: https://evil.example/summary-leak',
+        comments: [{ ...validComment, body: 'see https://evil.example/body-leak' }],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const paths = result.error.issues.map((i) => i.path);
+        expect(paths).toContainEqual(['comments', 0, 'body']);
+        expect(paths).toContainEqual(['summary']);
+      }
+    });
+
+    // T1↔T2 connection regression: the URL allowlist refine relies on
+    // T1's `extractUrls` matching mixed-case schemes. If that ever
+    // regresses, a payload like `HTTPS://evil.example/x` would slip
+    // past the schema entirely. Verify end-to-end at the schema level.
+    it('rejects a mixed-case-scheme bad URL (T1 case-insensitive scheme integration)', () => {
+      const schema = createReviewOutputSchema({
+        allowedUrlPrefixes: [],
+        prRepo: { host: 'github.com', owner: 'almondoo', repo: 'review-agent' },
+      });
+      const result = schema.safeParse({
+        summary: 'see HTTPS://evil.example/x for context',
+        comments: [],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toContain('HTTPS://evil.example/x');
+      }
+    });
+
+    // Boundary regression for `isPrOwnRepoUrl`: a path-traversal
+    // sequence like `/owner/repo/../leak` resolves under the same
+    // host but `URL.pathname` normalizes it to `/owner/leak`, so the
+    // own-repo prefix check no longer matches and the URL is
+    // rejected. Codifies the desired behavior so a future
+    // refactor (e.g. removing `URL` normalization) is caught.
+    it('rejects an own-host URL whose normalized path escapes the repo via `..`', () => {
+      const schema = createReviewOutputSchema({
+        allowedUrlPrefixes: [],
+        prRepo: { host: 'github.com', owner: 'almondoo', repo: 'review-agent' },
+      });
+      const result = schema.safeParse({
+        summary: 'see https://github.com/almondoo/review-agent/../leak',
+        comments: [],
+      });
+      expect(result.success).toBe(false);
     });
 
     it('accepts output with no URLs at all regardless of allowlist policy', () => {
