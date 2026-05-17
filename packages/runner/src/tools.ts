@@ -1,8 +1,20 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { ToolDispatchRefusedError } from '@review-agent/core';
+import {
+  MAX_FILE_SIZE,
+  MAX_GREP_PATTERN_LENGTH,
+  ToolDispatchRefusedError,
+} from '@review-agent/core';
 import { type Tool, tool } from 'ai';
 import { z } from 'zod';
+
+// Re-export the limits this module enforces so existing callers
+// (`@review-agent/runner`, tests, and any downstream package that
+// already pulls these from runner) keep working unchanged. The
+// **source of truth is `@review-agent/core/limits.ts`** — the
+// numeric values live there, the enforcement lives here, the
+// dependency direction is runner→core (never the other way).
+export { MAX_FILE_SIZE, MAX_GREP_PATTERN_LENGTH };
 
 const DENY_PATTERNS: ReadonlyArray<RegExp> = [
   /(^|\/)\.env(\..*)?$/,
@@ -29,25 +41,6 @@ export type ToolDeps = {
   readonly lstat?: typeof lstat;
   readonly readdir?: typeof readdir;
 };
-
-/**
- * Maximum bytes returned by `read_file`. Content past this point is
- * truncated with a `[...truncated at N chars]` marker so the LLM
- * context window stays bounded for very large generated files (lock
- * files, snapshot fixtures, etc.). W2-R06 re-exports this from
- * `@review-agent/core/limits`; this module remains the source of
- * truth so the constant lives next to the code that enforces it.
- */
-export const MAX_FILE_SIZE = 1_000_000;
-
-/**
- * ReDoS guard: the longest user-supplied regex the grep tool accepts.
- * Pathological patterns (e.g. `(a?){100}a{100}`) explode exponentially
- * on regex backtracking, so we reject anything substantially longer
- * than reasonable code-search needs. Re-exported via
- * `@review-agent/core/limits` in W2-R06.
- */
-export const MAX_GREP_PATTERN_LENGTH = 200;
 
 /**
  * `node:fs` error codes that `grepInDir` discriminates by name. Each

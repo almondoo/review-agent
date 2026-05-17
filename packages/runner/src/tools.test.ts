@@ -403,10 +403,11 @@ describe('grep', () => {
 });
 
 describe('exported limits', () => {
-  // W2-R06 re-exports these from `@review-agent/core/limits`. Until that
-  // lands, callers reach for them on `@review-agent/runner` directly —
-  // these tests pin the shape so the re-export wiring has something
-  // stable to bind against.
+  // The numeric source of truth is `@review-agent/core/limits.ts`
+  // (W2-R06); `runner/src/tools.ts` re-exports those symbols for
+  // back-compat so callers that already pull from `@review-agent/runner`
+  // keep working. These tests pin the re-export shape, not the value —
+  // value parity with core is asserted in core/limits.test.ts.
   it('exposes MAX_FILE_SIZE as a positive integer', () => {
     expect(Number.isInteger(MAX_FILE_SIZE)).toBe(true);
     expect(MAX_FILE_SIZE).toBeGreaterThan(0);
@@ -415,5 +416,11 @@ describe('exported limits', () => {
   it('exposes MAX_GREP_PATTERN_LENGTH as a positive integer', () => {
     expect(Number.isInteger(MAX_GREP_PATTERN_LENGTH)).toBe(true);
     expect(MAX_GREP_PATTERN_LENGTH).toBeGreaterThan(0);
+  });
+
+  it('re-exports the same values as @review-agent/core (no local override)', async () => {
+    const core = await import('@review-agent/core');
+    expect(MAX_FILE_SIZE).toBe(core.MAX_FILE_SIZE);
+    expect(MAX_GREP_PATTERN_LENGTH).toBe(core.MAX_GREP_PATTERN_LENGTH);
   });
 });

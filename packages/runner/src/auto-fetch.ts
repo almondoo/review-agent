@@ -1,5 +1,11 @@
 import * as path from 'node:path';
-import { globToRegExp, ToolDispatchRefusedError } from '@review-agent/core';
+import {
+  AUTO_FETCH_MAX_BYTES_PER_FILE,
+  AUTO_FETCH_MAX_FILES,
+  AUTO_FETCH_MAX_TOTAL_BYTES,
+  globToRegExp,
+  ToolDispatchRefusedError,
+} from '@review-agent/core';
 import { createTools, type ToolDeps, type Tools } from './tools.js';
 
 /**
@@ -24,6 +30,8 @@ export type PathInstructionWithFetch = {
  * acceptance criteria: 5 files / 50 KB each / 250 KB total. Each
  * cap is enforced independently — hitting any of them stops the
  * fetch loop early and leaves the LLM with what it already has.
+ * The numeric defaults live in `@review-agent/core` as
+ * `AUTO_FETCH_MAX_*`; that module is the source of truth (W2-R06).
  */
 export type AutoFetchBudget = {
   readonly maxFiles: number;
@@ -32,9 +40,9 @@ export type AutoFetchBudget = {
 };
 
 export const DEFAULT_AUTO_FETCH_BUDGET: AutoFetchBudget = {
-  maxFiles: 5,
-  maxBytesPerFile: 50_000,
-  maxTotalBytes: 250_000,
+  maxFiles: AUTO_FETCH_MAX_FILES,
+  maxBytesPerFile: AUTO_FETCH_MAX_BYTES_PER_FILE,
+  maxTotalBytes: AUTO_FETCH_MAX_TOTAL_BYTES,
 };
 
 export type CollectAutoFetchInput = {

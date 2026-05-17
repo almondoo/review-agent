@@ -1,16 +1,17 @@
 import { z } from 'zod';
+import {
+  BODY_MAX,
+  COMMENTS_MAX,
+  LINE_MAX,
+  MODEL_NAME_MAX,
+  MODEL_NAME_MIN,
+  PATH_MAX,
+  RULE_ID_MAX,
+  RULE_ID_MIN,
+  SUGGESTION_MAX,
+  SUMMARY_MAX,
+} from './limits.js';
 import { CATEGORIES, CONFIDENCES, SEVERITIES, SIDES } from './review.js';
-
-const PATH_MAX = 500;
-const BODY_MAX = 5000;
-const SUGGESTION_MAX = 5000;
-const SUMMARY_MAX = 10_000;
-const LINE_MAX = 1_000_000;
-const COMMENTS_MAX = 50;
-const MODEL_NAME_MIN = 1;
-const MODEL_NAME_MAX = 128;
-const RULE_ID_MIN = 2;
-const RULE_ID_MAX = 64;
 
 const NO_NUL = /^[^\0]+$/;
 const SHELL_HTTP_FETCH = /\bcurl\s+http/i;
