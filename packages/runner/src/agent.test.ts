@@ -623,6 +623,153 @@ describe('runReview — operator deny_paths wiring (spec §7.4 / #86)', () => {
   });
 });
 
+describe('runReview — operator redact_patterns wiring (spec §7.4 / #87)', () => {
+  // End-to-end check that `ReviewJob.privacy.redactPatterns` flows
+  // through both gitleaks scan passes (diff pre-scan + LLM output
+  // post-scan) when the default `quickScanContent` is used. We do
+  // NOT inject `deps.scanContent` here — that's the entire point:
+  // the production wiring binds the operator's custom patterns into
+  // the default scanner so every review picks them up without each
+  // caller having to remember.
+
+  it('aborts the diff pre-scan when a custom redact_pattern hits (single high-tag finding triggers abort)', async () => {
+    // Custom patterns are tagged `["high"]` by `quickScanContent` and
+    // `shouldAbortReview` treats any high-tag finding as
+    // "abort BEFORE the LLM ever sees the payload". The whole
+    // mechanism is the point of operator-extending redact_patterns:
+    // give the operator a way to teach the agent about
+    // organisation-internal secret shapes that gitleaks' built-in
+    // ruleset doesn't recognise.
+    const provider = makeProvider();
+    const job: ReviewJob = {
+      ...baseJob,
+      diffText: 'diff --git\n+const t = "INTERNAL-TOKEN-ABCDEF1234567890";\n',
+      privacy: {
+        allowedUrlPrefixes: [],
+        denyPaths: [],
+        redactPatterns: ['INTERNAL-TOKEN-[A-Z0-9]{16}'],
+      },
+    };
+    await expect(runReview(job, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
+    await expect(runReview(job, provider)).rejects.toMatchObject({
+      phase: 'diff',
+      ruleIds: ['custom-0'],
+    });
+    // The provider must NOT have been called — the operator's
+    // pattern intercepted the diff before any LLM prompt could
+    // include the token.
+    expect(provider.generateReview).not.toHaveBeenCalled();
+  });
+
+  it('aborts the LLM output post-scan when a custom redact_pattern hits the model response', async () => {
+    // The LLM hallucinates / repeats the operator-internal token
+    // shape. The post-scan must catch it before the comment is
+    // posted to the PR, the same way it catches a hallucinated
+    // built-in token.
+    const tainted: ReviewOutput = {
+      ...validOutput,
+      summary: 'Token INTERNAL-TOKEN-ABCDEF1234567890 looks reused.',
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => tainted) });
+    const job: ReviewJob = {
+      ...baseJob,
+      privacy: {
+        allowedUrlPrefixes: [],
+        denyPaths: [],
+        redactPatterns: ['INTERNAL-TOKEN-[A-Z0-9]{16}'],
+      },
+    };
+    await expect(runReview(job, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
+    await expect(runReview(job, provider)).rejects.toMatchObject({
+      phase: 'output',
+      ruleIds: ['custom-0'],
+    });
+  });
+
+  it('redacts a custom-pattern hit in the LLM output when shouldAbortReview does not fire (mixed-tag finding)', async () => {
+    // Direct injection of `scanContent` lets us pin the redaction
+    // path without depending on the built-in `shouldAbortReview`
+    // policy (which currently treats every custom hit as
+    // `tags: ['high']` and therefore aborts). If a future tightening
+    // ever lifts that abort condition, this test stays green and
+    // pins the redaction format. The string `[REDACTED:custom-0]`
+    // is the runtime contract shared with the docs in T5.
+    const customSecret = 'XYZ-7QqLk';
+    const tainted: ReviewOutput = {
+      ...validOutput,
+      summary: `LLM saw ${customSecret} in passing.`,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => tainted) });
+    const scanContent = vi.fn((text: string) =>
+      text.includes(customSecret)
+        ? [
+            {
+              ruleId: 'custom-0',
+              description: 'Custom rule: custom-0',
+              file: '',
+              startLine: 1,
+              endLine: 1,
+              match: customSecret,
+              secret: customSecret,
+              entropy: 0,
+              tags: ['medium'] as ReadonlyArray<string>,
+            },
+          ]
+        : [],
+    );
+    const job: ReviewJob = {
+      ...baseJob,
+      privacy: {
+        allowedUrlPrefixes: [],
+        denyPaths: [],
+        redactPatterns: ['XYZ-[A-Za-z0-9]+'],
+      },
+    };
+    const result = await runReview(job, provider, { scanContent });
+    expect(result.summary).toBe('LLM saw [REDACTED:custom-0] in passing.');
+  });
+
+  it('keeps built-in scanning active when redactPatterns is empty (regression)', async () => {
+    // Empty operator list ≡ "extend with nothing" — the built-in
+    // AWS / GitHub / Anthropic / OpenAI / PEM detectors still apply.
+    // baseJob already has `redactPatterns: []`.
+    const provider = makeProvider();
+    const job: ReviewJob = {
+      ...baseJob,
+      diffText: 'diff --git\n+const k = "AKIAIOSFODNN7EXAMPLE";\n',
+    };
+    await expect(runReview(job, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
+    await expect(runReview(job, provider)).rejects.toMatchObject({
+      phase: 'diff',
+      ruleIds: ['aws-access-key'],
+    });
+  });
+
+  it('emits BOTH built-in and custom ruleIds when the diff trips overlapping patterns', async () => {
+    // An AWS key matches BOTH the built-in `aws-access-key` rule and
+    // an operator pattern shaped like `AKIA…`. The post-scan must
+    // surface both ruleIds so the audit log records the operator's
+    // intentional contribution (and so the dedup via `secret` in
+    // `applyRedactions` collapses the placeholder consistently).
+    const provider = makeProvider();
+    const job: ReviewJob = {
+      ...baseJob,
+      diffText: 'diff --git\n+const k = "AKIAIOSFODNN7EXAMPLE";\n',
+      privacy: {
+        allowedUrlPrefixes: [],
+        denyPaths: [],
+        redactPatterns: ['AKIA[A-Z0-9]+'],
+      },
+    };
+    await expect(runReview(job, provider)).rejects.toMatchObject({
+      phase: 'diff',
+      // Both rule ids appear; order is insertion-order (built-ins
+      // first because `quickScanContent` scans built-ins first).
+      ruleIds: ['aws-access-key', 'custom-0'],
+    });
+  });
+});
+
 describe('runReview — reviewEvent mapping (#65)', () => {
   const criticalOutput: ReviewOutput = {
     summary: 'Critical finding.',

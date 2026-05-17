@@ -97,7 +97,15 @@ export async function runReview(
   }
   const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
-  const scanContent = deps.scanContent ?? quickScanContent;
+  // Bind the operator's `privacy.redact_patterns` into the default
+  // scanner so the diff pre-scan and the LLM-output post-scan both
+  // run built-in detectors AND the custom regex set in one pass
+  // (spec §7.4). `deps.scanContent` injection still wins for tests
+  // — those callers either include any custom patterns themselves
+  // or deliberately scope the scan to a fixed corpus.
+  const customRedactPatterns = job.privacy.redactPatterns;
+  const scanContent =
+    deps.scanContent ?? ((text: string) => quickScanContent(text, customRedactPatterns));
 
   const diffFindings = [...scanContent(job.diffText)];
   const diffDecision = shouldAbortReview(diffFindings);
