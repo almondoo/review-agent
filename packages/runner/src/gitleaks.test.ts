@@ -179,6 +179,29 @@ describe('liftCustomPatternsToToml (#87)', () => {
     );
   });
 
+  it('round-trips a pattern ending in 1 single quote (mll-quotes 1*1) (reviewer M-4)', () => {
+    // TOML 1.0 multi-line literal strings explicitly permit 1 or 2
+    // single quotes adjacent to the closing delimiter — the parser
+    // greedily consumes up to 2 trailing quotes as content before
+    // matching the final `'''`. So a pattern like `foo'` serialises
+    // to `'''foo''''` (10 chars: 3 opens + `foo'` + 3 closes) and
+    // parses back to exactly `foo'`. Our simple `'''<pattern>'''`
+    // concatenation produces this naturally; pin it so a future
+    // "escape trailing quotes" patch doesn't accidentally break the
+    // case the TOML spec already covers.
+    const out = liftCustomPatternsToToml(["foo'"]);
+    expect(out).toContain("regex = '''foo''''");
+  });
+
+  it('round-trips a pattern ending in 2 single quotes (mll-quotes 1*2) (reviewer M-4)', () => {
+    // Same mechanism as the 1-quote case, exercising the upper
+    // boundary of TOML's "1 or 2 trailing quotes" allowance. Three
+    // adjacent quotes anywhere in the pattern still trips the
+    // `'''` terminator check above.
+    const out = liftCustomPatternsToToml(["foo''"]);
+    expect(out).toContain("regex = '''foo'''''");
+  });
+
   it('tags every custom rule "high" so any match aborts the review like a built-in high-confidence hit', () => {
     const out = liftCustomPatternsToToml(['anything']);
     expect(out).toContain('tags = ["high"]');
