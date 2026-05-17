@@ -580,6 +580,110 @@ describe('createTools — extend-not-relax (spec §7.4)', () => {
   });
 });
 
+// T4 scenario-gap coverage: cross-tool / normalization / overlap
+// scenarios not already pinned by the T2/T3/T3.5 test suites. Each
+// test below has a one-line note explaining the gap it closes.
+describe('createTools — deny_paths cross-tool / normalization scenarios (T4)', () => {
+  it('built-in deny: grep silently skips a built-in-denied file (3-tool coverage)', async () => {
+    // T2 covers user-extended deny under grep; T2/pre-existing cover
+    // built-in deny under read_file + glob. Built-in deny under
+    // grep was the missing cell. Pins that walking into `.env` does
+    // not surface its content as matches.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({
+        files: { '/work/src/a.ts': 'TODO investigate', '/work/.env': 'TODO read me' },
+        tree: {
+          '/work': [dirent('src', 'dir'), dirent('.env', 'file')],
+          '/work/src': [dirent('a.ts', 'file')],
+        },
+      }),
+    );
+    const out = await tools.grep({ pattern: 'TODO' });
+    expect(out).toEqual(['src/a.ts:1: TODO investigate']);
+  });
+
+  it('overlap: a path matched by BOTH built-in and user deny still surfaces a single refusal', async () => {
+    // `.env` is denied by the built-in `(^|\/)\.env(\..*)?$`; we also
+    // hand the operator pattern `.env` as a redundant entry. The
+    // dispatcher should refuse exactly once with the built-in style
+    // error message — no compounded behavior, no internal "first
+    // match wins" leak in the message that would expose which list
+    // tripped first.
+    const tools = createTools(WORKSPACE, makeDeps({}), [globToRegExp('.env')]);
+    await expect(tools.read_file({ path: '.env' })).rejects.toBeInstanceOf(
+      ToolDispatchRefusedError,
+    );
+    // The message includes the path but not the source list — pin
+    // that property so future refactors don't leak the layer that
+    // matched (which would let an attacker probe the deny tables).
+    await expect(tools.read_file({ path: '.env' })).rejects.toThrow(/deny-list/);
+  });
+
+  it("path normalization: './compliance/foo' resolves the same as 'compliance/foo' and still hits the deny", async () => {
+    // `path.resolve` collapses `./` before the dispatcher's rel
+    // calculation, so both forms are equivalent at the deny gate.
+    // Pin so a future refactor cannot bypass the deny by tweaking
+    // the resolver.
+    const tools = createTools(WORKSPACE, makeDeps({}), [globToRegExp('compliance/**')]);
+    await expect(tools.read_file({ path: './compliance/policy.txt' })).rejects.toThrow(/deny-list/);
+  });
+
+  it("path normalization: 'compliance/./policy.txt' is normalized to 'compliance/policy.txt' and still denied", async () => {
+    // Same idea as the prior test, but the redundant `/./` lives
+    // mid-path. `path.resolve` flattens it; the deny gate sees the
+    // canonical form.
+    const tools = createTools(WORKSPACE, makeDeps({}), [globToRegExp('compliance/**')]);
+    await expect(tools.read_file({ path: 'compliance/./policy.txt' })).rejects.toThrow(/deny-list/);
+  });
+
+  it("POSIX runner: backslash-as-separator is NOT normalized — 'compliance\\\\foo' bypasses the 'compliance/**' deny (pin known limitation)", async () => {
+    // Pins the documented limitation: on Linux/macOS, `\` is a
+    // literal filename character, not a path separator. An operator
+    // who writes `compliance/**` in `privacy.deny_paths` is matching
+    // POSIX path strings. A Windows runner would need an additional
+    // normalization layer; tracked as the T5 docs caveat (Lead's
+    // M-3 note from the T2 review).
+    //
+    // The fail-open here is bounded: a file literally named
+    // `compliance\foo.txt` (with a real backslash in its name) is
+    // extraordinarily uncommon and the path resolves inside the
+    // workspace either way. We pin this to make future Windows-
+    // runner work explicit and surface this with a clear test that
+    // breaks the moment somebody flips on backslash normalization.
+    const tools = createTools(
+      WORKSPACE,
+      makeDeps({ files: { '/work/compliance\\foo.txt': 'visible' } }),
+      [globToRegExp('compliance/**')],
+    );
+    const content = await tools.read_file({ path: 'compliance\\foo.txt' });
+    expect(content).toBe('visible');
+  });
+
+  it('Unicode normalization: NFC pattern does NOT match NFD path — pin known limitation', async () => {
+    // macOS APFS stores filenames byte-for-byte but legacy HFS+ and
+    // some encoding pipelines emit NFD ("café" as e + U+0301).
+    // JavaScript regex compares codepoints; no implicit
+    // normalization runs. An operator who writes `privacy/café/**`
+    // (NFC, "é") will NOT block a file path arriving as NFD
+    // ("é"). Pin the behavior so anyone tightening the deny
+    // gate flips this on intentionally (and so the T5 docs caveat
+    // has a code reference).
+    const nfc = 'privé/data.txt'; // priv + é (NFC) + /data.txt
+    const nfd = 'privé/data.txt'; // priv + e + COMBINING ACUTE + /data.txt
+    const tools = createTools(WORKSPACE, makeDeps({ files: { [`/work/${nfd}`]: 'visible' } }), [
+      globToRegExp(`${nfc.split('/')[0]}/**`),
+    ]);
+    // Sanity guard against an editor / formatter that auto-normalizes
+    // the source file: if both literals collapse to the same codepoint
+    // sequence the rest of the test becomes meaningless.
+    expect(nfc).not.toBe(nfd);
+    // NFD-stored file slips past the NFC-anchored deny pattern.
+    const content = await tools.read_file({ path: nfd });
+    expect(content).toBe('visible');
+  });
+});
+
 describe('createAiSdkToolset — operator deny_paths forwarding', () => {
   it('forwards `denyPatterns` into the dispatcher (read_file refusal surfaces through the SDK)', async () => {
     const set = createAiSdkToolset({
