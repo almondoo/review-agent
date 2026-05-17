@@ -16,6 +16,13 @@
 // code — they're treated as transient because GitHub API SDKs
 // surface them as raw fetch errors before the HTTP layer attaches
 // a status.
+//
+// Mechanics (the loop, sleep injection, last-error rethrow) come
+// from `@review-agent/core/retry`. The package-specific bits — HTTP
+// classification, [1s, 3s, 9s, 9s, 9s] schedule, status-aware log
+// payload — stay here.
+
+import { withRetry as coreWithRetry, extractMessage, extractStatus } from '@review-agent/core';
 
 const DEFAULT_DELAYS_MS: ReadonlyArray<number> = [1000, 3000, 9000, 9000, 9000];
 
@@ -26,26 +33,6 @@ export function isRetriable(err: unknown): boolean {
   if (status >= 500 && status < 600) return true;
   if (status >= 400 && status < 500) return false;
   return true;
-}
-
-function extractStatus(err: unknown): number | null {
-  if (err && typeof err === 'object') {
-    const candidate = (err as { status?: unknown }).status;
-    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
-    // Some Octokit wrappers expose status via .response.status
-    const response = (err as { response?: { status?: unknown } }).response;
-    if (response && typeof response === 'object') {
-      const inner = response.status;
-      if (typeof inner === 'number' && Number.isFinite(inner)) return inner;
-    }
-  }
-  return null;
-}
-
-function extractMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'string') return err;
-  return String(err);
 }
 
 export type RetryLogger = (msg: string, meta?: Record<string, unknown>) => void;
@@ -81,32 +68,28 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOpts): Promi
   }
   const total = Math.min(opts.attempts, 10);
   const delays = opts.delaysMs ?? DEFAULT_DELAYS_MS;
-  const sleep = opts.sleep ?? defaultSleep;
-  const log = opts.logger ?? (() => undefined);
   const classify = opts.isRetriable ?? isRetriable;
+  const logger = opts.logger;
+  const label = opts.label;
 
-  let lastErr: unknown;
-  for (let i = 0; i < total; i += 1) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      const isLast = i === total - 1;
-      if (!classify(err) || isLast) {
-        break;
+  return coreWithRetry(fn, {
+    maxAttempts: total,
+    ...(opts.sleep === undefined ? {} : { sleep: opts.sleep }),
+    classify: (err, attempt) => {
+      if (!classify(err)) return { retry: false };
+      const delayMs = delays[Math.min(attempt, delays.length - 1)] ?? 0;
+      // Log immediately before sleep, only when a sleep will actually
+      // happen — i.e. not on the final attempt, where the core loop
+      // breaks via its `attempt + 1 >= max` guard without sleeping.
+      // This preserves the pre-refactor "N attempts → N-1 log lines"
+      // contract that the existing tests assert.
+      if (attempt + 1 < total && logger !== undefined) {
+        logger(`${label}: attempt ${attempt + 1}/${total} failed; retrying in ${delayMs}ms`, {
+          error: extractMessage(err),
+          status: extractStatus(err),
+        });
       }
-      const delayIdx = Math.min(i, delays.length - 1);
-      const delay = delays[delayIdx] ?? 0;
-      log(`${opts.label}: attempt ${i + 1}/${total} failed; retrying in ${delay}ms`, {
-        error: extractMessage(err),
-        status: extractStatus(err),
-      });
-      await sleep(delay);
-    }
-  }
-  throw lastErr;
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+      return { retry: true, delayMs };
+    },
+  });
 }

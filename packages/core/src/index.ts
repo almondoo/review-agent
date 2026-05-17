@@ -20,6 +20,7 @@ export {
   decideCostAction,
   type RecordPhaseInput,
 } from './cost.js';
+export { extractMessage, extractStatus } from './error-utils.js';
 export {
   ConfigError,
   ContextLengthError,
@@ -77,6 +78,12 @@ export {
   JobMessageSchema,
   type QueueClient,
 } from './queue.js';
+export {
+  type RetryClassifier,
+  type RetryDecision,
+  type RetryOpts,
+  withRetry,
+} from './retry.js';
 export {
   CATEGORIES,
   type Category,
