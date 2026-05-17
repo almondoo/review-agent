@@ -113,10 +113,14 @@ const PrivacySchema = z
     // runtime (`packages/runner/src/agent.ts`) and unioned with the
     // built-in `DENY_PATTERNS` in the tool dispatcher (spec §7.4
     // "extend, not relax"). `.refine(isValidGlob)` mirrors
-    // `path_instructions[*].path` so a typo like `secrets/[abc]/`
-    // (unsupported character class) or a NUL-containing entry fails
-    // at YAML-load time with a clear message rather than silently
-    // matching nothing.
+    // `path_instructions[*].path`. It rejects empty strings (caught
+    // earlier by `.min(1)`) and entries containing a NUL byte at
+    // YAML load time rather than letting them throw at runtime
+    // inside `runReview`'s `globToRegExp` call. It does NOT reject
+    // unsupported glob syntax (`[abc]`, `{a,b}`, `?`) — those are
+    // escaped as literals by `globToRegExp` and silently match
+    // nothing. See `docs/configuration/privacy.md` glob syntax
+    // section for the caveat operators need to know about.
     deny_paths: z
       .array(
         z.string().min(1).refine(isValidGlob, {

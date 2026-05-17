@@ -158,7 +158,7 @@ read paths:
 
 | Tool                         | Behavior on deny match                                                                                                  |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `read_file`                  | Hard refuse — throws `ToolDispatchRefusedError`; the agent loop surfaces a generic refusal to the LLM (no path leak).   |
+| `read_file`                  | Hard refuse — throws `ToolDispatchRefusedError`. The error message includes only the path the LLM supplied (already known to it) and never reveals which deny entry — built-in vs operator — matched. |
 | `glob`                       | Silent skip — denied entries are dropped from the result list. No exception, no marker.                                 |
 | `grep`                       | Silent skip during the walk; an explicit `path:` scope that lands on a denied entry is a hard refuse (same as read_file). |
 | auto-fetch (companion files) | Silent skip — same `read_file` underneath; refusals are swallowed and the companion is simply not included in the prompt. |
@@ -210,8 +210,11 @@ The supported syntax is a small subset of glob:
   and `compliance/a/b/policy.txt`.
 - Every other character is matched literally.
 - Brace expansion (`{a,b}`), `?`, and character classes (`[...]`) are
-  **not** supported. A typo like `src/[abc]/*.ts` is rejected at YAML
-  load time by `.refine(isValidGlob)`.
+  **not** supported. These characters are escaped as literals by
+  `globToRegExp`, so a pattern like `src/[abc]/*.ts` matches only the
+  literal string `src/[abc]/...` — not the character class you may
+  have intended. Stick to `*` (within-segment) and `**` (across-segment)
+  for the documented semantics.
 
 Each compiled pattern is anchored — equivalent to wrapping the
 generated regex in `^...$`. This means the entry has to match the
@@ -272,9 +275,9 @@ privacy:
 
 A future major release may add a `case_insensitive: true` knob;
 right now the explicit-pair workaround is the supported path. The
-behavior is pinned by
-`tools.test.ts` "case-insensitive built-in `/i` still applies …" +
-"user pattern compiled by globToRegExp is case-sensitive by default".
+behavior is pinned by `tools.test.ts`
+"built-in case-insensitive deny still applies when operator pattern is case-sensitive"
++ "user pattern compiled by globToRegExp is case-sensitive by default".
 
 ### Known limitations
 
@@ -415,4 +418,5 @@ comment or stdout that adopters can scrape.
   that motivates the closed-world default.
 - [`../specs/review-agent-spec.md`](../specs/review-agent-spec.md)
   §7.3 #4 — spec authority for the URL allowlist requirement;
-  §7.4 — tool-surface containment ("extend, not relax").
+  §7.4 'Secret scanning' / Path-based exclusions — tool-surface
+  containment ("extend, not relax").
