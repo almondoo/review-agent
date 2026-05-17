@@ -135,6 +135,7 @@ export {
   createFakeVcsWriter,
   DEFAULT_FAKE_CAPABILITIES,
 } from './test-helpers.js';
+export { extractUrls, isPrefixAllowed, isPrOwnRepoUrl } from './url.js';
 export type {
   CloneOpts,
   Diff,
