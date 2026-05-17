@@ -65,31 +65,6 @@ a `style` finding past `minor`.
 
 ---
 
-## Summary roll-up
-
-`@review-agent/core` exposes `formatCategoryRollup(comments)` — a
-pure helper that returns a markdown bullet list of category counts:
-
-```md
-### Findings by category
-- bug: 3
-- security: 1
-- maintainability: 2
-```
-
-It is an **optional** formatter. Callers that compose the review
-summary may append it; callers that prefer a free-form summary may
-skip it. Categories appear in `CATEGORIES` order
-(`bug → security → performance → maintainability → style → docs → test`)
-for stable diffing. Comments without a category are silently ignored,
-so a mixed (legacy + categorized) batch produces a partial roll-up
-rather than an empty one.
-
-If no comment has a category, the formatter returns the empty string
-so it is safe to concatenate without producing an orphan header.
-
----
-
 ## The `confidence` field
 
 `InlineCommentSchema.confidence` is an **optional** enum with three

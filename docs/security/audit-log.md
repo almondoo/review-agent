@@ -50,15 +50,30 @@ by the verifier.
 
 ## Verifier
 
-```
-DATABASE_URL=postgres://... pnpm --filter @review-agent/eval verify:audit [installationId]
+Operators verify the chain by calling `verifyAuditChainFromDb` from
+`@review-agent/db` against the production database — typically wired
+into a nightly cronjob or a small standalone script:
+
+```ts
+import { verifyAuditChainFromDb } from '@review-agent/db';
+import { createDbClient } from '@review-agent/db';
+
+const { db, close } = createDbClient({ url: process.env.DATABASE_URL! });
+try {
+  // Pass `{ installationId }` to scope the verification to one tenant.
+  const report = await verifyAuditChainFromDb(db);
+  if (!report.ok) alertOncall(report);
+} finally {
+  await close();
+}
 ```
 
-`scripts/verify-audit-chain.ts` reads rows in `id ASC` order, recomputes
-`hash` for each, and reports breaks. Exits non-zero on the first break.
+`verifyAuditChainFromDb` reads rows in `id ASC` order, recomputes
+`hash` for each, and reports breaks. The returned `report.ok` is `false`
+on the first break.
 
-Recommended schedule: nightly (e.g. cron 02:00 UTC). Page on non-zero exit;
-treat any break as a §8.6.5 incident (database compromise).
+Recommended schedule: nightly (e.g. cron 02:00 UTC). Page on a `false`
+report; treat any break as a §8.6.5 incident (database compromise).
 
 ## Operational notes
 

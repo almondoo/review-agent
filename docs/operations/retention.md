@@ -80,12 +80,11 @@ re-verifies the chain segment; a verification failure exits non-zero.
 
 ### Step 4 — verify
 
-```sh
-DATABASE_URL=postgres://... pnpm --filter @review-agent/eval verify:audit
-```
-
-Run the standalone chain verifier (segment mode) after every prune.
-Page on non-zero exit; treat a break as a §8.6.5 incident.
+Run a chain verification after every prune by calling
+`verifyAuditChainFromDb` from `@review-agent/db` against the production
+database (see [`docs/security/audit-log.md`](../security/audit-log.md)
+"Verifier" for the wiring). Page on a `false` report; treat a break as a
+§8.6.5 incident.
 
 ## What the prune is not
 

@@ -139,7 +139,6 @@ Then refresh the rendered table:
 
 ```bash
 pnpm --filter @review-agent/eval matrix:write
-pnpm --filter @review-agent/eval matrix:check    # CI-friendly verify
 ```
 
 ### 7. Commit
