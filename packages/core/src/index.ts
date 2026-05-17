@@ -41,9 +41,13 @@ export { globToRegExp, isValidGlob } from './glob.js';
 export {
   type ApplyLineShiftInput,
   type ComputeDiffStrategyDeps,
+  classifyGitError,
   computeDiffStrategy,
   type DiffHunk,
   type DiffStrategy,
+  INCREMENTAL_GIT_FAILURES,
+  type IncrementalGitFailure,
+  type IncrementalGitFailureReason,
   type RunGit,
   shiftLineThroughHunks,
 } from './incremental.js';

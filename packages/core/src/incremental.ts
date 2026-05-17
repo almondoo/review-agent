@@ -8,6 +8,7 @@ export type RunGit = (
 ) => Promise<string>;
 
 const DEFAULT_GIT_TIMEOUT_MS = 10_000;
+const TRANSIENT_RETRY_BACKOFF_MS = 250;
 
 const defaultRunGit: RunGit = (workspace, args, opts) =>
   new Promise<string>((resolve, reject) => {
@@ -29,8 +30,59 @@ const defaultRunGit: RunGit = (workspace, args, opts) =>
     });
   });
 
+// Three buckets for git merge-base failures:
+//   - 'auth':       credential / permission errors (FS perms on .git, SSH
+//                   host-key, HTTP 401/403, password prompts). Operator
+//                   needs to know; we still fall back to full review.
+//   - 'transient':  network / timeout / temporary-failure errors. We retry
+//                   once with a short backoff before falling back.
+//   - 'permanent':  the previous head is genuinely gone (force-push, bad
+//                   object, ambiguous revision). Existing fallback behavior.
+export const INCREMENTAL_GIT_FAILURES = ['auth', 'transient', 'permanent'] as const;
+export type IncrementalGitFailureReason = (typeof INCREMENTAL_GIT_FAILURES)[number];
+
+export type IncrementalGitFailure = {
+  readonly reason: IncrementalGitFailureReason;
+  readonly args: ReadonlyArray<string>;
+  readonly message: string;
+  readonly retried: boolean;
+};
+
+const AUTH_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
+  /permission denied/i,
+  /authentication failed/i,
+  /could not read from remote/i,
+  /unable to access/i,
+  /host key verification failed/i,
+  /could not read username/i,
+  /\bhttp\/[\d.]+\s+40[13]\b/i,
+];
+
+const TRANSIENT_ERROR_PATTERNS: ReadonlyArray<RegExp> = [
+  /timed out/i,
+  /\btimeout\b/i,
+  /could not resolve host/i,
+  /temporary failure/i,
+  /network is unreachable/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bbad gateway\b|\bservice unavailable\b|\bgateway timeout\b/i,
+  // defaultRunGit reports SIGTERM-killed processes with `failed (null): ...`
+  // because `code` is null when the spawn timeout fires.
+  /failed \(null\):/,
+];
+
+export function classifyGitError(message: string): IncrementalGitFailureReason {
+  for (const p of AUTH_ERROR_PATTERNS) if (p.test(message)) return 'auth';
+  for (const p of TRANSIENT_ERROR_PATTERNS) if (p.test(message)) return 'transient';
+  return 'permanent';
+}
+
 export type ComputeDiffStrategyDeps = {
   readonly runGit?: RunGit;
+  readonly onGitFailure?: (failure: IncrementalGitFailure) => void;
+  // Injectable for fast deterministic tests; default sleeps via setTimeout.
+  readonly delayMs?: (ms: number) => Promise<void>;
 };
 
 export type DiffStrategy = 'full' | { readonly since: string };
@@ -47,8 +99,33 @@ export async function computeDiffStrategy(
   if (!previousHead || !previousBase) return 'full';
 
   const runGit = deps.runGit ?? defaultRunGit;
-  const mergeBase = (a: string, b: string) =>
-    runGit(workspace, ['merge-base', a, b]).catch(() => null);
+  const delayMs = deps.delayMs ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms)));
+  const mergeBase = async (a: string, b: string): Promise<string | null> => {
+    const args = ['merge-base', a, b] as const;
+    try {
+      return await runGit(workspace, args);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const reason = classifyGitError(message);
+      if (reason === 'transient') {
+        await delayMs(TRANSIENT_RETRY_BACKOFF_MS);
+        try {
+          return await runGit(workspace, args);
+        } catch (err2) {
+          const m2 = err2 instanceof Error ? err2.message : String(err2);
+          deps.onGitFailure?.({
+            reason: classifyGitError(m2),
+            args: [...args],
+            message: m2,
+            retried: true,
+          });
+          return null;
+        }
+      }
+      deps.onGitFailure?.({ reason, args: [...args], message, retried: false });
+      return null;
+    }
+  };
 
   // Detect rebase / force-push: previous merge-base shifts.
   const [prevMb, currMb] = await Promise.all([
