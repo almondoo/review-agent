@@ -157,17 +157,36 @@ What each block does:
 
 In **Server mode** (Hono webhook → SQS → worker) the same runner is invoked from `packages/server/src/worker.ts`. The worker provisions a per-job ephemeral workspace via `provisionWorkspace` (strategy: `contents-api` for Lambda, `sparse-clone` when `git` is available); everything downstream of "Workspace" in the diagram is identical.
 
+## Supported VCS platforms
+
+| Platform | Modes | Status | Notes |
+|---|---|---|---|
+| **GitHub** (`platform-github`) | GitHub Action / Server (webhook → SQS) / CLI | ✅ Full support | Default. Hidden-state-comment dedup + `REQUEST_CHANGES` mapping. |
+| **GitHub Enterprise Server** | Server / CLI | ✅ Supported | Uses the same Octokit path. See [`docs/deployment/ghes.md`](./docs/deployment/ghes.md). |
+| **AWS CodeCommit** (`platform-codecommit`) | CLI / Server (manual trigger) | ⚠️ Partial | Adapter ships and posts reviews. Automatic event ingestion (SNS → SQS) and CLI `--platform codecommit` flag are tracked in [#73](https://github.com/almondoo/review-agent/issues/73) / [#75](https://github.com/almondoo/review-agent/issues/75). Postgres-canonical state (no hidden-comment markers — see spec §12.1.1). |
+
+> **CodeCommit data-durability warning.** CodeCommit installations store
+> review state in Postgres only — the platform side has no canonical
+> copy. If Postgres is lost, the next review on every open PR is a full
+> re-run. Plan backups (RDS PITR / Aurora snapshots) and follow the
+> dedicated runbook at
+> [`docs/operations/codecommit-disaster-recovery.md`](./docs/operations/codecommit-disaster-recovery.md)
+> before going to production.
+
+GitLab / Bitbucket adapters are out of scope for v1.x (spec §1.2).
+
 ## Repo layout
 
 ```
 packages/
-  core/              # types, schemas, fingerprinting (no I/O)
-  llm/               # Vercel AI SDK provider adapters + retry/error mapping
-  config/            # zod-typed YAML loader, env-merge, JSON schema export
-  platform-github/   # VCS impl: clone, diff, comments, hidden state
-  runner/            # agent loop, tools, prompts, gitleaks, skill loader
-  action/            # GitHub Action wrapper (entry point)
-  eval/              # promptfoo regression suite + golden PR fixtures
+  core/                # types, schemas, fingerprinting (no I/O)
+  llm/                 # Vercel AI SDK provider adapters + retry/error mapping
+  config/              # zod-typed YAML loader, env-merge, JSON schema export
+  platform-github/     # VCS impl: clone, diff, comments, hidden state (GitHub)
+  platform-codecommit/ # VCS impl: AWS CodeCommit (Postgres-canonical state)
+  runner/              # agent loop, tools, prompts, gitleaks, skill loader
+  action/              # GitHub Action wrapper (entry point)
+  eval/                # promptfoo regression suite + golden PR fixtures
 ```
 
 See [`docs/specs/review-agent-spec.md`](./docs/specs/review-agent-spec.md)

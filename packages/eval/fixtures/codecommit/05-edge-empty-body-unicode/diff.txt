@@ -1,0 +1,31 @@
+--- a/src/i18n/messages.ts
++++ b/src/i18n/messages.ts
+@@ -1,9 +1,13 @@
+ export const messages = {
+   en: {
+     greet: "Hello",
++    farewell: "Goodbye",
+   },
+   ja: {
+-    greet: "こんにちわ",
++    greet: "こんにちは",
++    farewell: "さようなら",
+   },
++  emoji: {
++    party: "🎉 ようこそ! Welcome 👋",
++  },
+ } as const;
+--- a/src/i18n/messages.test.ts
++++ b/src/i18n/messages.test.ts
+@@ -3,6 +3,10 @@ import { messages } from './messages.js';
+
+ describe("messages", () => {
+   it("ja greet is correct", () => {
+-    expect(messages.ja.greet).toBe("こんにちわ");
++    expect(messages.ja.greet).toBe("こんにちは");
++  });
++
++  it("emoji party renders", () => {
++    expect(messages.emoji.party).toContain("🎉");
+   });
+ });

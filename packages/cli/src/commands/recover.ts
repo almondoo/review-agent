@@ -3,10 +3,13 @@ import type { PRRef, ReviewState, VCS } from '@review-agent/core';
 import { createGithubVCS } from '@review-agent/platform-github';
 import type { ProgramIo } from '../io.js';
 
+export type RecoverPlatform = 'github' | 'codecommit';
+
 export type RecoverSyncStateOpts = {
   readonly repo: string;
   readonly installationId: bigint;
   readonly env: NodeJS.ProcessEnv;
+  readonly platform?: RecoverPlatform;
   /** Test seam for the underlying VCS adapter. */
   readonly createVCS?: (token: string) => VCS;
   /** Test seam for the PR-list call. */
@@ -40,6 +43,13 @@ export async function recoverSyncStateCommand(
   io: ProgramIo,
   opts: RecoverSyncStateOpts,
 ): Promise<RecoverSyncStateResult> {
+  const platform: RecoverPlatform = opts.platform ?? 'github';
+  if (platform === 'codecommit') {
+    io.stderr(
+      'recover sync-state is GitHub-only (CodeCommit uses Postgres-canonical state; see docs/operations/codecommit-disaster-recovery.md).\n',
+    );
+    return { status: 'ok', recovered: 0, missing: [] };
+  }
   const token = opts.env.REVIEW_AGENT_GH_TOKEN ?? opts.env.GITHUB_TOKEN;
   if (!token) {
     io.stderr('REVIEW_AGENT_GH_TOKEN (or GITHUB_TOKEN) is required.\n');

@@ -38,6 +38,10 @@ Build a self-hostable, OSS, AI code review agent that:
   Anthropic API key (BYOK) and runs on their own infra.
 - **No GitLab/Bitbucket adapter in v1.x.** Only GitHub and CodeCommit. Other VCS
   platforms come post-v1.0.
+  - **GHES note.** GitHub Enterprise Server compatibility (issue #49,
+    `docs/deployment/ghes.md`) is GitHub-side only. AWS CodeCommit is a
+    managed AWS service with no on-premises / self-hosted equivalent, so
+    there is no "CodeCommit Enterprise Server" tier to support.
 - **No code modification.** The agent does not commit, push, edit files in the user's
   repo, or open PRs. Read-only on source, write-only on PR comments.
 - **No model fine-tuning.** No training data collection. Inference only.
@@ -658,17 +662,42 @@ export interface ReviewOutput {
 }
 
 // packages/core/src/vcs.ts
-export interface VCS {
+//
+// The VCS contract is decomposed into a static capability matrix
+// (`VcsCapabilities`) and three role interfaces (Reader / Writer /
+// StateStore). Callers should depend on the narrowest role they need.
+// See `packages/core/README.md` for the per-adapter capability table
+// and registry-based dispatch pattern.
+
+export type VcsCapabilities = {
+  readonly clone: boolean;                                  // false on CodeCommit
+  readonly stateComment: 'native' | 'postgres-only';        // 'postgres-only' on CodeCommit
+  readonly approvalEvent: 'github' | 'codecommit' | 'none'; // mapping target for review.event
+  readonly commitMessages: boolean;                         // false on CodeCommit
+};
+
+export type VcsReader = {
   getPR(ref: PRRef): Promise<PR>;
-  getDiff(ref: PRRef, opts: { sinceSha?: string }): Promise<Diff>;
+  getDiff(ref: PRRef, opts?: { sinceSha?: string }): Promise<Diff>;
   getFile(ref: PRRef, path: string, sha: string): Promise<Buffer>;
   cloneRepo(ref: PRRef, dir: string, opts: CloneOpts): Promise<void>;
+  getExistingComments(ref: PRRef): Promise<ReadonlyArray<ExistingComment>>;
+};
+
+export type VcsWriter = {
   postReview(ref: PRRef, review: ReviewPayload): Promise<void>;
   postSummary(ref: PRRef, body: string): Promise<{ commentId: string }>;
-  getExistingComments(ref: PRRef): Promise<ExistingComment[]>;
+};
+
+export type VcsStateStore = {
   getStateComment(ref: PRRef): Promise<ReviewState | null>;
   upsertStateComment(ref: PRRef, state: ReviewState): Promise<void>;
-}
+};
+
+export type VCS = {
+  readonly platform: 'github' | 'codecommit';
+  readonly capabilities: VcsCapabilities;
+} & VcsReader & VcsWriter & VcsStateStore;
 
 export interface CloneOpts {
   depth?: number;            // default 50
@@ -718,6 +747,36 @@ source of truth** for review state, keyed by `(repository_arn, pr_id)`. The
 adapter interface remains the same; the GitHub adapter writes both, the
 CodeCommit adapter writes only to Postgres. This divergence is documented in
 `packages/platform-codecommit/README.md` and the user-facing docs.
+
+#### 5.2.1 CodeCommit out of scope (deliberate)
+
+The CodeCommit adapter implements the full `VCS` interface but several
+methods are intentionally inert because the underlying platform either
+lacks the API or the runner does not need it. These are **permanent
+design decisions**, not unfinished work:
+
+- **`cloneRepo` is unsupported.** The CodeCommit adapter's `cloneRepo`
+  throws `not supported` (`packages/platform-codecommit/src/adapter.ts`).
+  The runner's review flow uses `getDiff()` + `getFile()` exclusively —
+  it never requires a working tree clone. CodeCommit auth would also
+  require `git-remote-codecommit` or AWS-signed HTTPS, which we
+  deliberately do not bundle. If a future feature needs a clone, it
+  must declare so via `VcsCapabilities.clone` (issue #80) and either
+  fall back to the API path or refuse to run on CodeCommit.
+- **`getStateComment` / `upsertStateComment` are no-ops** (return
+  `null` / resolve without side effect). See §12.1.1 — Postgres is
+  canonical for CodeCommit, and the adapter's no-op is defense in
+  depth so accidental callers cannot corrupt state by writing to a
+  comment that will not survive HTML escaping.
+- **`review.event` (APPROVE / REQUEST_CHANGES) is currently dropped**
+  by `postReview`. Issue #74 wires this to
+  `UpdatePullRequestApprovalState` behind an opt-in
+  `codecommit.approvalState` config flag.
+- **Commit-message access for the LLM context** (§7.6,
+  `ReviewInput.commits[]` per issue #66) is **GitHub-only**. The
+  CodeCommit `GetDifferences` API does not return commit metadata in
+  the diff response and we do not call `GetCommitsFromMergeBase` per
+  review for cost reasons.
 
 ---
 
@@ -818,8 +877,12 @@ export const verifyGithubSignature = (secret: string) =>
   });
 ```
 
-CodeCommit (via SNS): use AWS SNS message signature verification with SigV4. Use
-`@aws-sdk/credential-providers` for the worker's IAM role.
+CodeCommit (via SNS): use AWS SNS message signature verification with the
+RSA-SHA1/SHA256 signing-cert scheme (the asymmetric signature SNS attaches to
+each message — distinct from SigV4, which is the AWS request-signing scheme used
+for SDK calls; see
+https://docs.aws.amazon.com/sns/latest/dg/sns-verify-signature-of-message.html).
+Use `@aws-sdk/credential-providers` for the worker's IAM role.
 
 ### 7.2 Idempotency
 
@@ -1173,6 +1236,7 @@ const octokit = new Octokit({ auth: token });
   codecommit:GetPullRequest
   codecommit:GetDifferences
   codecommit:GetFile
+  codecommit:GetCommentsForPullRequest
   codecommit:PostCommentForPullRequest
   codecommit:PostCommentReply
   codecommit:UpdatePullRequestApprovalState  # only if approval is configured
@@ -1577,8 +1641,9 @@ For CodeCommit:
 - Disaster recovery: if Postgres is destroyed, all CodeCommit reviews
   fall back to "full review" on the next webhook. There is no `recover
   sync-state-from-codecommit` equivalent (cannot reconstruct from comments).
-  Document this limitation in `docs/deployment/aws.md` under the CodeCommit
-  section.
+  The operator-facing recovery procedure lives at
+  [`docs/operations/codecommit-disaster-recovery.md`](../operations/codecommit-disaster-recovery.md);
+  `docs/deployment/aws.md` cross-links it.
 - Backups: RDS automated snapshots (35-day retention) cover state recovery
   for CodeCommit installations.
 
@@ -2595,6 +2660,87 @@ v1.0+ as design work, not implementation blockers. Status as of v0.3 release:
     **Resolved**: v0.3 ships with `manifest.json` + SHA-256 only (mandatory).
     Cosign attestation is **deferred to v1.1** — re-evaluate based on
     contributor demand. Track in a roadmap issue, not in the spec.
+
+### 22.x Platform registry contract (VCS dispatch)
+
+Adapter packages (`@review-agent/platform-github`,
+`@review-agent/platform-codecommit`) export a `PlatformDefinition`
+and call `registerPlatform(definition)` from `@review-agent/core` at
+module load. Application composition roots (`action`, `server`,
+`cli`) import the adapter package once for its registration side
+effect; subsequent code looks up the adapter via
+`getPlatform(prRef.platform).create(config)` rather than a hard-coded
+chain of `if (platform === 'github') ...`.
+
+**Why a registry instead of a literal union switch:** future adapters
+add value at the dispatch layer (server/runner) only; the persisted
+JobMessage / Postgres rows continue to carry the literal-union
+`platform` discriminator. Decoupling dispatch from the union means a
+new adapter package can ship in `packages/platform-foo/` without
+touching the core type or running a DB migration to widen
+`PRRef.platform`. The registry never serializes — it is constructed
+fresh on each worker start.
+
+**Intentional non-extension to `string` PlatformId.** The branded
+`PlatformId` (`string & { __brand: 'PlatformId' }`) is purely a
+compile-time helper; at runtime it is a normal string. `PRRef.platform`
+keeps its `'github' | 'codecommit'` literal-union shape because
+existing serialized JobMessage / `review_state` rows would otherwise
+fail to parse. Widening `PRRef.platform` to `string` is **v2 work**:
+it requires a JobMessage schema version bump (currently `v1` in
+`packages/core/src/queue.ts`) and a Postgres migration on every table
+that joins on the discriminator. v1.x adapters live inside the
+existing union; the registry is a dispatch helper, not a type-erasure
+layer.
+
+**Adapter responsibilities at registration:**
+
+- Export the `PlatformDefinition` (id, `parseRef`, `create(config)`).
+- Validate the `config: unknown` argument inside `create` — the
+  registry intentionally types config as opaque to avoid coupling
+  `@review-agent/core` to every adapter's config shape.
+- Throw a typed error from `create` when required config (auth token,
+  AWS client, etc.) is missing.
+
+See `packages/core/README.md` for the full per-adapter capability
+table and example usage.
+
+### 22.1 CodeCommit-specific posture (consolidated)
+
+These items consolidate CodeCommit design constraints that were
+previously scattered in code comments and adapter READMEs. None of
+them are open questions — they are documented here so contributors do
+not mistake them for gaps in implementation.
+
+1. **Multi-bot coordination on CodeCommit.** Issue #48
+   (`docs/configuration/coordination.md`) ships the multi-bot
+   coordination policy with `coordination.other_bots: ignore` /
+   `defer_if_present`. **The detection list
+   (`packages/config/src/known-bots.ts`) is GitHub-actor-based** —
+   detection scans `existingComments[].author.login` for GitHub bot
+   logins (`coderabbitai[bot]`, etc.). CodeCommit comments come from
+   IAM principals rather than `*[bot]` user logins; the GitHub
+   actor-string detector therefore matches nothing on CodeCommit, and
+   `defer_if_present` reduces to `ignore` in practice. Operators who
+   need multi-bot coordination on CodeCommit should rely on AWS
+   approval-rule templates or external orchestration. This is **not**
+   a planned feature — the demand vs. complexity is unfavourable
+   (CodeCommit is in maintenance mode upstream;
+   `packages/platform-codecommit/README.md` §1 already warns about
+   that).
+2. **GHES compatibility (#49) is GitHub-only.** AWS CodeCommit is a
+   managed AWS service with no on-premises tier; there is no
+   "CodeCommit Enterprise Server". See §1.2 for the corresponding
+   non-goal entry.
+3. **Disaster-recovery posture differs from GitHub.** Postgres is
+   canonical for review state on CodeCommit (§12.1.1). The
+   `recover sync-state` CLI command is GitHub-only — there is no
+   `recover sync-state-from-codecommit` because the hidden-state
+   markers do not survive CodeCommit's HTML escaping. See
+   `docs/operations/codecommit-disaster-recovery.md` for the
+   operator-facing runbook.
+4. **`cloneRepo` is intentionally unsupported** on CodeCommit
+   (§5.2.1). The runner uses `getDiff()` + `getFile()`.
 
 ---
 

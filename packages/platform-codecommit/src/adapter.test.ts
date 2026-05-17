@@ -3,9 +3,10 @@ import {
   GetFileCommand,
   GetPullRequestCommand,
   PostCommentForPullRequestCommand,
+  type UpdatePullRequestApprovalStateCommand,
 } from '@aws-sdk/client-codecommit';
-import type { PRRef, ReviewState } from '@review-agent/core';
-import { describe, expect, it, vi } from 'vitest';
+import type { PRRef, ReviewEvent, ReviewPayload, ReviewState } from '@review-agent/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createCodecommitVCS } from './adapter.js';
 
 const REF: PRRef = { platform: 'codecommit', owner: 'me', repo: 'demo-repo', number: 7 };
@@ -238,6 +239,179 @@ describe('createCodecommitVCS — postReview', () => {
   });
 });
 
+describe('createCodecommitVCS — postReview approvalState mapping (#74)', () => {
+  const baseState: ReviewState = {
+    schemaVersion: 1,
+    lastReviewedSha: 'h1',
+    baseSha: 'b1',
+    reviewedAt: '2026-05-17T00:00:00Z',
+    modelUsed: 'm',
+    totalTokens: 0,
+    totalCostUsd: 0,
+    commentFingerprints: [],
+  };
+
+  function buildPayload(event: ReviewEvent | undefined): ReviewPayload {
+    const base: ReviewPayload = {
+      summary: 'ok',
+      comments: [],
+      state: baseState,
+    };
+    return event === undefined ? base : { ...base, event };
+  }
+
+  function buildClient() {
+    return fakeClient({
+      GetPullRequestCommand: () => ({
+        pullRequest: {
+          revisionId: 'rev-1',
+          pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+        },
+      }),
+      PostCommentForPullRequestCommand: () => ({ comment: { commentId: 'cid' } }),
+      UpdatePullRequestApprovalStateCommand: () => ({}),
+    });
+  }
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it("defaults to 'off' and never issues UpdatePullRequestApprovalStateCommand", async () => {
+    const client = buildClient();
+    const vcs = createCodecommitVCS({ client });
+    await vcs.postReview(REF, buildPayload('REQUEST_CHANGES'));
+    const approvalCalls = client.send.mock.calls.filter(
+      ([cmd]) =>
+        (cmd as { constructor: { name: string } }).constructor.name ===
+        'UpdatePullRequestApprovalStateCommand',
+    );
+    expect(approvalCalls).toHaveLength(0);
+  });
+
+  it("'managed' + APPROVE sends UpdatePullRequestApprovalState(APPROVE)", async () => {
+    const client = buildClient();
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await vcs.postReview(REF, buildPayload('APPROVE'));
+    const approvalCmd = client.send.mock.calls
+      .map(([cmd]) => cmd as UpdatePullRequestApprovalStateCommand)
+      .find((cmd) => cmd.constructor.name === 'UpdatePullRequestApprovalStateCommand');
+    expect(approvalCmd).toBeDefined();
+    expect(approvalCmd?.input).toEqual({
+      pullRequestId: '7',
+      revisionId: 'rev-1',
+      approvalState: 'APPROVE',
+    });
+  });
+
+  it("'managed' + REQUEST_CHANGES sends UpdatePullRequestApprovalState(REVOKE)", async () => {
+    const client = buildClient();
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await vcs.postReview(REF, buildPayload('REQUEST_CHANGES'));
+    const approvalCmd = client.send.mock.calls
+      .map(([cmd]) => cmd as UpdatePullRequestApprovalStateCommand)
+      .find((cmd) => cmd.constructor.name === 'UpdatePullRequestApprovalStateCommand');
+    expect(approvalCmd?.input).toEqual({
+      pullRequestId: '7',
+      revisionId: 'rev-1',
+      approvalState: 'REVOKE',
+    });
+  });
+
+  it("'managed' + COMMENT issues no approval-state call", async () => {
+    const client = buildClient();
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await vcs.postReview(REF, buildPayload('COMMENT'));
+    const approvalCalls = client.send.mock.calls.filter(
+      ([cmd]) =>
+        (cmd as { constructor: { name: string } }).constructor.name ===
+        'UpdatePullRequestApprovalStateCommand',
+    );
+    expect(approvalCalls).toHaveLength(0);
+  });
+
+  it("'managed' + missing event issues no approval-state call (back-compat)", async () => {
+    const client = buildClient();
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await vcs.postReview(REF, buildPayload(undefined));
+    const approvalCalls = client.send.mock.calls.filter(
+      ([cmd]) =>
+        (cmd as { constructor: { name: string } }).constructor.name ===
+        'UpdatePullRequestApprovalStateCommand',
+    );
+    expect(approvalCalls).toHaveLength(0);
+  });
+
+  it('warns and continues when the approval-state call throws (no approval rule)', async () => {
+    // The SDK error `message` here mirrors a real AWS AccessDenied
+    // body and embeds an assumed-role ARN with an account id. The
+    // adapter must NOT include this string in its warn line — see
+    // SEC-6 in the audit notes.
+    const leakyMessage =
+      'User: arn:aws:sts::123456789012:assumed-role/review-agent-worker/abc ' +
+      'is not authorized to perform: codecommit:UpdatePullRequestApprovalState';
+    const noRuleErr = Object.assign(new Error(leakyMessage), {
+      name: 'ApprovalRuleDoesNotExistException',
+    });
+    const client = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input: unknown }) => {
+        if (cmd.constructor.name === 'GetPullRequestCommand') {
+          return {
+            pullRequest: {
+              revisionId: 'rev-1',
+              pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+            },
+          };
+        }
+        if (cmd.constructor.name === 'UpdatePullRequestApprovalStateCommand') {
+          throw noRuleErr;
+        }
+        return { comment: { commentId: 'cid' } };
+      }),
+    };
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await expect(vcs.postReview(REF, buildPayload('APPROVE'))).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [msg] = warnSpy.mock.calls[0] ?? [];
+    const line = String(msg);
+    // The error class name and the API name should still be present
+    // for operator diagnosis.
+    expect(line).toContain('ApprovalRuleDoesNotExistException');
+    expect(line).toContain('UpdatePullRequestApprovalState');
+    // SEC-6: the warn line must not leak the role ARN, assumed-role
+    // path, or the 12-digit account id carried by `err.message`.
+    expect(line).not.toContain('arn:aws:');
+    expect(line).not.toContain('assumed-role');
+    expect(line).not.toMatch(/\d{12}/);
+    expect(line).not.toContain(leakyMessage);
+  });
+
+  it("'managed' but PullRequest has no revisionId logs a warn and skips the call", async () => {
+    const client = fakeClient({
+      GetPullRequestCommand: () => ({
+        pullRequest: {
+          // revisionId intentionally omitted
+          pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+        },
+      }),
+      PostCommentForPullRequestCommand: () => ({ comment: { commentId: 'cid' } }),
+    });
+    const vcs = createCodecommitVCS({ client, approvalState: 'managed' });
+    await vcs.postReview(REF, buildPayload('APPROVE'));
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const approvalCalls = client.send.mock.calls.filter(
+      ([cmd]) =>
+        (cmd as { constructor: { name: string } }).constructor.name ===
+        'UpdatePullRequestApprovalStateCommand',
+    );
+    expect(approvalCalls).toHaveLength(0);
+  });
+});
+
 describe('createCodecommitVCS — postSummary', () => {
   it('returns the commentId from the API response', async () => {
     const client = fakeClient({
@@ -344,5 +518,15 @@ describe('createCodecommitVCS — exposed metadata', () => {
   it('reports the platform string', () => {
     const vcs = createCodecommitVCS({ client: fakeClient({}) });
     expect(vcs.platform).toBe('codecommit');
+  });
+
+  it('declares CodeCommit-specific capabilities (no clone, postgres-only state, codecommit approval, no commit msgs)', () => {
+    const vcs = createCodecommitVCS({ client: fakeClient({}) });
+    expect(vcs.capabilities).toEqual({
+      clone: false,
+      stateComment: 'postgres-only',
+      approvalEvent: 'codecommit',
+      commitMessages: false,
+    });
   });
 });

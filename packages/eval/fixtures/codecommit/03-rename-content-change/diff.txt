@@ -1,0 +1,34 @@
+--- a/src/services/UserService.ts
++++ b/src/services/AccountService.ts
+@@ -1,18 +1,22 @@
+-// UserService handles lookup + caching of user records.
++// AccountService handles lookup + caching of account records.
+ import type { Cache } from '../cache.js';
+-import type { User } from '../types.js';
++import type { Account } from '../types.js';
+
+-export class UserService {
++export class AccountService {
+   constructor(
+     private readonly cache: Cache,
+-    private readonly fetch: (id: string) => Promise<User>,
++    private readonly fetch: (id: string) => Promise<Account>,
+   ) {}
+
+-  async getUser(id: string): Promise<User> {
++  async getAccount(id: string): Promise<Account> {
+     const cached = await this.cache.get(id);
+-    if (cached) return cached as User;
++    if (cached) return cached as Account;
+     const fresh = await this.fetch(id);
+-    await this.cache.set(id, fresh);
++    await this.cache.set(id, fresh, { ttlMs: 60_000 });
+     return fresh;
+   }
+ }
+--- a/src/services/index.ts
++++ b/src/services/index.ts
+@@ -1,3 +1,3 @@
+-export { UserService } from './UserService.js';
++export { AccountService } from './AccountService.js';
+ export { Catalog } from './Catalog.js';

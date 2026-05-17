@@ -28,6 +28,7 @@ You can now invoke `review-agent` from anywhere on your `PATH`.
 | `REVIEW_AGENT_PROVIDER` / `REVIEW_AGENT_MODEL` | `review` (override) | Switch driver (`openai`, `azure-openai`, ...) |
 | `REVIEW_AGENT_LANGUAGE` | `review` (override) | Output language (BCP-47) |
 | `REVIEW_AGENT_MAX_USD_PER_PR` | `review` (override) | Hard ceiling on per-run LLM spend |
+| `AWS_REGION` / `AWS_PROFILE` | `review --platform codecommit` | Standard AWS SDK credential chain (also picks up IRSA / EC2 metadata) |
 
 Spec §8.3 + Appendix B has the full list. A PAT is fine for local use.
 For org-scale or shared-team use, deploy the Action or webhook server
@@ -42,6 +43,7 @@ Runs a full review against the named PR. Flags:
 | Flag | Default | Notes |
 |---|---|---|
 | `--config <path>` | `.review-agent.yml` | Optional. Falls back to defaults when missing. |
+| `--platform <github\|codecommit>` | `github` | VCS platform. `codecommit` reuses `--repo` as a bare repository name and authenticates via the AWS credential provider chain. |
 | `--lang <code>` | (config) | BCP-47 — same set as `REVIEW_AGENT_LANGUAGE` |
 | `--profile <chill\|assertive>` | (config) | Reviewer style |
 | `--cost-cap-usd <usd>` | (config `cost.max_usd_per_pr`) | Hard ceiling on this run |
@@ -58,6 +60,47 @@ review-agent review --repo owner/repo --pr 42 --post
 review-agent review --repo owner/repo --pr 42 \
   --lang ja-JP --profile assertive --cost-cap-usd 0.50
 ```
+
+#### CodeCommit example
+
+CodeCommit auth piggybacks on the AWS credential provider chain — no token
+flag, no extra wiring. Set `AWS_REGION` (and any of `AWS_PROFILE`, IRSA,
+EC2 metadata, etc.) and pass `--platform codecommit` with the bare
+repository name as `--repo`:
+
+```bash
+AWS_REGION=us-east-1 AWS_PROFILE=my-profile \
+  review-agent review --pr 42 --platform codecommit --repo demo-repo
+```
+
+Notes:
+
+- `--repo` for CodeCommit is the **repository name** (no `owner/` prefix).
+- The CLI does not accept an AWS access key directly — use the standard
+  SDK environment variables or named profile so the same wiring works
+  for `aws` CLI and other tooling.
+- `recover sync-state` is GitHub-only on purpose; passing
+  `--platform codecommit` short-circuits with an informative message
+  (CodeCommit treats Postgres as the canonical state).
+
+#### Approval-state mapping (opt-in)
+
+By default the CLI does **not** mutate the CodeCommit pull-request approval
+state when posting a review — it only writes inline comments and the
+Postgres-backed state record. To let the agent map a request-changes
+verdict onto `REVOKE` and an approval onto `APPROVE`, opt in via
+`.review-agent.yml`:
+
+```yaml
+codecommit:
+  approvalState: managed   # default: off
+```
+
+The CLI threads this value into `createCodecommitVCS({ approvalState })`
+on every run, so the behaviour matches the server. See
+[`packages/platform-codecommit/README.md`](../../packages/platform-codecommit/README.md#approval-state-mapping-74)
+for the full mapping table and the IAM permissions required
+(`codecommit:UpdatePullRequestApprovalState`).
 
 The dry-run summary lists each generated comment as
 `[severity] path:line — first line of body` plus the model, tokens, cost,

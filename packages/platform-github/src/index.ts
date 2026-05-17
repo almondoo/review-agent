@@ -1,4 +1,4 @@
-export { createGithubVCS, type GithubVCSOptions } from './adapter.js';
+export { createGithubVCS, GITHUB_CAPABILITIES, type GithubVCSOptions } from './adapter.js';
 export {
   type AppAuthClient,
   type AppAuthEnv,
@@ -23,6 +23,7 @@ export {
 } from './clone.js';
 export { createGithubOrgConfigFetch, type GithubOrgConfigDeps } from './org-config.js';
 export { assertSafeRelativePath } from './path-guard.js';
+export { GITHUB_PLATFORM_ID, githubPlatform } from './platform.js';
 export {
   buildSummaryWithState,
   formatStateComment,

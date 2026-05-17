@@ -32,6 +32,7 @@
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",
     "@review-agent/llm": "workspace:*",
+    "@review-agent/platform-codecommit": "workspace:*",
     "@review-agent/platform-github": "workspace:*",
     "@review-agent/runner": "workspace:*",
     "commander": "12.1.0",

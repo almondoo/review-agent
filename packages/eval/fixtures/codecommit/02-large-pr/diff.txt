@@ -1,0 +1,495 @@
+--- a/packages/icons/src/Icon001.tsx
++++ b/packages/icons/src/Icon001.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon001 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon001: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon002.tsx
++++ b/packages/icons/src/Icon002.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon002 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon002: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon003.tsx
++++ b/packages/icons/src/Icon003.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon003 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon003: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon004.tsx
++++ b/packages/icons/src/Icon004.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon004 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon004: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon005.tsx
++++ b/packages/icons/src/Icon005.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon005 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon005: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon006.tsx
++++ b/packages/icons/src/Icon006.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon006 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon006: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon007.tsx
++++ b/packages/icons/src/Icon007.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon007 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon007: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon008.tsx
++++ b/packages/icons/src/Icon008.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon008 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon008: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon009.tsx
++++ b/packages/icons/src/Icon009.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon009 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon009: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon010.tsx
++++ b/packages/icons/src/Icon010.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon010 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon010: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon011.tsx
++++ b/packages/icons/src/Icon011.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon011 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon011: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon012.tsx
++++ b/packages/icons/src/Icon012.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon012 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon012: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon013.tsx
++++ b/packages/icons/src/Icon013.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon013 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon013: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon014.tsx
++++ b/packages/icons/src/Icon014.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon014 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon014: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon015.tsx
++++ b/packages/icons/src/Icon015.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon015 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon015: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon016.tsx
++++ b/packages/icons/src/Icon016.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon016 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon016: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon017.tsx
++++ b/packages/icons/src/Icon017.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon017 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon017: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon018.tsx
++++ b/packages/icons/src/Icon018.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon018 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon018: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon019.tsx
++++ b/packages/icons/src/Icon019.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon019 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon019: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon020.tsx
++++ b/packages/icons/src/Icon020.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon020 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon020: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon021.tsx
++++ b/packages/icons/src/Icon021.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon021 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon021: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon022.tsx
++++ b/packages/icons/src/Icon022.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon022 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon022: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon023.tsx
++++ b/packages/icons/src/Icon023.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon023 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon023: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon024.tsx
++++ b/packages/icons/src/Icon024.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon024 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon024: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon025.tsx
++++ b/packages/icons/src/Icon025.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon025 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon025: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon026.tsx
++++ b/packages/icons/src/Icon026.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon026 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon026: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon027.tsx
++++ b/packages/icons/src/Icon027.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon027 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon027: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon028.tsx
++++ b/packages/icons/src/Icon028.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon028 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon028: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon029.tsx
++++ b/packages/icons/src/Icon029.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon029 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon029: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon030.tsx
++++ b/packages/icons/src/Icon030.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon030 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon030: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon031.tsx
++++ b/packages/icons/src/Icon031.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon031 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon031: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon032.tsx
++++ b/packages/icons/src/Icon032.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon032 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon032: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon033.tsx
++++ b/packages/icons/src/Icon033.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon033 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon033: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon034.tsx
++++ b/packages/icons/src/Icon034.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon034 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon034: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon035.tsx
++++ b/packages/icons/src/Icon035.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon035 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon035: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon036.tsx
++++ b/packages/icons/src/Icon036.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon036 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon036: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon037.tsx
++++ b/packages/icons/src/Icon037.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon037 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon037: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon038.tsx
++++ b/packages/icons/src/Icon038.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon038 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon038: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon039.tsx
++++ b/packages/icons/src/Icon039.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon039 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon039: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon040.tsx
++++ b/packages/icons/src/Icon040.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon040 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon040: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon041.tsx
++++ b/packages/icons/src/Icon041.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon041 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon041: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon042.tsx
++++ b/packages/icons/src/Icon042.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon042 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon042: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon043.tsx
++++ b/packages/icons/src/Icon043.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon043 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon043: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon044.tsx
++++ b/packages/icons/src/Icon044.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon044 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon044: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon045.tsx
++++ b/packages/icons/src/Icon045.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon045 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon045: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon046.tsx
++++ b/packages/icons/src/Icon046.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon046 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon046: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon047.tsx
++++ b/packages/icons/src/Icon047.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon047 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon047: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon048.tsx
++++ b/packages/icons/src/Icon048.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon048 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon048: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon049.tsx
++++ b/packages/icons/src/Icon049.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon049 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon049: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon050.tsx
++++ b/packages/icons/src/Icon050.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon050 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon050: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon051.tsx
++++ b/packages/icons/src/Icon051.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon051 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon051: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon052.tsx
++++ b/packages/icons/src/Icon052.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon052 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon052: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon053.tsx
++++ b/packages/icons/src/Icon053.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon053 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon053: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon054.tsx
++++ b/packages/icons/src/Icon054.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon054 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon054: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />
+--- a/packages/icons/src/Icon055.tsx
++++ b/packages/icons/src/Icon055.tsx
+@@ -1,5 +1,5 @@
+ import * as React from "react";
+ 
+-export const Icon055 = (props: React.SVGProps<SVGSVGElement>) => (
++export const Icon055: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+   <svg viewBox="0 0 24 24" {...props}>
+     <path d="M4 4h16v16H4z" />

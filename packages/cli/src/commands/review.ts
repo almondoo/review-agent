@@ -2,6 +2,7 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { type Config, defaultConfig, loadConfigFromYaml, mergeWithEnv } from '@review-agent/config';
 import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
+import { createCodecommitVCS } from '@review-agent/platform-codecommit';
 import { createGithubVCS } from '@review-agent/platform-github';
 import {
   buildReviewState,
@@ -12,17 +13,20 @@ import {
 } from '@review-agent/runner';
 import type { ProgramIo } from '../io.js';
 
+export type ReviewPlatform = 'github' | 'codecommit';
+
 export type RunReviewOpts = {
   readonly repo: string;
   readonly pr: number;
   readonly configPath: string;
   readonly post: boolean;
+  readonly platform?: ReviewPlatform;
   readonly language?: string;
   readonly profile?: string;
   readonly costCapUsd?: number;
   readonly env: NodeJS.ProcessEnv;
   readonly readFile?: (p: string, enc: 'utf8') => Promise<string>;
-  readonly createVCS?: (token: string) => VCS;
+  readonly createVCS?: (token: string | null, config: Config) => VCS;
   readonly createProvider?: (apiKey: string, config: Config) => LlmProvider;
   readonly confirm?: () => Promise<boolean>;
 };
@@ -38,9 +42,18 @@ export async function runReviewCommand(
   io: ProgramIo,
   opts: RunReviewOpts,
 ): Promise<RunReviewResult> {
-  const token = opts.env.REVIEW_AGENT_GH_TOKEN ?? opts.env.GITHUB_TOKEN;
-  if (!token) {
-    io.stderr('REVIEW_AGENT_GH_TOKEN (or GITHUB_TOKEN) is required.\n');
+  const platform: ReviewPlatform = opts.platform ?? 'github';
+
+  let token: string | null = null;
+  if (platform === 'github') {
+    const t = opts.env.REVIEW_AGENT_GH_TOKEN ?? opts.env.GITHUB_TOKEN;
+    if (!t) {
+      io.stderr('REVIEW_AGENT_GH_TOKEN (or GITHUB_TOKEN) is required.\n');
+      return { status: 'auth_failed', postedComments: 0, costUsd: 0 };
+    }
+    token = t;
+  } else if (!opts.repo) {
+    io.stderr('Missing required --repo for --platform codecommit\n');
     return { status: 'auth_failed', postedComments: 0, costUsd: 0 };
   }
   const apiKey = opts.env.ANTHROPIC_API_KEY;
@@ -49,11 +62,11 @@ export async function runReviewCommand(
     return { status: 'auth_failed', postedComments: 0, costUsd: 0 };
   }
 
-  const ref = parseRepo(opts.repo, opts.pr);
+  const ref = parseRef(platform, opts.repo, opts.pr);
   const readFile = opts.readFile ?? defaultReadFile;
   const config = applyOverrides(await loadConfig(opts.configPath, readFile), opts);
 
-  const vcs = (opts.createVCS ?? ((t) => createGithubVCS({ token: t })))(token);
+  const vcs = (opts.createVCS ?? ((t, c) => defaultCreateVCS(platform, t, c)))(token, config);
   const pr = await vcs.getPR(ref);
 
   const skipReason = decideSkip(pr, config);
@@ -132,7 +145,15 @@ export async function runReviewCommand(
   };
 }
 
-function parseRepo(repo: string, prNumber: number): PRRef {
+function parseRef(platform: ReviewPlatform, repo: string, prNumber: number): PRRef {
+  if (platform === 'codecommit') {
+    if (!repo || /[\s/]/.test(repo)) {
+      throw new Error(
+        `--repo for --platform codecommit must be a repository name (got '${repo}').`,
+      );
+    }
+    return { platform: 'codecommit', owner: '', repo, number: prNumber };
+  }
   const match = /^([^/\s]+)\/([^/\s]+)$/.exec(repo);
   if (!match) {
     throw new Error(`--repo must be in 'owner/repo' format (got '${repo}').`);
@@ -143,6 +164,16 @@ function parseRepo(repo: string, prNumber: number): PRRef {
     repo: match[2] ?? '',
     number: prNumber,
   };
+}
+
+function defaultCreateVCS(platform: ReviewPlatform, token: string | null, config: Config): VCS {
+  if (platform === 'codecommit') {
+    return createCodecommitVCS({ approvalState: config.codecommit.approvalState });
+  }
+  if (!token) {
+    throw new Error('GitHub token is required for --platform github.');
+  }
+  return createGithubVCS({ token });
 }
 
 async function loadConfig(

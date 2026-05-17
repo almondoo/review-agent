@@ -476,7 +476,106 @@ Additional patterns specific to this narrative:
   CodeCommit lives **only in Postgres** (spec §12.1.1), so the DR story
   becomes critical: there is no equivalent of the GitHub
   `recover sync-state-from-hidden-comment` path. Take regular RDS
-  snapshots and treat the DB as a hard dependency.
+  snapshots and treat the DB as a hard dependency. The full operator
+  procedure (RPO/RTO targets, restore steps, audit-chain reverify,
+  manual re-review pass) lives at
+  [`docs/operations/codecommit-disaster-recovery.md`](../operations/codecommit-disaster-recovery.md).
+
+### EventBridge → SNS → `/webhook/codecommit`
+
+For CodeCommit installs, the receiver exposes a second endpoint
+`POST /webhook/codecommit` that consumes the SNS HTTPS subscription
+envelope. The intended wiring is:
+
+```
+CodeCommit repo
+   │
+   ▼  (default event bus, source: aws.codecommit)
+EventBridge rule
+   │
+   ▼  (target: SNS topic)
+SNS topic (review-agent-codecommit)
+   │
+   ▼  (HTTPS subscription, signature v2)
+https://<receiver>/webhook/codecommit
+```
+
+The receiver verifies the SNS message signature against the
+`SigningCertURL` (host-allowlisted to
+`sns.<region>.amazonaws.com`), confirms new subscriptions by
+fetching the `SubscribeURL`, and dedups on `sns:<MessageId>` in the
+same `webhook_deliveries` table as the GitHub path (the `sns:`
+prefix prevents probabilistic UUID collisions with GitHub's
+`X-GitHub-Delivery` — SEC-3 audit fix). PR open / source-branch-
+update / comment-with-`@review-agent` events enqueue a `JobMessage`
+with `prRef.platform = 'codecommit'`.
+
+**Required environment**: `REVIEW_AGENT_SNS_TOPIC_ARNS` — a comma-
+separated allowlist of SNS Topic ARNs the receiver will accept
+deliveries from. The receiver is **fail-closed** (SEC-1 audit fix):
+if this variable is unset or empty, every delivery to
+`/webhook/codecommit` is rejected with `403`. The SNS message
+signature only proves "some AWS SNS topic in some account signed
+this envelope" — an attacker who owns an SNS topic in *any* AWS
+account could otherwise deliver a `SubscriptionConfirmation` to
+this endpoint, have it auto-confirmed, and then deliver forged
+`commentOnPullRequest` notifications. The allowlist closes that gap
+by pinning the receiver to topics the operator explicitly trusts.
+
+```bash
+# Single topic:
+REVIEW_AGENT_SNS_TOPIC_ARNS=arn:aws:sns:us-east-1:111111111111:review-agent-codecommit
+
+# Multiple topics (e.g. cross-region):
+REVIEW_AGENT_SNS_TOPIC_ARNS=arn:aws:sns:us-east-1:111111111111:t1,arn:aws:sns:us-west-2:111111111111:t2
+```
+
+**`installationId` semantics**: the receiver derives the
+`JobMessage.installationId` from the EventBridge envelope's
+`account` field (the 12-digit AWS account ID). This is stable
+across deliveries, numeric (passes the
+`packages/db/src/tenancy.ts` `/^\d+$/` guard), fits in `bigint`,
+and serves as a natural per-tenant key — one AWS account is one
+operator tenant. Multiple repos in the same account share the
+`installationId`; per-PR keying via `review_state.id =
+${owner}/${repo}#${number}` continues to differentiate them.
+Flat (non-EventBridge) deliveries lack `account` and are rejected.
+
+Illustrative Terraform sketch (not runnable as-is — wire the actual
+SNS / EventBridge resource names into your stack):
+
+```hcl
+resource "aws_sns_topic" "codecommit" {
+  name = "review-agent-codecommit"
+}
+
+resource "aws_cloudwatch_event_rule" "codecommit_pr" {
+  name        = "review-agent-codecommit-pr"
+  description = "Forward CodeCommit PR + comment events to the review-agent receiver"
+  event_pattern = jsonencode({
+    source        = ["aws.codecommit"]
+    "detail-type" = ["CodeCommit Pull Request State Change", "CodeCommit Comment on Pull Request"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "codecommit_to_sns" {
+  rule = aws_cloudwatch_event_rule.codecommit_pr.name
+  arn  = aws_sns_topic.codecommit.arn
+}
+
+resource "aws_sns_topic_subscription" "receiver" {
+  topic_arn = aws_sns_topic.codecommit.arn
+  protocol  = "https"
+  endpoint  = "https://${var.receiver_host}/webhook/codecommit"
+  # SNS will POST a SubscriptionConfirmation; the receiver auto-confirms
+  # by fetching the SubscribeURL inside the message envelope.
+}
+```
+
+If the receiver runs behind API Gateway HTTP API (the default
+deployment in this doc), no additional auth header is needed: SNS
+signs every envelope and the receiver rejects anything that fails
+verification with `401`.
 
 ## 16. References
 

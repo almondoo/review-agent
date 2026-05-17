@@ -35,6 +35,12 @@ function fakeState(overrides: Partial<ReviewState> = {}): ReviewState {
 function fakeVcs(stateByPr: Record<number, ReviewState | null>): VCS {
   return {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: async () => {
       throw new Error('unused');
     },
@@ -137,6 +143,19 @@ describe('recoverSyncStateCommand', () => {
     expect(result.recovered).toBe(0);
     expect(result.missing).toEqual([9]);
     expect(upsertState).not.toHaveBeenCalled();
+  });
+
+  it('short-circuits on --platform codecommit with informative stderr', async () => {
+    const io = recordingIo();
+    const result = await recoverSyncStateCommand(io, {
+      repo: 'demo',
+      installationId: 1n,
+      env: {} as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+    });
+    expect(result).toEqual({ status: 'ok', recovered: 0, missing: [] });
+    expect(io.err.join('')).toContain('recover sync-state is GitHub-only');
+    expect(io.err.join('')).toContain('codecommit-disaster-recovery');
   });
 
   it('handles an empty repo (no open PRs)', async () => {

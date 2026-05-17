@@ -1,0 +1,19 @@
+{
+  "category": "rename-content-change",
+  "platform": "codecommit",
+  "language": "ts",
+  "file_changes": [
+    {
+      "previousPath": "src/services/UserService.ts",
+      "path": "src/services/AccountService.ts",
+      "status": "renamed"
+    },
+    {
+      "path": "src/services/index.ts",
+      "status": "modified"
+    }
+  ],
+  "must_contain_any": ["renamed", "rename", "AccountService", "TTL", "ttlMs"],
+  "must_not_contain": ["file deleted", "new file added"],
+  "rationale": "CodeCommit reports this as a (changeType: 'D' on UserService.ts, changeType: 'A' on AccountService.ts) pair which the adapter resolves to status: 'renamed' with previousPath set. The agent should treat it as a rename + content change, not as an unrelated deletion + addition. Mild content tweak (cache TTL) may be worth a single note."
+}

@@ -403,9 +403,12 @@ SELECT COUNT(*) AS recovered FROM review_state WHERE installation_id = 123;
 
 - For multi-repo installations, rerun the command per repo. Multi-repo
   iteration is a v0.4 follow-up.
-- **CodeCommit installations cannot recover state.** They use
-  Postgres-only state per §12.1.1 — the next webhook on every PR is a
-  full re-review. Document this in the customer comms.
+- **CodeCommit installations cannot recover state via this command.**
+  They use Postgres-only state per §12.1.1 — the platform side has no
+  canonical copy. Follow the dedicated CodeCommit runbook at
+  [`docs/operations/codecommit-disaster-recovery.md`](./docs/operations/codecommit-disaster-recovery.md)
+  to plan backups, restore Postgres, verify the audit-log chain, and
+  drive the manual re-review pass on every open PR.
 
 ---
 

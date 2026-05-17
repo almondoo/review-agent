@@ -127,6 +127,26 @@ const IncrementalSchema = z
   })
   .strict();
 
+// CodeCommit-specific operator options (issue #74). At the moment the
+// only field is `approvalState`, which controls whether the CodeCommit
+// adapter maps `review.event` to `UpdatePullRequestApprovalState`.
+//
+//   off (default)  — preserve v0.2 behavior. The adapter ignores
+//                    `review.event`; merge-blocking is left to the
+//                    operator's approval rules in CodeCommit itself.
+//   managed        — translate `APPROVE` → `UpdatePullRequestApprovalState(APPROVE)`
+//                    and `REQUEST_CHANGES` → `UpdatePullRequestApprovalState(REVOKE)`.
+//                    `COMMENT` is a no-op. Requires the agent's IAM
+//                    principal to be a target of an approval rule on
+//                    the PR; otherwise the call is a logged no-op.
+//
+// Other VCS adapters (GitHub, Bitbucket, ...) ignore this section.
+const CodecommitSchema = z
+  .object({
+    approvalState: z.enum(['managed', 'off']).default('off'),
+  })
+  .strict();
+
 // Server-mode workspace provisioning. Only consulted by
 // `@review-agent/server`'s `provisionWorkspace` — Action mode ignores
 // this section (the GitHub Actions runner does `actions/checkout`
@@ -193,6 +213,7 @@ export const ConfigSchema = z
     incremental: IncrementalSchema.default({}),
     coordination: CoordinationSchema.default({}),
     server: ServerSchema.default({}),
+    codecommit: CodecommitSchema.default({}),
   })
   .strict();
 

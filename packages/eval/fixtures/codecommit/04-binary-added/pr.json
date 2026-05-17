@@ -1,0 +1,11 @@
+{
+  "platform": "codecommit",
+  "owner": "",
+  "repo": "acme-widgets",
+  "number": "00112233-4455-6677-8899-aabbccddeeff",
+  "title": "docs: add project logo to README",
+  "body": "Adds a 120x120 PNG logo under `assets/icons/logo.png` and references it from the top of the README. The CodeCommit adapter should serialize the binary file with additions: 0, deletions: 0, patch: null (see toDiffFile in packages/platform-codecommit/src/adapter.ts).",
+  "author": "carol",
+  "baseSha": "deadbeef00112233445566778899aabbccddeeff",
+  "headSha": "cafebabe00112233445566778899aabbccddeeff"
+}

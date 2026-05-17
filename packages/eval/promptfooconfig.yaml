@@ -34,3 +34,51 @@ tests:
     assert:
       - type: javascript
         value: !output.comments || !output.comments.some(c => /api[\s_-]?key/i.test(c.body))
+
+  # ---------------------------------------------------------------------------
+  # CodeCommit fixture group (issue #76). Mirrors the GitHub assertion style:
+  # one promptfoo test per fixture, sharing the same prompt suite + provider.
+  # The CodeCommit adapter (packages/platform-codecommit) is exercised end-to-
+  # end by its own Vitest suite; here we gate only that the agent's output is
+  # sane when the upstream platform is CodeCommit.
+  # ---------------------------------------------------------------------------
+
+  - description: "codecommit/01-small-typical — no false positive on a small Go change"
+    vars:
+      pr_title: "order: surface status column + map sql.ErrNoRows to ErrNotFound"
+      diff: file://fixtures/codecommit/01-small-typical/diff.txt
+    assert:
+      - type: javascript
+        value: !output.comments || output.comments.filter(c => c.severity === 'must_fix').length === 0
+
+  - description: "codecommit/02-large-pr — handles >50-file diff without per-file noise"
+    vars:
+      pr_title: "icons: codegen — switch SVG components to React.FC typing"
+      diff: file://fixtures/codecommit/02-large-pr/diff.txt
+    assert:
+      - type: javascript
+        value: !output.comments || output.comments.length <= 3
+
+  - description: "codecommit/03-rename-content-change — recognises rename + content change"
+    vars:
+      pr_title: "billing: rename UserService -> AccountService (domain alignment) + cache TTL"
+      diff: file://fixtures/codecommit/03-rename-content-change/diff.txt
+    assert:
+      - type: javascript
+        value: !output.comments || !output.comments.some(c => /file deleted|new file added/i.test(c.body))
+
+  - description: "codecommit/04-binary-added — does not produce line comments on binary file"
+    vars:
+      pr_title: "docs: add project logo to README"
+      diff: file://fixtures/codecommit/04-binary-added/diff.txt
+    assert:
+      - type: javascript
+        value: !output.comments || !output.comments.some(c => /^assets\/icons\/logo\.png$/.test(c.path || ''))
+
+  - description: "codecommit/05-edge-empty-body-unicode — preserves UTF-8 in output (no mojibake)"
+    vars:
+      pr_title: "i18n: 日本語の挨拶を修正 + 絵文字メッセージを追加 🎉"
+      diff: file://fixtures/codecommit/05-edge-empty-body-unicode/diff.txt
+    assert:
+      - type: javascript
+        value: !output.comments || !output.comments.some(c => /\?{3,}|\\u3053/.test(c.body))

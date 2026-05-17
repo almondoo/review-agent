@@ -1,3 +1,4 @@
+import type { Config } from '@review-agent/config';
 import type { PR, ReviewState, VCS } from '@review-agent/core';
 import type { LlmProvider, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
@@ -41,6 +42,12 @@ function fakePR(overrides: Partial<PR> = {}): PR {
 function fakeVcs(overrides: Partial<VCS> = {}): VCS {
   const base: VCS = {
     platform: 'github',
+    capabilities: {
+      clone: true,
+      stateComment: 'native',
+      approvalEvent: 'github',
+      commitMessages: true,
+    },
     getPR: async () => fakePR(),
     getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
     getFile: async () => Buffer.from(''),
@@ -261,6 +268,135 @@ describe('runReviewCommand', () => {
       createProvider: () => fakeProvider(),
     });
     expect(result.status).toBe('reviewed');
+  });
+
+  it('runs codecommit happy path without a GH token', async () => {
+    const io = recordingIo();
+    const ccVcs: VCS = {
+      ...fakeVcs(),
+      platform: 'codecommit',
+      capabilities: {
+        clone: false,
+        stateComment: 'postgres-only',
+        approvalEvent: 'codecommit',
+        commitMessages: false,
+      },
+      getPR: async () =>
+        fakePR({ ref: { platform: 'codecommit', owner: '', repo: 'demo', number: 42 } }),
+    };
+    const result = await runReviewCommand(io, {
+      repo: 'demo',
+      pr: 42,
+      configPath: 'missing.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => ccVcs,
+      createProvider: () => fakeProvider({ summary: 'ok' }),
+    });
+    expect(result.status).toBe('reviewed');
+  });
+
+  it('reports auth_failed when --platform codecommit is used without --repo', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 42,
+      configPath: 'missing.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+    });
+    expect(result.status).toBe('auth_failed');
+    expect(io.err.join('')).toContain('Missing required --repo for --platform codecommit');
+  });
+
+  it('rejects malformed codecommit --repo (contains slash)', async () => {
+    const io = recordingIo();
+    await expect(() =>
+      runReviewCommand(io, {
+        repo: 'owner/repo',
+        pr: 1,
+        configPath: 'missing.yml',
+        post: false,
+        platform: 'codecommit',
+        env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      }),
+    ).rejects.toThrow(/codecommit/);
+  });
+
+  it('threads codecommit.approvalState=managed from config into the VCS factory (#74 follow-on)', async () => {
+    const io = recordingIo();
+    const ccVcs: VCS = {
+      ...fakeVcs(),
+      platform: 'codecommit',
+      capabilities: {
+        clone: false,
+        stateComment: 'postgres-only',
+        approvalEvent: 'codecommit',
+        commitMessages: false,
+      },
+      getPR: async () =>
+        fakePR({ ref: { platform: 'codecommit', owner: '', repo: 'demo', number: 42 } }),
+    };
+    const yaml = 'codecommit:\n  approvalState: managed\n';
+    let captured: Config | null = null;
+    const result = await runReviewCommand(io, {
+      repo: 'demo',
+      pr: 42,
+      configPath: '.review-agent.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: async () => yaml,
+      createVCS: (_token, config) => {
+        captured = config;
+        return ccVcs;
+      },
+      createProvider: () => fakeProvider({ summary: 'ok' }),
+    });
+    expect(result.status).toBe('reviewed');
+    expect(captured).not.toBeNull();
+    expect((captured as unknown as Config).codecommit.approvalState).toBe('managed');
+  });
+
+  it('defaults codecommit.approvalState to off when config is missing (#74 follow-on)', async () => {
+    const io = recordingIo();
+    const ccVcs: VCS = {
+      ...fakeVcs(),
+      platform: 'codecommit',
+      capabilities: {
+        clone: false,
+        stateComment: 'postgres-only',
+        approvalEvent: 'codecommit',
+        commitMessages: false,
+      },
+      getPR: async () =>
+        fakePR({ ref: { platform: 'codecommit', owner: '', repo: 'demo', number: 42 } }),
+    };
+    let captured: Config | null = null;
+    const result = await runReviewCommand(io, {
+      repo: 'demo',
+      pr: 42,
+      configPath: 'missing.yml',
+      post: false,
+      platform: 'codecommit',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: (_token, config) => {
+        captured = config;
+        return ccVcs;
+      },
+      createProvider: () => fakeProvider({ summary: 'ok' }),
+    });
+    expect(result.status).toBe('reviewed');
+    expect(captured).not.toBeNull();
+    expect((captured as unknown as Config).codecommit.approvalState).toBe('off');
   });
 
   it('skips when author is in ignore_authors', async () => {

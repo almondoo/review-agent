@@ -11,7 +11,22 @@ import type {
   ReviewPayload,
   ReviewState,
   VCS,
+  VcsCapabilities,
 } from '@review-agent/core';
+
+/**
+ * Static capability declaration for GitHub — every flag is on. Kept
+ * here next to the adapter so the adapter and its capability claims
+ * stay in sync; deviations (e.g. a future GitHub Enterprise Server
+ * variant that drops a feature) should override at construction time.
+ */
+export const GITHUB_CAPABILITIES: VcsCapabilities = {
+  clone: true,
+  stateComment: 'native',
+  approvalEvent: 'github',
+  commitMessages: true,
+};
+
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
 import { assertSafeRelativePath } from './path-guard.js';
 import {
@@ -80,6 +95,19 @@ function ensureGithub(ref: PRRef): void {
 }
 
 function defaultCloneUrl(ref: PRRef, token: string): string {
+  // Defense-in-depth (SEC-5): the JobMessageSchema discriminated union
+  // already rejects github refs with an empty owner, but `PRRef` reaches
+  // this function via the VCS interface from callers that may have built
+  // the ref by hand (CLI, tests, future adapters). Refuse before
+  // interpolating the token — a `github.com//${repo}.git` URL is invalid
+  // and the resulting git error tends to echo back the URL, leaking the
+  // token. The error message MUST NOT include the token.
+  if (!ref.owner) {
+    throw new Error(`Refusing clone for github ref with empty owner: ${ref.repo}#${ref.number}`);
+  }
+  if (!ref.repo) {
+    throw new Error('Refusing clone for github ref with empty repo');
+  }
   return `https://x-access-token:${token}@github.com/${ref.owner}/${ref.repo}.git`;
 }
 
@@ -341,6 +369,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
 
   return {
     platform: 'github',
+    capabilities: GITHUB_CAPABILITIES,
     getPR,
     getDiff,
     getFile,

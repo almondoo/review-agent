@@ -1,0 +1,21 @@
+{
+  "platform": "codecommit",
+  "owner": "",
+  "repo": "i18n-messages",
+  "number": "fedcba98-7654-3210-fedc-ba9876543210",
+  "title": "i18n: 日本語の挨拶を修正 + 絵文字メッセージを追加 🎉",
+  "body": "",
+  "author": "中村",
+  "baseSha": "abc1230000000000000000000000000000000000",
+  "headSha": "def4560000000000000000000000000000000000",
+  "existing_comments": [
+    {
+      "id": "cc-1",
+      "path": "src/i18n/messages.ts",
+      "line": 6,
+      "side": "RIGHT",
+      "body": "「こんにちわ」は誤りですね。修正ありがとうございます 👍",
+      "author": "佐藤"
+    }
+  ]
+}

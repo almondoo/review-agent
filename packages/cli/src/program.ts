@@ -16,6 +16,7 @@ export type ProgramDeps = {
 };
 
 const PROFILES = ['chill', 'assertive'] as const;
+const PLATFORMS = ['github', 'codecommit'] as const;
 
 export function buildProgram(deps: ProgramDeps = {}): Command {
   const io = deps.io ?? defaultIo();
@@ -30,8 +31,13 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
   program
     .command('review')
     .description('Run a review against a single PR using a PAT.')
-    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--repo <repo>', "repository: 'owner/name' for github, '<name>' for codecommit")
     .requiredOption('--pr <n>', 'PR number', (v) => Number.parseInt(v, 10))
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
     .option('--config <path>', 'path to .review-agent.yml', '.review-agent.yml')
     .option('--lang <code>', 'override output language (BCP 47)')
     .addOption(new Option('--profile <profile>', 'override review profile').choices([...PROFILES]))
@@ -43,6 +49,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         pr: opts.pr,
         configPath: opts.config,
         post: !!opts.post,
+        platform: opts.platform,
         ...(opts.lang ? { language: opts.lang } : {}),
         ...(opts.profile ? { profile: opts.profile } : {}),
         ...(opts.costCapUsd !== undefined ? { costCapUsd: opts.costCapUsd } : {}),
@@ -152,10 +159,16 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     )
     .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
     .requiredOption('--installation <id>', 'GitHub App installation ID', (v) => BigInt(v))
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
     .action(async (opts: RecoverSyncStateCliOpts) => {
       const result = await recoverSyncStateCommand(io, {
         repo: opts.repo,
         installationId: opts.installation,
+        platform: opts.platform,
         env,
       });
       io.exit(result.status === 'auth_failed' ? 1 : 0);
@@ -169,6 +182,7 @@ type ReviewCliOpts = {
   repo: string;
   pr: number;
   config: string;
+  platform: (typeof PLATFORMS)[number];
   lang?: string;
   profile?: (typeof PROFILES)[number];
   costCapUsd?: number;
@@ -182,6 +196,7 @@ type EvalCliOpts = {
 type RecoverSyncStateCliOpts = {
   repo: string;
   installation: bigint;
+  platform: (typeof PLATFORMS)[number];
 };
 
 type SetupWorkspaceCliOpts = {

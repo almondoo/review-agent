@@ -1,0 +1,59 @@
+--- a/internal/order/repository.go
++++ b/internal/order/repository.go
+@@ -12,8 +12,12 @@ type Repository struct {
+ 	db *sql.DB
+ }
+
+-func (r *Repository) FindByID(ctx context.Context, id string) (*Order, error) {
+-	row := r.db.QueryRowContext(ctx, `SELECT id, total FROM orders WHERE id = $1`, id)
++func (r *Repository) FindByID(ctx context.Context, id string) (*Order, error) {
++	row := r.db.QueryRowContext(ctx, `SELECT id, total, status FROM orders WHERE id = $1`, id)
+ 	var o Order
+-	if err := row.Scan(&o.ID, &o.Total); err != nil {
++	if err := row.Scan(&o.ID, &o.Total, &o.Status); err != nil {
++		if errors.Is(err, sql.ErrNoRows) {
++			return nil, ErrNotFound
++		}
+ 		return nil, err
+ 	}
+ 	return &o, nil
+ }
+--- a/internal/order/order.go
++++ b/internal/order/order.go
+@@ -3,6 +3,7 @@ package order
+ type Order struct {
+ 	ID    string
+ 	Total int64
++	Status string
+ }
+
+ var ErrNotFound = errors.New("order: not found")
+--- a/internal/order/repository_test.go
++++ b/internal/order/repository_test.go
+@@ -20,7 +20,7 @@ func TestFindByID(t *testing.T) {
+ 	defer db.Close()
+
+ 	mock.ExpectQuery("SELECT id, total").
+-		WithArgs("o1").
++		WithArgs("o1").
+ 		WillReturnRows(sqlmock.NewRows([]string{"id", "total", "status"}).
+ 			AddRow("o1", int64(1200), "paid"))
+
+@@ -33,4 +33,18 @@ func TestFindByID(t *testing.T) {
+ 		t.Fatalf("expected total=1200, got %d", got.Total)
+ 	}
+ }
++
++func TestFindByID_NotFound(t *testing.T) {
++	db, mock, _ := sqlmock.New()
++	defer db.Close()
++
++	mock.ExpectQuery("SELECT id, total").
++		WithArgs("missing").
++		WillReturnError(sql.ErrNoRows)
++
++	r := &Repository{db: db}
++	if _, err := r.FindByID(context.Background(), "missing"); !errors.Is(err, ErrNotFound) {
++		t.Fatalf("expected ErrNotFound, got %v", err)
++	}
++}

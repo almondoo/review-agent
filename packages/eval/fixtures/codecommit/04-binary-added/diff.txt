@@ -1,0 +1,15 @@
+--- /dev/null
++++ b/assets/icons/logo.png
+Binary files /dev/null and b/assets/icons/logo.png differ
+--- a/README.md
++++ b/README.md
+@@ -1,5 +1,9 @@
+ # Acme Widgets
+
++<p align="center">
++  <img src="assets/icons/logo.png" alt="Acme Widgets logo" width="120" />
++</p>
++
+ Acme Widgets is a small React component library for building dashboards.
+
+ ## Install
