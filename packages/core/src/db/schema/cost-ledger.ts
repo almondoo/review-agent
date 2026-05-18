@@ -28,6 +28,15 @@ export const costLedger = pgTable(
     cacheReadTokens: integer('cache_read_tokens').notNull().default(0),
     cacheCreationTokens: integer('cache_creation_tokens').notNull().default(0),
     costUsd: doublePrecision('cost_usd').notNull().default(0),
+    /**
+     * Wall-clock time the LLM call took, in milliseconds. Defaults to
+     * zero so existing readers don't see NULL; the recorder fills it
+     * in when the runner measures `Date.now()` around `generateReview`.
+     * Added in v1.2 epic #83 Phase 2 to power per-call latency
+     * regression tracking alongside the per-review summary in
+     * `review_eval_event.latency_ms`.
+     */
+    latencyMs: integer('latency_ms').notNull().default(0),
     status: text('status').notNull().$type<(typeof COST_LEDGER_STATUSES)[number]>(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },

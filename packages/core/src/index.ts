@@ -37,6 +37,7 @@ export {
   type SecretLeakPhase,
   ToolDispatchRefusedError,
 } from './errors.js';
+export type { ReviewEvalEvent, ReviewEvalEventRecorder } from './eval.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export { globToRegExp, isValidGlob } from './glob.js';
 export {
@@ -108,8 +109,10 @@ export {
   computeReviewEvent,
   type InlineComment,
   REQUEST_CHANGES_THRESHOLDS,
+  REVIEW_ABORT_REASONS,
   REVIEW_EVENTS,
   type RequestChangesThreshold,
+  type ReviewAbortReason,
   type ReviewEvent,
   type ReviewPayload,
   type ReviewState,

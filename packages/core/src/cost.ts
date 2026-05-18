@@ -15,6 +15,13 @@ export type RecordPhaseInput = {
   readonly cacheCreationTokens?: number;
   readonly costUsd: number;
   readonly status: CostLedgerStatus;
+  /**
+   * Wall-clock time of the LLM call in milliseconds. Optional so the
+   * v1.1 callers (which never measured latency) keep compiling; the
+   * recorder defaults absent values to zero. Added in v1.2 epic #83
+   * Phase 2 alongside `cost_ledger.latency_ms`.
+   */
+  readonly latencyMs?: number;
 };
 
 export type CostLedgerRecorder = (input: RecordPhaseInput) => Promise<void>;

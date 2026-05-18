@@ -175,6 +175,20 @@ export type ReviewPayload = {
   readonly event?: ReviewEvent;
 };
 
+/**
+ * Reasons the runner's agent loop can give up on a review without
+ * posting any inline comments (spec §7.3 #4 + spec §10 cap-skip).
+ * Lives in core so the per-review eval event (Phase 2) and the
+ * runner share a single source of truth.
+ */
+export const REVIEW_ABORT_REASONS = [
+  'url_allowlist',
+  'schema_violation',
+  'max_files_exceeded',
+  'max_diff_lines_exceeded',
+] as const;
+export type ReviewAbortReason = (typeof REVIEW_ABORT_REASONS)[number];
+
 export const COST_LEDGER_PHASES = ['injection_detect', 'review_main', 'review_retry'] as const;
 export type CostLedgerPhase = (typeof COST_LEDGER_PHASES)[number];
 

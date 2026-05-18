@@ -1,11 +1,13 @@
-import type {
-  Confidence,
-  InlineComment,
-  RequestChangesThreshold,
-  ReviewEvent,
-  ReviewState,
-  Severity,
-  Side,
+import {
+  type Confidence,
+  type InlineComment,
+  REVIEW_ABORT_REASONS,
+  type RequestChangesThreshold,
+  type ReviewAbortReason,
+  type ReviewEvent,
+  type ReviewState,
+  type Severity,
+  type Side,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
@@ -231,13 +233,7 @@ export type FinalizedComment = InlineComment & {
  * reason in the posted summary; eventually also gate state-comment
  * writes / cost reporting.
  */
-export const REVIEW_ABORT_REASONS = [
-  'url_allowlist',
-  'schema_violation',
-  'max_files_exceeded',
-  'max_diff_lines_exceeded',
-] as const;
-export type ReviewAbortReason = (typeof REVIEW_ABORT_REASONS)[number];
+export { REVIEW_ABORT_REASONS, type ReviewAbortReason };
 
 export type RunnerResult = {
   readonly comments: ReadonlyArray<InlineComment>;
@@ -301,6 +297,34 @@ export type RunReviewDeps = {
     readonly body: string;
   }) => string;
   readonly scanContent?: (text: string) => ReadonlyArray<GitleaksFinding>;
+  /**
+   * Optional `wall-clock` provider for latency measurement. Defaults
+   * to `Date.now`. Tests inject a deterministic clock so the
+   * `latencyMs` field on the eval event is stable. Added in v1.2
+   * epic #83 Phase 2.
+   */
+  readonly now?: () => number;
+  /**
+   * Per-review eval recorder (`review_eval_event` table, spec §7.6
+   * adjacent). When both `evalRecorder` and `evalContext` are
+   * provided, the runner builds a `ReviewEvalEvent` from the final
+   * `RunnerResult` and calls the recorder once at the very end of
+   * `runReview`. Insert errors are caught fail-open so a transient
+   * DB issue never aborts a successfully-posted review. v1.2 epic
+   * #83 Phase 2.
+   */
+  readonly evalRecorder?: import('@review-agent/core').ReviewEvalEventRecorder;
+  readonly evalContext?: {
+    readonly installationId: bigint;
+    readonly prNumber: number;
+    readonly headSha: string;
+  };
+  /**
+   * Fired when the eval recorder throws. The runner does NOT
+   * re-throw — operators who want observability route this to OTel
+   * or their logger here.
+   */
+  readonly onEvalRecordError?: (err: unknown) => void;
 };
 
 export type Middleware = (

@@ -1232,3 +1232,81 @@ describe('runReview — reviewEvent mapping (#65)', () => {
     expect(secondRun.reviewEvent).toBe('COMMENT');
   });
 });
+
+describe('runReview — eval recorder integration (#91 / spec v1.2 Phase 2)', () => {
+  it('records a review_eval_event row at the end of a successful run', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => undefined);
+    let t = 1000;
+    await runReview(baseJob, provider, {
+      now: () => {
+        t += 250;
+        return t;
+      },
+      evalRecorder,
+      evalContext: { installationId: 99n, prNumber: 14, headSha: 'feedface' },
+    });
+    expect(evalRecorder).toHaveBeenCalledTimes(1);
+    const event = evalRecorder.mock.calls[0]?.[0];
+    expect(event?.installationId).toBe(99n);
+    expect(event?.jobId).toBe('job-1');
+    expect(event?.repo).toBe('test-owner/test-repo');
+    expect(event?.prNumber).toBe(14);
+    expect(event?.headSha).toBe('feedface');
+    expect(event?.provider).toBe('anthropic');
+    expect(event?.model).toBe('claude-sonnet-4-6');
+    expect(event?.commentCount).toBe(2);
+    expect(event?.severityDist).toMatchObject({ critical: 0, major: 1, minor: 1, info: 0 });
+    expect(event?.confidenceDist).toMatchObject({ high: 2, medium: 0, low: 0 });
+    expect(event?.toolCalls).toBe(0);
+    // Two `now()` calls (start, end). Each increments by 250 → 250ms.
+    expect(event?.latencyMs).toBe(250);
+    expect(event?.costUsd).toBeCloseTo(0.0045);
+    expect(event?.abortReason).toBeNull();
+  });
+
+  it('records the event with abortReason on a graceful cap-skip path', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => undefined);
+    // Two-file diff that exceeds the maxFiles=1 cap and triggers
+    // the `max_files_exceeded` short-circuit before the LLM call.
+    const diffText = ['--- a.ts\n@@ -1 +1 @@\n+a', '--- b.ts\n@@ -1 +1 @@\n+b'].join('\n');
+    await runReview({ ...baseJob, maxFiles: 1, diffText }, provider, {
+      evalRecorder,
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+    });
+    const event = evalRecorder.mock.calls[0]?.[0];
+    expect(event?.abortReason).toBe('max_files_exceeded');
+    expect(event?.commentCount).toBe(0);
+    expect(event?.costUsd).toBe(0);
+  });
+
+  it('does not record when evalRecorder is absent — zero overhead path', async () => {
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider);
+    expect(result.comments).toHaveLength(2);
+    // No recorder fired by construction; the lack of throw IS the signal.
+  });
+
+  it('does not record when evalContext is missing even if recorder is set', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => undefined);
+    await runReview(baseJob, provider, { evalRecorder });
+    expect(evalRecorder).not.toHaveBeenCalled();
+  });
+
+  it('fail-open: recorder error never bubbles to the caller', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => {
+      throw new Error('db down');
+    });
+    const onEvalRecordError = vi.fn();
+    const result = await runReview(baseJob, provider, {
+      evalRecorder,
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      onEvalRecordError,
+    });
+    expect(result.comments).toHaveLength(2);
+    expect(onEvalRecordError).toHaveBeenCalledTimes(1);
+  });
+});

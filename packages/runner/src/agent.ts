@@ -27,6 +27,7 @@ import {
   createCostGuard,
   createInjectionGuard,
   dedupComments,
+  recordEvalEvent,
 } from './middleware/index.js';
 import { composeSystemPrompt } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
@@ -128,10 +129,10 @@ function classifyAbort(err: SchemaValidationError): {
   return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
 }
 
-export async function runReview(
+async function runReviewInner(
   job: ReviewJob,
   provider: LlmProvider,
-  deps: RunReviewDeps = {},
+  deps: RunReviewDeps,
 ): Promise<RunnerResult> {
   // Incremental review fields flow from the action / cli call site
   // (see packages/action/src/run.ts where computeDiffStrategy decides
@@ -436,6 +437,47 @@ export async function runReview(
     toolCalls,
     reviewEvent,
   };
+}
+
+/**
+ * Wraps the agent loop with the v1.2 eval recorder (#83 Phase 2).
+ * Measures wall-clock latency around the entire `runReview` flow
+ * (including the gitleaks pre-scan, the LLM call, and dedup), and
+ * fires `deps.evalRecorder` once with a `ReviewEvalEvent` built
+ * from the final `RunnerResult`. Recording errors are routed
+ * through `deps.onEvalRecordError` and never bubble out — by the
+ * time we record, the review comments have already been posted (or
+ * the abort summary already emitted), so a transient DB failure
+ * must not retroactively crash the user-visible review.
+ *
+ * When `evalRecorder` is absent we keep the v1.1 behavior and just
+ * forward the inner result so callers that don't run a DB worker
+ * (local CLI, eval-only tests) pay zero overhead.
+ */
+export async function runReview(
+  job: ReviewJob,
+  provider: LlmProvider,
+  deps: RunReviewDeps = {},
+): Promise<RunnerResult> {
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const result = await runReviewInner(job, provider, deps);
+  const latencyMs = Math.max(0, now() - startedAt);
+  if (deps.evalRecorder && deps.evalContext) {
+    const recorderOpts = {
+      recorder: deps.evalRecorder,
+      context: {
+        installationId: deps.evalContext.installationId,
+        jobId: job.jobId,
+        repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+        prNumber: deps.evalContext.prNumber,
+        headSha: deps.evalContext.headSha,
+      },
+      ...(deps.onEvalRecordError !== undefined ? { onRecordError: deps.onEvalRecordError } : {}),
+    };
+    await recordEvalEvent(recorderOpts, result, latencyMs);
+  }
+  return result;
 }
 
 function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<string> {
