@@ -1,5 +1,5 @@
 import type { JobMessage, QueueClient } from '@review-agent/core';
-import { reviewState, webhookDeliveries } from '@review-agent/core/db';
+import { reviewHistory, reviewState, webhookDeliveries } from '@review-agent/core/db';
 import type { DbClient } from '@review-agent/db';
 import { eq, lt, sql } from 'drizzle-orm';
 
@@ -19,9 +19,17 @@ export type WorkerDeps = {
 const DEFAULT_DEBOUNCE_MS = 5_000;
 const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 7;
-// PostgreSQL advisory lock key for the cleanup elector. Picked
+// `review_history` rows carry a per-row `expires_at` default of
+// `now() + 180 days` (spec §7.6). The prune sweep below simply
+// deletes rows whose `expires_at` is already in the past, so the
+// scheduler cadence does not have to match the 180-day window —
+// hourly is enough to keep the table bounded without piling work
+// on a single midnight tick.
+const DEFAULT_REVIEW_HISTORY_INTERVAL_MS = 60 * 60 * 1000;
+// PostgreSQL advisory lock keys for the cleanup electors. Picked
 // arbitrarily; documented here so future workers don't collide.
 const CLEANUP_LOCK_KEY = 0xabba0001n;
+const REVIEW_HISTORY_CLEANUP_LOCK_KEY = 0xabba0002n;
 
 export async function startWorker(deps: WorkerDeps): Promise<void> {
   const cleanup = startIdempotencyCleanup(deps);
@@ -101,12 +109,70 @@ export function startIdempotencyCleanup(deps: WorkerDeps): CleanupHandle {
   };
 }
 
-async function tryAcquireLock(db: DbClient): Promise<boolean> {
-  const result = await db.execute(sql`SELECT pg_try_advisory_lock(${CLEANUP_LOCK_KEY}) AS got`);
+async function tryAcquireLock(db: DbClient, key: bigint = CLEANUP_LOCK_KEY): Promise<boolean> {
+  const result = await db.execute(sql`SELECT pg_try_advisory_lock(${key}) AS got`);
   const row = (result as ReadonlyArray<{ got?: boolean }>)[0];
   return row?.got === true;
 }
 
-async function releaseLock(db: DbClient): Promise<void> {
-  await db.execute(sql`SELECT pg_advisory_unlock(${CLEANUP_LOCK_KEY})`);
+async function releaseLock(db: DbClient, key: bigint = CLEANUP_LOCK_KEY): Promise<void> {
+  await db.execute(sql`SELECT pg_advisory_unlock(${key})`);
+}
+
+export type ReviewHistoryCleanupDeps = {
+  readonly db: DbClient;
+  readonly intervalMs?: number;
+  readonly now?: () => Date;
+};
+
+/**
+ * Periodic prune of `review_history` rows whose `expires_at` has
+ * elapsed (spec §7.6 180-day TTL, v1.2 epic #83 Phase 3 / #92).
+ * Mirrors the existing `startIdempotencyCleanup` shape — same
+ * advisory-lock leader-election pattern so multiple workers can
+ * be running and only one will issue the DELETE per tick. A
+ * separate lock key (`REVIEW_HISTORY_CLEANUP_LOCK_KEY`) lets the
+ * two electors run on independent cadences without serializing.
+ *
+ * Operators wire this alongside `startWorker` in their entry
+ * point. The handle's `tickOnce` is exposed for tests and for
+ * an on-demand prune that doesn't wait for the next interval.
+ */
+export function startReviewHistoryCleanup(deps: ReviewHistoryCleanupDeps): CleanupHandle {
+  const interval = deps.intervalMs ?? DEFAULT_REVIEW_HISTORY_INTERVAL_MS;
+  const now = deps.now ?? (() => new Date());
+  let timer: NodeJS.Timeout | null = null;
+  let stopped = false;
+
+  async function tickOnce(): Promise<void> {
+    const lockHeld = await tryAcquireLock(deps.db, REVIEW_HISTORY_CLEANUP_LOCK_KEY);
+    if (!lockHeld) return;
+    try {
+      await deps.db.delete(reviewHistory).where(lt(reviewHistory.expiresAt, now()));
+    } finally {
+      await releaseLock(deps.db, REVIEW_HISTORY_CLEANUP_LOCK_KEY);
+    }
+  }
+
+  function schedule(): void {
+    if (stopped) return;
+    timer = setTimeout(async () => {
+      try {
+        await tickOnce();
+      } finally {
+        schedule();
+      }
+    }, interval);
+    timer.unref?.();
+  }
+
+  schedule();
+
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+    tickOnce,
+  };
 }

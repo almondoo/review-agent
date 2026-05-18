@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { startIdempotencyCleanup, startWorker } from './worker.js';
+import { startIdempotencyCleanup, startReviewHistoryCleanup, startWorker } from './worker.js';
 
 function makeDb(initial: { reviewState?: { id: string; headSha: string; updatedAt: Date } } = {}) {
   const stateRows = initial.reviewState ? [initial.reviewState] : [];
@@ -183,5 +183,75 @@ describe('startIdempotencyCleanup', () => {
     await cleanup.tickOnce();
     expect(deleteCall).not.toHaveBeenCalled();
     cleanup.stop();
+  });
+});
+
+describe('startReviewHistoryCleanup', () => {
+  it('tickOnce prunes review_history when advisory lock is acquired', async () => {
+    const db = makeDb();
+    const deleteCall = vi.fn().mockResolvedValue(undefined);
+    // biome-ignore lint/suspicious/noExplicitAny: mock surface
+    (db as any).delete = () => ({ where: deleteCall });
+    const cleanup = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+    });
+    await cleanup.tickOnce();
+    expect(deleteCall).toHaveBeenCalledTimes(1);
+    cleanup.stop();
+  });
+
+  it('tickOnce skips deletion when advisory lock is denied', async () => {
+    const db = makeDb();
+    db.execute = vi.fn().mockResolvedValue([{ got: false }]);
+    const deleteCall = vi.fn().mockResolvedValue(undefined);
+    // biome-ignore lint/suspicious/noExplicitAny: mock surface
+    (db as any).delete = () => ({ where: deleteCall });
+    const cleanup = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+    });
+    await cleanup.tickOnce();
+    expect(deleteCall).not.toHaveBeenCalled();
+    cleanup.stop();
+  });
+
+  it('uses a distinct advisory lock key from the idempotency elector', async () => {
+    // The two cleanup electors must not serialize on the same key —
+    // otherwise webhook_deliveries pruning and review_history pruning
+    // would block each other indefinitely when both are scheduled at
+    // the same instant on a multi-worker fleet.
+    const db = makeDb();
+    const executed: bigint[] = [];
+    db.execute = vi.fn().mockImplementation(async (sqlNode: unknown) => {
+      const node = sqlNode as { queryChunks?: unknown[] };
+      const chunk = node.queryChunks?.find((c) => typeof c === 'object' && c && 'value' in c) as
+        | { value?: bigint }
+        | undefined;
+      if (chunk?.value !== undefined) executed.push(chunk.value);
+      return [{ got: true }];
+    });
+    const idem = startIdempotencyCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+      handler: vi.fn(),
+      cleanupIntervalMs: 1_000_000,
+    });
+    const history = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+    });
+    await idem.tickOnce();
+    await history.tickOnce();
+    idem.stop();
+    history.stop();
+    const distinct = new Set(executed.map((v) => v.toString()));
+    // pg_try_advisory_lock + pg_advisory_unlock per elector = 4 calls;
+    // 2 distinct keys.
+    expect(distinct.size).toBe(2);
   });
 });
