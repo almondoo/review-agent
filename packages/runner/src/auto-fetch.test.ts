@@ -1,3 +1,4 @@
+import { globToRegExp } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   collectAutoFetchContext,
@@ -236,6 +237,72 @@ describe('collectAutoFetchContext — budget caps', () => {
       maxBytesPerFile: 50_000,
       maxTotalBytes: 250_000,
     });
+  });
+});
+
+describe('collectAutoFetchContext — operator deny_paths (spec §7.4)', () => {
+  // Closes the scope gap surfaced during T3: operator-configured
+  // `privacy.deny_paths` must apply to auto-fetched companion files
+  // too, not only to LLM-initiated tool calls. The deny check lives
+  // in `createTools`, so threading `denyPatterns` through the input
+  // and into the underlying dispatcher is sufficient.
+
+  it('silently skips an auto-fetch companion that an operator denyPath matches', async () => {
+    // path_instruction matches the changed file in `org-secrets/`,
+    // and tests=true would normally pull `org-secrets/foo.test.ts`.
+    // With `denyPatterns: ['org-secrets/**']`, the underlying
+    // read_file refuses and auto-fetch logs no files.
+    const deps = makeDeps({
+      files: { '/work/org-secrets/foo.test.ts': "test('leak', () => {});" },
+    });
+    const result = await collectAutoFetchContext({
+      changedPaths: ['org-secrets/foo.ts'],
+      pathInstructions: [
+        { pattern: 'org-secrets/**', text: 'x', autoFetch: { tests: true, types: false } },
+      ],
+      workspaceDir: WORKSPACE,
+      toolDeps: deps,
+      denyPatterns: [globToRegExp('org-secrets/**')],
+    });
+    expect(result.files).toEqual([]);
+    expect(result.hitBudgetLimit).toBe(false);
+  });
+
+  it('still fetches non-denied companions when denyPatterns is supplied (positive control)', async () => {
+    // Same shape as the prior test but the changed file is OUTSIDE
+    // the deny glob, so auto-fetch should behave normally. Catches a
+    // regression where the union is wired backwards (everything denied).
+    const deps = makeDeps({
+      files: { '/work/src/a.test.ts': 'ok' },
+    });
+    const result = await collectAutoFetchContext({
+      changedPaths: ['src/a.ts'],
+      pathInstructions: [
+        { pattern: 'src/**/*.ts', text: 'x', autoFetch: { tests: true, types: false } },
+      ],
+      workspaceDir: WORKSPACE,
+      toolDeps: deps,
+      denyPatterns: [globToRegExp('org-secrets/**')],
+    });
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]?.path).toBe('src/a.test.ts');
+  });
+
+  it('built-in deny defaults still apply when denyPatterns is omitted', async () => {
+    // No operator `denyPatterns` supplied. The pre-existing
+    // ".env*" / "secrets/" defaults inside createTools still block
+    // the companion fetch — proving the union runs the built-ins
+    // even with an empty operator layer.
+    const deps = makeDeps({
+      files: { '/work/secrets/db.test.json': 'test' },
+    });
+    const result = await collectAutoFetchContext({
+      changedPaths: ['secrets/db.json'],
+      pathInstructions: [{ pattern: 'secrets/**', text: 'x', autoFetch: { tests: true } }],
+      workspaceDir: WORKSPACE,
+      toolDeps: deps,
+    });
+    expect(result.files).toEqual([]);
   });
 });
 

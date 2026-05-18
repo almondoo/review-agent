@@ -18,7 +18,9 @@ export { type SpanAttributes, type SpanName, withSpan } from './spans.js';
 export {
   type CleanupHandle,
   type JobHandler,
+  type ReviewHistoryCleanupDeps,
   startIdempotencyCleanup,
+  startReviewHistoryCleanup,
   startWorker,
   type WorkerDeps,
 } from './worker.js';

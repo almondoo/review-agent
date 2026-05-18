@@ -142,45 +142,9 @@ export async function computeDiffStrategy(
   return { since: previousHead };
 }
 
-export type ApplyLineShiftInput = {
-  readonly path: string;
-  readonly originalLine: number;
-  readonly diffHunks: ReadonlyArray<DiffHunk>;
-};
-
 export type DiffHunk = {
   readonly oldStart: number;
   readonly oldLines: number;
   readonly newStart: number;
   readonly newLines: number;
 };
-
-// Maps an `originalLine` (in the file before the new commits) to the
-// equivalent line number in the file after the new commits, by walking
-// hunks. Returns null when the line was deleted.
-//
-// Used when re-anchoring a previously-posted fingerprinted comment to a
-// newer head. GitHub's review API also accepts a `position` field which
-// re-maps automatically; this helper is the local fallback / verifier.
-export function shiftLineThroughHunks(
-  originalLine: number,
-  hunks: ReadonlyArray<DiffHunk>,
-): number | null {
-  let line = originalLine;
-  for (const h of hunks) {
-    const oldEnd = h.oldStart + h.oldLines - 1;
-    if (originalLine < h.oldStart) break;
-    if (originalLine >= h.oldStart && originalLine <= oldEnd) {
-      // Inside the changed hunk; map proportionally if the lines exist
-      // in the new revision, else the line was deleted.
-      if (h.newLines === 0) return null;
-      const offset = originalLine - h.oldStart;
-      if (offset >= h.newLines) return null;
-      return h.newStart + offset;
-    }
-    if (originalLine > oldEnd) {
-      line += h.newLines - h.oldLines;
-    }
-  }
-  return line > 0 ? line : null;
-}

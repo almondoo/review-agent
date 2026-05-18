@@ -74,8 +74,7 @@ These are the surfaces that v1.0+ commits to maintain compatibility for.
   `renderSkillsBlock` — composable building blocks for advanced
   wirings (CLI, server, custom adapters).
 - `dedupComments`, `decideCoordination`, `renderDeferralSummary`,
-  `buildReviewState`, `createCostKillSwitch`, `assertDailyCapNotExceeded`,
-  `preflightDailyCap`, `scanWorkspaceWithGitleaks`,
+  `buildReviewState`, `scanWorkspaceWithGitleaks`,
   `quickScanContent`, `applyRedactions`, `shouldAbortReview`,
   `classifyForInjection`, `redactInjectionBlocks`,
   `INJECTION_VERDICTS`, `resolveInjectionDetectorPolicy` — all
@@ -246,7 +245,7 @@ surface:
 - `@review-agent/core`: `computeReviewEvent`, `REVIEW_EVENTS`,
   `ReviewEvent`, `REQUEST_CHANGES_THRESHOLDS`, `RequestChangesThreshold`,
   `CATEGORIES`, `Category`, `CONFIDENCES`, `Confidence`,
-  `formatCategoryRollup`, `ReviewStateSchema`,
+  `ReviewStateSchema`,
   `REVIEW_STATE_SCHEMA_VERSION`, `WORKSPACE_STRATEGIES`,
   `WorkspaceStrategy`, `verifyAuditChainSegment`,
   `globToRegExp`, `isValidGlob`.

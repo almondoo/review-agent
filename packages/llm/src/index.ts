@@ -55,6 +55,7 @@ export {
   createGenericProvider,
   type GenerateTextFn,
   type ProviderDriverDeps,
+  ProviderOutputShapeSchema,
   type ProviderPricing,
   type ProviderShape,
   type Tokenizer,

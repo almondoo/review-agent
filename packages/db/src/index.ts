@@ -29,6 +29,12 @@ export {
   verifyAuditChainSegmentFromDb,
 } from './hmac-chain.js';
 export { type MigrateOpts, runMigrations } from './migrate.js';
+export { createReviewEvalEventRecorder } from './review-eval-event.js';
+export {
+  createReviewHistoryWriter,
+  loadRecentReviewHistory,
+  pruneExpiredReviewHistory,
+} from './review-history.js';
 export {
   createReviewStateMirror,
   loadReviewState,

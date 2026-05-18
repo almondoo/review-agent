@@ -1,6 +1,6 @@
 import type { PRRef } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
-import { cloneWithStrategy, type RunGit } from './clone.js';
+import { cloneWithStrategy, type RunGit, type RunGitOptions } from './clone.js';
 
 const ref: PRRef = { platform: 'github', owner: 'o', repo: 'r', number: 1 };
 const headSha = 'abc1234567890';
@@ -9,6 +9,17 @@ function recordingRunGit(): { runGit: RunGit; calls: string[][] } {
   const calls: string[][] = [];
   const runGit: RunGit = vi.fn(async (args) => {
     calls.push([...args]);
+  });
+  return { runGit, calls };
+}
+
+function recordingRunGitWithOpts(): {
+  runGit: RunGit;
+  calls: Array<{ args: string[]; opts: RunGitOptions | undefined }>;
+} {
+  const calls: Array<{ args: string[]; opts: RunGitOptions | undefined }> = [];
+  const runGit: RunGit = vi.fn(async (args, opts) => {
+    calls.push({ args: [...args], opts });
   });
   return { runGit, calls };
 }
@@ -119,6 +130,45 @@ describe('cloneWithStrategy', () => {
     );
     expect(calls.some((c) => c.join(' ').includes('sparse-checkout init'))).toBe(true);
     expect(calls.some((c) => c.join(' ').includes('sparse-checkout set'))).toBe(true);
+  });
+
+  it('sets GIT_LFS_SKIP_SMUDGE=1 on every git invocation when lfs is unset (spec §9.3 default off)', async () => {
+    const { runGit, calls } = recordingRunGitWithOpts();
+    await cloneWithStrategy(
+      'https://example/x.git',
+      '/tmp/a',
+      ref,
+      headSha,
+      { sparsePaths: ['src'] },
+      runGit,
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    for (const c of calls) {
+      expect(c.opts?.env).toEqual({ GIT_LFS_SKIP_SMUDGE: '1' });
+    }
+  });
+
+  it('sets GIT_LFS_SKIP_SMUDGE=1 when lfs is explicitly false', async () => {
+    const { runGit, calls } = recordingRunGitWithOpts();
+    await cloneWithStrategy(
+      'https://example/x.git',
+      '/tmp/a',
+      ref,
+      headSha,
+      { lfs: false },
+      runGit,
+    );
+    for (const c of calls) {
+      expect(c.opts?.env).toEqual({ GIT_LFS_SKIP_SMUDGE: '1' });
+    }
+  });
+
+  it('omits GIT_LFS_SKIP_SMUDGE when lfs: true (operator opted into LFS)', async () => {
+    const { runGit, calls } = recordingRunGitWithOpts();
+    await cloneWithStrategy('https://example/x.git', '/tmp/a', ref, headSha, { lfs: true }, runGit);
+    for (const c of calls) {
+      expect(c.opts?.env).toBeUndefined();
+    }
   });
 
   it('passes --recurse-submodules when submodules: true', async () => {

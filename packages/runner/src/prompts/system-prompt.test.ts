@@ -190,4 +190,42 @@ describe('composeSystemPrompt', () => {
     expect(out).toContain('fp31');
     expect(out).not.toContain('fp32');
   });
+
+  // v1.2 epic #83 Phase 4 (#93) — <learned_facts> section.
+
+  it('omits the <learned_facts> section when learnedFacts is empty', () => {
+    const out = composeSystemPrompt({ ...baseOpts, learnedFacts: [] });
+    expect(out).not.toContain('<learned_facts>');
+  });
+
+  it('renders <learned_facts> grouped by factType with prior 👍/👎 framing', () => {
+    const out = composeSystemPrompt({
+      ...baseOpts,
+      learnedFacts: [
+        { factType: 'accepted_pattern', factText: '[fp:aaa] thumbs up by alice' },
+        { factType: 'rejected_finding', factText: '[fp:bbb] thumbs down by bob' },
+        { factType: 'rejected_finding', factText: '[fp:ccc] dismissed by carol' },
+        { factType: 'arch_decision', factText: 'We tolerate global mutable state in main.go' },
+      ],
+    });
+    expect(out).toContain('## <learned_facts>');
+    expect(out).toContain('Accepted patterns');
+    expect(out).toContain('Rejected findings');
+    expect(out).toContain('Architectural decisions');
+    expect(out).toContain('[fp:aaa] thumbs up by alice');
+    expect(out).toContain('[fp:bbb] thumbs down by bob');
+    expect(out).toContain('[fp:ccc] dismissed by carol');
+    expect(out).toContain('We tolerate global mutable state');
+    expect(out).toContain('</learned_facts>');
+  });
+
+  it('only emits subsections for non-empty factTypes', () => {
+    const out = composeSystemPrompt({
+      ...baseOpts,
+      learnedFacts: [{ factType: 'rejected_finding', factText: '[fp:x] dismissed' }],
+    });
+    expect(out).toContain('Rejected findings');
+    expect(out).not.toContain('Accepted patterns');
+    expect(out).not.toContain('Architectural decisions');
+  });
 });

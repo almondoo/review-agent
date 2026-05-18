@@ -1,11 +1,13 @@
-import type {
-  Confidence,
-  InlineComment,
-  RequestChangesThreshold,
-  ReviewEvent,
-  ReviewState,
-  Severity,
-  Side,
+import {
+  type Confidence,
+  type InlineComment,
+  REVIEW_ABORT_REASONS,
+  type RequestChangesThreshold,
+  type ReviewAbortReason,
+  type ReviewEvent,
+  type ReviewState,
+  type Severity,
+  type Side,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
@@ -96,11 +98,142 @@ export type ReviewJob = {
    * semantic. `'never'` disables the mapping (always `COMMENT`).
    */
   readonly requestChangesOn?: RequestChangesThreshold;
+  /**
+   * Operator-configured exclude globs from `.review-agent.yml`
+   * `reviews.path_filters` (and any org-level config merged by
+   * `loadConfigWithOrgFallback`). Files in the diff whose path
+   * matches any pattern are dropped before the runner enforces the
+   * `maxFiles` / `maxDiffLines` caps and before they enter the LLM
+   * prompt (spec §10 L1435 — operator's "ignore this path tree"
+   * lever). An empty list keeps every file in scope. Required so
+   * the closed-world default is guaranteed at the type level — see
+   * the matching closed-world pattern on `privacy.allowedUrlPrefixes`
+   * / `privacy.denyPaths` / `privacy.redactPatterns`.
+   */
+  readonly pathFilters: ReadonlyArray<string>;
+  /**
+   * Hard cap on the number of files the runner will hand to the LLM
+   * for a single review (`.review-agent.yml` `reviews.max_files`,
+   * spec §10 L1449, default 50). When the post-`pathFilters` file
+   * list exceeds this cap, the runner short-circuits the agent loop
+   * — no LLM call, no cost — and surfaces an `aborted`-shape result
+   * carrying an operator-facing skip notice. Required so the cap is
+   * type-level guaranteed; the action / cli entry points thread
+   * `config.reviews.max_files` into here.
+   */
+  readonly maxFiles: number;
+  /**
+   * Hard cap on the total number of diff lines (added + removed,
+   * counted across every kept file's hunks) the runner will hand to
+   * the LLM (`.review-agent.yml` `reviews.max_diff_lines`, spec §10
+   * L1450, default 3000). Same short-circuit semantics as `maxFiles`:
+   * an over-cap diff aborts the run without an LLM call and emits a
+   * graceful skip summary. Required so the cap is type-level
+   * guaranteed.
+   */
+  readonly maxDiffLines: number;
+  /**
+   * Privacy / data-flow policy for this job. Nested rather than
+   * inlined so the three lists travel together and any future fields
+   * can be threaded in without another schema migration. Current fields:
+   *
+   *   - `allowedUrlPrefixes`: closed-world URL allowlist consumed
+   *     by `createReviewOutputSchema` (spec §7.3 #4 / §7.7).
+   *   - `denyPaths`: operator-supplied glob deny list that the
+   *     runner unions with the built-in `DENY_PATTERNS` and applies
+   *     to every `read_file` / `glob` / `grep` dispatch (spec §7.4
+   *     "extend, not relax").
+   *   - `redactPatterns`: operator-supplied regex patterns that
+   *     extend the gitleaks built-in ruleset in both the pre-prompt
+   *     (diff) and post-LLM (output) scan passes (spec §7.4 / §7.7).
+   *     Extend, never relax — built-in rules always run.
+   *
+   * All three fields are required so the closed-world defaults are
+   * guaranteed at the type level.
+   */
+  readonly privacy: {
+    /**
+     * Whitelisted URL prefixes from `.review-agent.yml`
+     * `privacy.allowed_url_prefixes`. The runner forwards this
+     * directly into `createReviewOutputSchema({ allowedUrlPrefixes })`.
+     * An empty list keeps the closed-world default — only links
+     * into the PR's own repo (see `prRepo`) are permitted.
+     */
+    readonly allowedUrlPrefixes: ReadonlyArray<string>;
+    /**
+     * Operator-supplied glob patterns from `.review-agent.yml`
+     * `privacy.deny_paths` (and any org-level config merged in by
+     * `loadConfigWithOrgFallback`). The runner compiles each entry
+     * via `globToRegExp` and **unions** the result with the
+     * built-in `DENY_PATTERNS` before every tool dispatch —
+     * operators can extend the deny list but never shrink it
+     * (spec §7.4 "extend, not relax"). An empty list keeps only
+     * the built-in defaults active.
+     */
+    readonly denyPaths: ReadonlyArray<string>;
+    /**
+     * Operator-supplied regex patterns from `.review-agent.yml`
+     * `privacy.redact_patterns` (and any org-level config merged
+     * in by `loadConfigWithOrgFallback`). The runner lifts each
+     * entry into a `[[rules]]` block in the temporary gitleaks
+     * config (`custom-N`) and also feeds it to the in-process
+     * `quickScanContent` fallback, so the operator's redaction
+     * extends the gitleaks built-in ruleset on BOTH the pre-prompt
+     * diff scan and the post-LLM output scan. Built-in rules
+     * always run; this list never relaxes them (spec §7.4 "extend,
+     * not relax"). Validated as compilable JS regexes at
+     * `.review-agent.yml` load time (see `isValidRegex`).
+     */
+    readonly redactPatterns: ReadonlyArray<string>;
+  };
+  /**
+   * The PR's own repository, used by the URL allowlist refine to
+   * grant `<host>/<owner>/<repo>/...` links permanent allowlist
+   * status (spec §7.3 #4 "PR's own repo"). Host is required —
+   * callers derive it from `GITHUB_SERVER_URL` (Action) or the
+   * webhook installation host (Server) so GHES deployments work
+   * uniformly without a code change.
+   */
+  readonly prRepo: {
+    readonly host: string;
+    readonly owner: string;
+    readonly repo: string;
+  };
 };
 
 export type FinalizedComment = InlineComment & {
   readonly title?: string;
 };
+
+/**
+ * Reasons the agent loop can give up on a review without posting any
+ * inline comments. Two families share this discriminator:
+ *
+ * Schema-validation failures (spec §7.3 #4 retry-then-abort — the LLM
+ * produced output that twice failed the response schema):
+ *
+ * - `url_allowlist`: the second-attempt output contained at least one
+ *   URL that the closed-world allowlist refine rejected (the most
+ *   common case for prompt-injected output).
+ * - `schema_violation`: any other schema failure (broadcast mention,
+ *   shell `curl http`, style-severity cap, etc.) survived the retry.
+ *
+ * Cap-skip pre-LLM short-circuits (spec §10 — `.review-agent.yml`
+ * `reviews.max_files` / `reviews.max_diff_lines`). Both fire BEFORE
+ * the gitleaks pre-scan and the LLM call so an over-size PR costs
+ * nothing to refuse:
+ *
+ * - `max_files_exceeded`: the post-`path_filters` file count is
+ *   greater than `job.maxFiles`.
+ * - `max_diff_lines_exceeded`: the post-`path_filters` total `+`/`-`
+ *   line count is greater than `job.maxDiffLines`.
+ *
+ * Surfaced on `RunnerResult.aborted.reason` so the caller (Action,
+ * CLI) can pick a downstream behavior — at minimum, surface the
+ * reason in the posted summary; eventually also gate state-comment
+ * writes / cost reporting.
+ */
+export { REVIEW_ABORT_REASONS, type ReviewAbortReason };
 
 export type RunnerResult = {
   readonly comments: ReadonlyArray<InlineComment>;
@@ -110,6 +243,15 @@ export type RunnerResult = {
   readonly model: string;
   readonly provider: string;
   readonly droppedDuplicates: number;
+  /**
+   * Comments the dedup middleware suppressed because their
+   * fingerprint matched a prior `factType: 'rejected_finding'` row
+   * in `review_history` (spec §7.6, v1.2 epic #83 Phase 4 / #93).
+   * Optional for back-compat — callers that don't wire a
+   * `historyReader` get `undefined` rather than zero so eval
+   * recorders can tell "feature off" from "feature on, no drops".
+   */
+  readonly droppedByFeedback?: number;
   /**
    * Number of tool calls (`read_file` / `glob` / `grep`) that the
    * LLM made during this review. Surfaced for cost-guard accounting
@@ -126,6 +268,32 @@ export type RunnerResult = {
    * underlying `pulls.createReview` event.
    */
   readonly reviewEvent: ReviewEvent;
+  /**
+   * Set when the agent loop gracefully aborted (spec §7.3 #4): the
+   * LLM produced output that failed the response schema twice — once
+   * on the first attempt and again on the retry that injects the
+   * corrective prompt. `comments` will be empty and `summary` will
+   * carry the operator-facing abort notice. Callers that need to
+   * distinguish "no findings" from "we gave up" should check this
+   * field rather than `comments.length === 0`.
+   *
+   * `internalIssues` carries the raw Zod issue list from the second
+   * failure for **internal use only** (audit log, telemetry, server
+   * stdout, debugger). It MUST NOT be echoed into any user-facing
+   * channel (PR comment, summary post, public CLI stdout) because
+   * the rejected URL message can include attacker-injected secrets
+   * — e.g. `?token=...` query strings that the URL allowlist
+   * specifically blocked from being clickable, and posting them
+   * verbatim in a public comment would reopen the exfiltration
+   * channel. The `summary` field is the only string safe to publish.
+   */
+  readonly aborted?: {
+    readonly reason: ReviewAbortReason;
+    readonly internalIssues: ReadonlyArray<{
+      readonly path: string;
+      readonly message: string;
+    }>;
+  };
 };
 
 export type RunReviewDeps = {
@@ -138,6 +306,56 @@ export type RunReviewDeps = {
     readonly body: string;
   }) => string;
   readonly scanContent?: (text: string) => ReadonlyArray<GitleaksFinding>;
+  /**
+   * Optional `wall-clock` provider for latency measurement. Defaults
+   * to `Date.now`. Tests inject a deterministic clock so the
+   * `latencyMs` field on the eval event is stable. Added in v1.2
+   * epic #83 Phase 2.
+   */
+  readonly now?: () => number;
+  /**
+   * Per-review eval recorder (`review_eval_event` table, spec §7.6
+   * adjacent). When both `evalRecorder` and `evalContext` are
+   * provided, the runner builds a `ReviewEvalEvent` from the final
+   * `RunnerResult` and calls the recorder once at the very end of
+   * `runReview`. Insert errors are caught fail-open so a transient
+   * DB issue never aborts a successfully-posted review. v1.2 epic
+   * #83 Phase 2.
+   */
+  readonly evalRecorder?: import('@review-agent/core').ReviewEvalEventRecorder;
+  readonly evalContext?: {
+    readonly installationId: bigint;
+    readonly prNumber: number;
+    readonly headSha: string;
+  };
+  /**
+   * Fired when the eval recorder throws. The runner does NOT
+   * re-throw — operators who want observability route this to OTel
+   * or their logger here.
+   */
+  readonly onEvalRecordError?: (err: unknown) => void;
+  /**
+   * Optional reader that loads `review_history` rows for this PR's
+   * repo (v1.2 epic #83 Phase 4 / #93). When present the runner
+   * splits the rows into:
+   *   - `rejected_finding` rows -> `rejectedFingerprints` for the
+   *     dedup middleware (post-LLM backstop).
+   *   - All rows -> `<learned_facts>` section in the system prompt.
+   *
+   * `installationId` + `repo` are derived from `evalContext.installationId`
+   * and `job.prRepo`; the reader returns up to `MAX_LEARNED_FACTS`
+   * rows ordered desc by `created_at`.
+   */
+  readonly historyReader?: (q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+    readonly limit: number;
+  }) => Promise<
+    ReadonlyArray<{
+      readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+      readonly factText: string;
+    }>
+  >;
 };
 
 export type Middleware = (

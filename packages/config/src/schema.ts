@@ -1,6 +1,7 @@
 import {
   CONFIDENCES,
   isValidGlob,
+  isValidRegex,
   REQUEST_CHANGES_THRESHOLDS,
   WORKSPACE_STRATEGIES,
 } from '@review-agent/core';
@@ -108,8 +109,41 @@ const CostSchema = z
 
 const PrivacySchema = z
   .object({
-    redact_patterns: z.array(z.string().min(1)).default([]),
-    deny_paths: z.array(z.string().min(1)).default([]),
+    // Each entry is a regular-expression pattern lifted into a
+    // gitleaks `[[rules]]` custom-rule block by the runner (spec
+    // §7.4) and also applied in-process by `quickScanContent` when
+    // gitleaks itself is unavailable. `.refine(isValidRegex)` rejects
+    // empty strings (also caught by `.min(1)`), NUL-byte payloads,
+    // and patterns `new RegExp` cannot compile (unbalanced bracket,
+    // lone quantifier, etc.) at YAML load time so the operator sees
+    // the misconfiguration immediately rather than at scan time.
+    redact_patterns: z
+      .array(
+        z.string().min(1).refine(isValidRegex, {
+          message: 'redact_patterns entry must be a valid regular expression',
+        }),
+      )
+      .default([]),
+    // Each entry is a glob pattern compiled by `globToRegExp` at
+    // runtime (`packages/runner/src/agent.ts`) and unioned with the
+    // built-in `DENY_PATTERNS` in the tool dispatcher (spec §7.4
+    // "extend, not relax"). `.refine(isValidGlob)` mirrors
+    // `path_instructions[*].path`. It rejects empty strings (caught
+    // earlier by `.min(1)`) and entries containing a NUL byte at
+    // YAML load time rather than letting them throw at runtime
+    // inside `runReview`'s `globToRegExp` call. It does NOT reject
+    // unsupported glob syntax (`[abc]`, `{a,b}`, `?`) — those are
+    // escaped as literals by `globToRegExp` and silently match
+    // nothing. See `docs/configuration/privacy.md` glob syntax
+    // section for the caveat operators need to know about.
+    deny_paths: z
+      .array(
+        z.string().min(1).refine(isValidGlob, {
+          message:
+            'must be a valid glob pattern (`*` within a segment, `**` across segments, no NUL bytes)',
+        }),
+      )
+      .default([]),
     allowed_url_prefixes: z.array(z.string().url()).default([]),
   })
   .strict();

@@ -152,3 +152,8 @@ row to the Sign-off table — (ii) does not preclude later (i).
 - [`./byok.md`](./byok.md) — per-installation BYOK envelope encryption (Tampering / Information disclosure walkthrough input).
 - [`./audit-log.md`](./audit-log.md) — HMAC chain (Repudiation walkthrough input).
 - [`./red-team.md`](./red-team.md) — red-team eval fixtures (Information disclosure walkthrough input).
+- [`../configuration/privacy.md`](../configuration/privacy.md) —
+  `privacy.allowed_url_prefixes` URL allowlist (spec §7.3 #4):
+  implemented v1.x via `#85`. Information-disclosure walkthrough
+  input; the closed-world default is the structural backstop against
+  the "Comment-and-Control" prompt-injection class.

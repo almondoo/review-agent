@@ -14,7 +14,6 @@
 // Usage:
 //   tsx scripts/eval-matrix.ts                # print matrix to stdout
 //   tsx scripts/eval-matrix.ts --write        # overwrite parity-matrix.md
-//   tsx scripts/eval-matrix.ts --check        # exit non-zero if doc is stale
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -121,20 +120,6 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const parity = await loadParity();
   const matrix = renderMatrix(parity);
-
-  if (args.includes('--check')) {
-    const doc = await readFile(DOC_PATH, 'utf8');
-    const expected = replaceMatrixBlock(doc, matrix);
-    if (doc !== expected) {
-      process.stderr.write(
-        `parity-matrix.md is stale relative to packages/eval/parity.json.\n` +
-          'Re-run: tsx packages/eval/scripts/eval-matrix.ts --write\n',
-      );
-      process.exit(1);
-    }
-    process.stdout.write('OK: parity-matrix.md is up to date.\n');
-    return;
-  }
 
   if (args.includes('--write')) {
     const doc = await readFile(DOC_PATH, 'utf8');

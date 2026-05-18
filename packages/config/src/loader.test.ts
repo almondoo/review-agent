@@ -82,6 +82,43 @@ describe('loadConfigFromYaml — explicit values', () => {
     ).toThrow(ConfigError);
   });
 
+  it('rejects a privacy.deny_paths entry that is not a valid glob (M-1)', () => {
+    // Mirrors the path_instructions[*].path validation: the runner
+    // compiles each deny_paths entry with the same globToRegExp on
+    // every review. A NUL-containing pattern would throw at runtime
+    // and fail the whole review loudly; better to fail at YAML load
+    // so the operator sees the misconfiguration before any review
+    // runs. The empty-string branch is already covered by `.min(1)`.
+    const NUL = String.fromCharCode(0);
+    const yaml = `privacy:\n  deny_paths:\n    - "compliance/${NUL}.txt"\n`;
+    expect(() => loadConfigFromYaml(yaml)).toThrow(ConfigError);
+  });
+
+  it('rejects an empty privacy.deny_paths entry', () => {
+    expect(() => loadConfigFromYaml('privacy:\n  deny_paths:\n    - ""\n')).toThrow(ConfigError);
+  });
+
+  it('parses a privacy.redact_patterns entry that compiles as a regex (#87)', () => {
+    const cfg = loadConfigFromYaml('privacy:\n  redact_patterns:\n    - "AKIA[0-9A-Z]{16}"\n');
+    expect(cfg.privacy.redact_patterns).toEqual(['AKIA[0-9A-Z]{16}']);
+  });
+
+  it('rejects a privacy.redact_patterns entry that is not a valid regex (#87)', () => {
+    // `[a-z` has an unbalanced bracket — `new RegExp` throws
+    // SyntaxError, so we surface that at YAML load time instead of
+    // letting the runner crash mid-scan when it lifts the pattern
+    // into a gitleaks `[[rules]]` block.
+    expect(() => loadConfigFromYaml('privacy:\n  redact_patterns:\n    - "[a-z"\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects an empty privacy.redact_patterns entry (#87)', () => {
+    expect(() => loadConfigFromYaml('privacy:\n  redact_patterns:\n    - ""\n')).toThrow(
+      ConfigError,
+    );
+  });
+
   it('parses path_instructions[*].auto_fetch with explicit fields', () => {
     const cfg = loadConfigFromYaml(
       [

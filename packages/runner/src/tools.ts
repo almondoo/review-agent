@@ -68,8 +68,8 @@ function fsErrorCode(err: unknown): FsErrorCode | null {
   return null;
 }
 
-function checkDenyList(rel: string): void {
-  for (const pattern of DENY_PATTERNS) {
+function checkDenyList(rel: string, patterns: ReadonlyArray<RegExp>): void {
+  for (const pattern of patterns) {
     if (pattern.test(rel)) {
       throw new ToolDispatchRefusedError('read_file', `path matches deny-list: '${rel}'`);
     }
@@ -80,6 +80,7 @@ async function resolveSafePath(
   workspace: string,
   requested: string,
   lstatFn: typeof lstat,
+  denyPatterns: ReadonlyArray<RegExp>,
 ): Promise<string> {
   if (!requested) throw new ToolDispatchRefusedError('read_file', 'empty path');
   if (requested.includes('\0'))
@@ -94,7 +95,7 @@ async function resolveSafePath(
   if (rel.startsWith('..') || path.isAbsolute(rel)) {
     throw new ToolDispatchRefusedError('read_file', `path escapes workspace: '${requested}'`);
   }
-  checkDenyList(rel);
+  checkDenyList(rel, denyPatterns);
 
   let cursor = workspace;
   for (const segment of rel.split(path.sep)) {
@@ -109,14 +110,33 @@ async function resolveSafePath(
   return absolute;
 }
 
-export function createTools(workspace: string, deps: ToolDeps = {}): Tools {
+/**
+ * Build the per-job tool dispatcher.
+ *
+ * `denyPatterns` is the operator-supplied extension list (already
+ * compiled to `RegExp` by the caller — typically the agent loop runs
+ * `globToRegExp` over `ReviewJob.privacy.denyPaths`). The built-in
+ * `DENY_PATTERNS` are **always applied**; the caller's list is
+ * appended in an OR union with no subtraction API, so the contract
+ * "operators may extend, never relax the deny list" (spec §7.4) is
+ * enforced structurally rather than by convention.
+ */
+export function createTools(
+  workspace: string,
+  deps: ToolDeps = {},
+  denyPatterns: ReadonlyArray<RegExp> = [],
+): Tools {
   const readFn = (deps.readFile ?? readFile) as (p: string, enc: 'utf8') => Promise<string>;
   const lstatFn = deps.lstat ?? lstat;
   const readdirFn = deps.readdir ?? readdir;
+  // OR union only: built-ins first, operator extensions appended.
+  // There is intentionally no path that removes entries from
+  // DENY_PATTERNS — see spec §7.4.
+  const effectiveDeny: ReadonlyArray<RegExp> = [...DENY_PATTERNS, ...denyPatterns];
 
   return {
     read_file: async ({ path: requested }) => {
-      const absolute = await resolveSafePath(workspace, requested, lstatFn);
+      const absolute = await resolveSafePath(workspace, requested, lstatFn, effectiveDeny);
       const content = await readFn(absolute, 'utf8');
       if (content.length > MAX_FILE_SIZE) {
         return `${content.slice(0, MAX_FILE_SIZE)}\n[...truncated at ${MAX_FILE_SIZE} chars]`;
@@ -130,7 +150,7 @@ export function createTools(workspace: string, deps: ToolDeps = {}): Tools {
       if (pattern.includes('..')) {
         throw new ToolDispatchRefusedError('glob', `traversal pattern: '${pattern}'`);
       }
-      return walkAndMatch(workspace, pattern, readdirFn);
+      return walkAndMatch(workspace, pattern, readdirFn, effectiveDeny);
     },
     grep: async ({ pattern, path: scope }) => {
       if (!pattern) throw new ToolDispatchRefusedError('grep', 'empty pattern');
@@ -149,8 +169,10 @@ export function createTools(workspace: string, deps: ToolDeps = {}): Tools {
       } catch {
         throw new ToolDispatchRefusedError('grep', `invalid regex: '${pattern}'`);
       }
-      const target = scope ? await resolveSafePath(workspace, scope, lstatFn) : workspace;
-      return grepInDir(target, compiled, readdirFn, readFn);
+      const target = scope
+        ? await resolveSafePath(workspace, scope, lstatFn, effectiveDeny)
+        : workspace;
+      return grepInDir(target, compiled, readdirFn, readFn, effectiveDeny);
     },
   };
 }
@@ -159,10 +181,11 @@ async function walkAndMatch(
   root: string,
   pattern: string,
   readdirFn: typeof readdir,
+  denyPatterns: ReadonlyArray<RegExp>,
 ): Promise<string[]> {
   const matcher = patternToRegExp(pattern);
   const out: string[] = [];
-  await walk(root, root, matcher, out, readdirFn);
+  await walk(root, root, matcher, out, readdirFn, denyPatterns);
   return out;
 }
 
@@ -172,14 +195,19 @@ async function walk(
   matcher: RegExp,
   out: string[],
   readdirFn: typeof readdir,
+  denyPatterns: ReadonlyArray<RegExp>,
 ): Promise<void> {
   const entries = await readdirFn(dir, { withFileTypes: true }).catch(() => []);
   for (const e of entries) {
     const full = path.join(dir, e.name);
     const rel = path.relative(root, full);
-    if (DENY_PATTERNS.some((p) => p.test(rel))) continue;
+    // Silently drop deny-matched entries (built-in defaults +
+    // operator-supplied `denyPaths`). glob is an exploratory tool —
+    // surfacing a refusal here would just teach the LLM to enumerate
+    // forbidden filenames; dropping them is the correct UX.
+    if (denyPatterns.some((p) => p.test(rel))) continue;
     if (e.isDirectory()) {
-      await walk(root, full, matcher, out, readdirFn);
+      await walk(root, full, matcher, out, readdirFn, denyPatterns);
     } else if (e.isFile() && matcher.test(rel)) {
       out.push(rel);
     }
@@ -197,6 +225,7 @@ async function grepInDir(
   re: RegExp,
   readdirFn: typeof readdir,
   readFn: (p: string, enc: 'utf8') => Promise<string>,
+  denyPatterns: ReadonlyArray<RegExp>,
 ): Promise<string[]> {
   const out: string[] = [];
   // Minimal Dirent-shape we read off each entry. The `typeof readdir`
@@ -235,7 +264,12 @@ async function grepInDir(
     for (const e of entries) {
       const full = path.join(dir, e.name);
       const rel = path.relative(scope, full);
-      if (DENY_PATTERNS.some((p) => p.test(rel))) continue;
+      // Same silent-skip semantics as glob: grep is exploratory, so
+      // emitting a refusal per deny-matched file would just leak the
+      // existence of those files via the failure mode. Operators
+      // who need stricter behavior should rely on read_file's hard
+      // ToolDispatchRefusedError instead.
+      if (denyPatterns.some((p) => p.test(rel))) continue;
       if (e.isDirectory()) {
         await walkAll(full);
         continue;
@@ -315,13 +349,22 @@ export type AiSdkToolsOptions = {
   readonly toolDeps?: ToolDeps;
   /** Called once per LLM-initiated tool invocation. Used for accounting. */
   readonly onCall?: (name: ToolName) => void;
+  /**
+   * Operator-supplied deny patterns (already compiled to `RegExp`)
+   * unioned with the built-in defaults inside `createTools`. The
+   * agent loop compiles `ReviewJob.privacy.denyPaths` via
+   * `globToRegExp` and passes the result here so the dispatcher can
+   * apply the same list to `read_file` / `glob` / `grep` uniformly
+   * (spec §7.4). Omitted ⇒ built-in defaults only.
+   */
+  readonly denyPatterns?: ReadonlyArray<RegExp>;
 };
 
 const READ_FILE_DESCRIPTION =
-  'Read a UTF-8 text file from the workspace. Path is relative to the workspace root (e.g. "src/index.ts"). Absolute paths, "~", traversal escapes, symlinks, and entries on the deny-list (".env*", "secrets/", ".pem", etc.) are refused.';
+  'Read a UTF-8 text file from the workspace. Path is relative to the workspace root (e.g. "src/index.ts"). Absolute paths, "~", traversal escapes, symlinks, and entries on the deny-list (built-in defaults like ".env*", "secrets/", ".pem" plus any globs the operator configures via `privacy.deny_paths`) are refused.';
 const GLOB_DESCRIPTION =
-  'List workspace files matching a glob pattern (e.g. "src/**/*.ts"). "*" matches within a path segment; "**" matches across segments. Returns paths relative to the workspace root. Traversal patterns and deny-listed paths are excluded.';
-const GREP_DESCRIPTION = `Search the workspace for lines matching a JavaScript regular expression. Optional "path" scopes the search to a subdirectory. Returns up to many "<file>:<line>: <text>" matches. Patterns longer than ${MAX_GREP_PATTERN_LENGTH} chars are rejected as a ReDoS guard. Files whose contents the process cannot read (EACCES/EPERM) appear as "<file>:0: [unreadable file: <code>]" so missing matches are never silent.`;
+  'List workspace files matching a glob pattern (e.g. "src/**/*.ts"). "*" matches within a path segment; "**" matches across segments. Returns paths relative to the workspace root. Traversal patterns and deny-listed paths (built-in defaults plus operator-configured `privacy.deny_paths`) are silently excluded from the results.';
+const GREP_DESCRIPTION = `Search the workspace for lines matching a JavaScript regular expression. Optional "path" scopes the search to a subdirectory. Returns up to many "<file>:<line>: <text>" matches. Patterns longer than ${MAX_GREP_PATTERN_LENGTH} chars are rejected as a ReDoS guard. Files whose contents the process cannot read (EACCES/EPERM) appear as "<file>:0: [unreadable file: <code>]" so missing matches are never silent. Files on the deny-list (built-in defaults plus operator-configured \`privacy.deny_paths\`) are silently skipped.`;
 
 const READ_FILE_INPUT = z.object({ path: z.string() }).strict();
 const GLOB_INPUT = z.object({ pattern: z.string() }).strict();
@@ -338,7 +381,7 @@ const GREP_INPUT = z.object({ pattern: z.string(), path: z.string().optional() }
  * those that get refused by the dispatcher.
  */
 export function createAiSdkToolset(opts: AiSdkToolsOptions): AiSdkToolSet {
-  const base = createTools(opts.workspace, opts.toolDeps);
+  const base = createTools(opts.workspace, opts.toolDeps, opts.denyPatterns);
   const onCall = opts.onCall;
   return {
     read_file: tool({

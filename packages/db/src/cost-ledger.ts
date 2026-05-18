@@ -21,6 +21,7 @@ export function createCostLedgerRecorder(db: DbClient) {
       cacheReadTokens: input.cacheReadTokens ?? 0,
       cacheCreationTokens: input.cacheCreationTokens ?? 0,
       costUsd: input.costUsd,
+      latencyMs: input.latencyMs ?? 0,
       status: input.status as CostLedgerStatus,
     };
     await db.transaction(async (tx) => {

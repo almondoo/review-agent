@@ -1,8 +1,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { ReviewOutputSchema } from '@review-agent/core';
 import { generateText, Output, stepCountIs, type ToolSet } from 'ai';
 import { ANTHROPIC_PRICING, priceForModel } from './pricing.js';
-import { countToolCalls } from './provider-base.js';
+import { countToolCalls, ProviderOutputShapeSchema } from './provider-base.js';
 import type {
   ErrorClassification,
   LlmProvider,
@@ -122,7 +121,7 @@ export function createAnthropicProvider(
       model: client(config.model),
       tools,
       stopWhen: stepCountIs(maxSteps),
-      experimental_output: Output.object({ schema: ReviewOutputSchema }),
+      experimental_output: Output.object({ schema: ProviderOutputShapeSchema }),
       // biome-ignore lint/suspicious/noExplicitAny: AI SDK message typing differs across providers; we hand-shape the array to spec.
       messages: messages as any,
       temperature: DEFAULT_TEMPERATURE,

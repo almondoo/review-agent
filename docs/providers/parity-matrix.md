@@ -78,12 +78,13 @@ Numbers measured via the 60-fixture corpus (packages/eval/fixtures/golden/). Re-
   large-diff fixture. Real-world median cost is usually lower
   because production diffs are smaller; large-diff outliers
   dominate the p95.
-- **No regression CI for this table**. The
-  `pnpm --filter @review-agent/eval matrix:check` script verifies
-  that the rendered table matches `parity.json`; it does NOT
-  verify that the `parity.json` numbers are still accurate. That
-  responsibility lives with the operator running scheduled
-  re-measurements per the cadence above.
+- **No regression CI for this table**. After updating
+  `parity.json` the operator re-runs
+  `pnpm --filter @review-agent/eval matrix:write` to refresh the
+  rendered block; nothing automatically verifies that the
+  `parity.json` numbers are still accurate. That responsibility
+  lives with the operator running scheduled re-measurements per
+  the cadence above.
 - **Provider rows that fail the existing `baseline.json` gates**
   (precision < 0.9 / FP > 0.05 / red-team-bypass > 0) are
   documented here with rationale rather than silently relaxing the
@@ -110,9 +111,6 @@ OPENAI_API_KEY=...       pnpm --filter @review-agent/eval eval -- --providers op
 
 # 3. Refresh the published doc.
 pnpm --filter @review-agent/eval matrix:write
-
-# 4. Verify the doc is in sync (CI-friendly).
-pnpm --filter @review-agent/eval matrix:check
 ```
 
 `matrix:write` only mutates the block between

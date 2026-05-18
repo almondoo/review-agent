@@ -176,27 +176,18 @@ export type ReviewPayload = {
 };
 
 /**
- * Optional formatter: roll category counts into a markdown bullet list
- * a caller can append to the human-readable summary. Returns the empty
- * string when no comments carry a category — so the caller can safely
- * concatenate without producing a header without a body. Categories are
- * emitted in {@link CATEGORIES} order for deterministic snapshots.
+ * Reasons the runner's agent loop can give up on a review without
+ * posting any inline comments (spec §7.3 #4 + spec §10 cap-skip).
+ * Lives in core so the per-review eval event (Phase 2) and the
+ * runner share a single source of truth.
  */
-export function formatCategoryRollup(comments: ReadonlyArray<InlineComment>): string {
-  const counts = new Map<Category, number>();
-  for (const c of comments) {
-    if (c.category !== undefined) {
-      counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
-    }
-  }
-  if (counts.size === 0) return '';
-  const lines: string[] = ['### Findings by category'];
-  for (const cat of CATEGORIES) {
-    const n = counts.get(cat);
-    if (n !== undefined && n > 0) lines.push(`- ${cat}: ${n}`);
-  }
-  return lines.join('\n');
-}
+export const REVIEW_ABORT_REASONS = [
+  'url_allowlist',
+  'schema_violation',
+  'max_files_exceeded',
+  'max_diff_lines_exceeded',
+] as const;
+export type ReviewAbortReason = (typeof REVIEW_ABORT_REASONS)[number];
 
 export const COST_LEDGER_PHASES = ['injection_detect', 'review_main', 'review_retry'] as const;
 export type CostLedgerPhase = (typeof COST_LEDGER_PHASES)[number];

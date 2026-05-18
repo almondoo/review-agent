@@ -1096,6 +1096,29 @@ Rules:
   happen only from runner-side post-processing rules (e.g., "if a comment
   was resolved positively, record the pattern").
 
+#### 7.6.1 Writer (v1.2 #92) and reader (v1.2 #93) — implemented
+
+The writer (`createFeedbackWriter` in `@review-agent/runner`) accepts
+a translated `FeedbackEvent` from the platform-github webhook flow,
+applies gitleaks redaction, enforces the 10/job rate-limit, and
+prefixes `fact_text` with `[fp:<fingerprint>]` so the reader can
+route facts to the originating comment. Mapping: `thumbs_up →
+accepted_pattern`, `thumbs_down` / `dismissed → rejected_finding`.
+
+The reader (`composeSystemPrompt` `learnedFacts` option +
+`@review-agent/db`'s `loadRecentReviewHistory`) injects rows as a
+`<learned_facts>...</learned_facts>` section, grouped by `fact_type`
+with positive ("prioritize") / negative ("suppress") framing.
+`rejected_finding` rows additionally route into the dedup
+middleware's `rejectedFingerprints` set so suppression survives
+even if the LLM ignores the prompt guidance. Per-review counts of
+feedback-driven suppressions land in
+`review_eval_event.dropped_by_feedback` (v1.2 #91 Phase 2 table).
+
+See `docs/architecture/feedback-loop.md` for the receiver →
+worker → writer flow and `docs/architecture/review-eval-event.md`
+for the per-review metrics shape.
+
 ### 7.7 Output validation schema
 
 ```ts

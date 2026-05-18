@@ -37,20 +37,20 @@ export {
   type SecretLeakPhase,
   ToolDispatchRefusedError,
 } from './errors.js';
+export type { ReviewEvalEvent, ReviewEvalEventRecorder } from './eval.js';
+export {
+  FEEDBACK_KINDS,
+  type FeedbackEvent,
+  type FeedbackKind,
+  feedbackKindToFactType,
+} from './feedback.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export { globToRegExp, isValidGlob } from './glob.js';
 export {
-  type ApplyLineShiftInput,
-  type ComputeDiffStrategyDeps,
-  classifyGitError,
   computeDiffStrategy,
   type DiffHunk,
   type DiffStrategy,
-  INCREMENTAL_GIT_FAILURES,
-  type IncrementalGitFailure,
-  type IncrementalGitFailureReason,
   type RunGit,
-  shiftLineThroughHunks,
 } from './incremental.js';
 export {
   BYOK_PROVIDERS,
@@ -95,6 +95,7 @@ export {
   JobMessageSchema,
   type QueueClient,
 } from './queue.js';
+export { isValidRegex } from './regex.js';
 export {
   type RetryClassifier,
   type RetryDecision,
@@ -112,11 +113,12 @@ export {
   type CostLedgerRow,
   type CostLedgerStatus,
   computeReviewEvent,
-  formatCategoryRollup,
   type InlineComment,
   REQUEST_CHANGES_THRESHOLDS,
+  REVIEW_ABORT_REASONS,
   REVIEW_EVENTS,
   type RequestChangesThreshold,
+  type ReviewAbortReason,
   type ReviewEvent,
   type ReviewPayload,
   type ReviewState,
@@ -128,13 +130,15 @@ export {
   type WorkspaceStrategy,
 } from './review.js';
 export {
+  type CreateReviewOutputSchemaOpts,
+  createReviewOutputSchema,
   type InlineCommentInput,
   InlineCommentSchema,
   REVIEW_STATE_SCHEMA_VERSION,
   type ReviewOutputInput,
-  ReviewOutputSchema,
   type ReviewStateInput,
   ReviewStateSchema,
+  URL_ALLOWLIST_ISSUE_PREFIX,
 } from './schemas.js';
 export {
   createFakeVCS,
@@ -143,6 +147,7 @@ export {
   createFakeVcsWriter,
   DEFAULT_FAKE_CAPABILITIES,
 } from './test-helpers.js';
+export { extractUrls, isPrefixAllowed, isPrOwnRepoUrl } from './url.js';
 export type {
   CloneOpts,
   Diff,

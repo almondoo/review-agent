@@ -2,12 +2,20 @@ import {
   CONFIDENCES,
   type Confidence,
   computeReviewEvent,
-  ReviewOutputSchema,
+  createReviewOutputSchema,
+  globToRegExp,
   SchemaValidationError,
   SecretLeakAbortedError,
+  URL_ALLOWLIST_ISSUE_PREFIX,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { collectAutoFetchContext } from './auto-fetch.js';
+import {
+  applyPathFilters,
+  countDiffLines,
+  parseDiffByFile,
+  reassembleDiff,
+} from './diff-filter.js';
 import {
   applyRedactions,
   type GitleaksFinding,
@@ -19,19 +27,112 @@ import {
   createCostGuard,
   createInjectionGuard,
   dedupComments,
+  recordEvalEvent,
 } from './middleware/index.js';
-import { composeSystemPrompt } from './prompts/system-prompt.js';
+import { composeSystemPrompt, MAX_LEARNED_FACTS } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
-import type { Middleware, MiddlewareCtx, ReviewJob, RunnerResult, RunReviewDeps } from './types.js';
+import type {
+  Middleware,
+  MiddlewareCtx,
+  ReviewAbortReason,
+  ReviewJob,
+  RunnerResult,
+  RunReviewDeps,
+} from './types.js';
 
 const RETRY_PROMPT_SUFFIX =
   '\n\nIMPORTANT: your previous response failed schema validation. Produce strictly valid output that matches the configured schema.';
 
-export async function runReview(
+/**
+ * Operator-facing summary text for the two retry-then-abort cases
+ * (spec §7.3 #4). English is hard-coded per CLAUDE.md "internal
+ * prompts / system-facing strings are always English" rule; the
+ * post-translation language-aware summary is the caller's
+ * responsibility once a feature exists for it.
+ */
+const URL_ALLOWLIST_ABORT_SUMMARY =
+  'Review aborted: LLM produced output that violates the URL allowlist after one retry. See spec §7.3.';
+const SCHEMA_ABORT_SUMMARY =
+  'Review aborted: LLM produced output that fails schema validation after one retry. See spec §7.3.';
+
+/**
+ * Operator-facing summary text for the two pre-LLM cap-skip cases
+ * (spec §10 `.review-agent.yml` `reviews.max_files` /
+ * `reviews.max_diff_lines`). Only numeric counts and operator-set
+ * limits are interpolated — no file paths, hunk contents, or URLs
+ * — so the resulting string is safe to post verbatim to a public
+ * PR comment without re-introducing prompt-injection or
+ * exfiltration surface (mirrors the audit / output-only-summary
+ * discipline pinned by spec §7.3 #4 and #87).
+ */
+function maxFilesSkipSummary(fileCount: number, cap: number): string {
+  return `Review skipped: PR exceeds the max_files cap (${fileCount} files > limit ${cap}). Adjust reviews.max_files in .review-agent.yml or reduce PR scope.`;
+}
+function maxDiffLinesSkipSummary(lineCount: number, cap: number): string {
+  return `Review skipped: PR exceeds the max_diff_lines cap (${lineCount} lines > limit ${cap}). Adjust reviews.max_diff_lines in .review-agent.yml or reduce PR scope.`;
+}
+
+/**
+ * Build the `RunnerResult` returned by the cap-skip short-circuits.
+ * The shape mirrors the schema-abort path (`comments: []` +
+ * `aborted.{reason, internalIssues}`) so existing callers
+ * (`postOrUpdate` in action / cli) need no branching to handle it.
+ *
+ * Cost / tokens / tool-calls are all zero by construction — the
+ * cap fires before the gitleaks pre-scan, before auto-fetch, and
+ * before any `provider.generateReview` call, so the cost-guard
+ * middleware never even runs. `reviewEvent` is hard-coded to
+ * `'COMMENT'` because zero kept comments cannot drive
+ * `REQUEST_CHANGES`.
+ *
+ * `internalIssues` is an empty list for cap-skips. The
+ * operator-facing reason already lives in `summary` (which is the
+ * only string that may be posted to a PR), and there are no raw
+ * Zod issues to carry through — the audit trail for cap-skip is
+ * the `reason` discriminator plus the counts already embedded in
+ * `summary`.
+ */
+function buildCapSkipResult(
+  provider: LlmProvider,
+  reason: ReviewAbortReason,
+  summary: string,
+): RunnerResult {
+  return {
+    comments: [],
+    summary,
+    costUsd: 0,
+    tokensUsed: { input: 0, output: 0 },
+    model: provider.model,
+    provider: provider.name,
+    droppedDuplicates: 0,
+    toolCalls: 0,
+    reviewEvent: 'COMMENT',
+    aborted: { reason, internalIssues: [] },
+  };
+}
+
+/**
+ * Decide which abort path a `SchemaValidationError` belongs to. URL
+ * allowlist failures are diagnostically distinct (operators want to
+ * see "your model is leaking links" vs. "your model is breaking
+ * shape") so the summary text and the `aborted.reason` discriminator
+ * branch on the issue message prefix produced by `schemas.ts`.
+ */
+function classifyAbort(err: SchemaValidationError): {
+  reason: ReviewAbortReason;
+  summary: string;
+} {
+  if (err.issues.some((i) => i.message.startsWith(URL_ALLOWLIST_ISSUE_PREFIX))) {
+    return { reason: 'url_allowlist', summary: URL_ALLOWLIST_ABORT_SUMMARY };
+  }
+  return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
+}
+
+async function runReviewInner(
   job: ReviewJob,
   provider: LlmProvider,
-  deps: RunReviewDeps = {},
+  deps: RunReviewDeps,
 ): Promise<RunnerResult> {
   // Incremental review fields flow from the action / cli call site
   // (see packages/action/src/run.ts where computeDiffStrategy decides
@@ -57,11 +158,110 @@ export async function runReview(
     (promptOptions as { previousFingerprints?: ReadonlyArray<string> }).previousFingerprints =
       previousFingerprints;
   }
+
+  // v1.2 epic #83 Phase 4 / #93 — load `review_history` for this
+  // repo (when an `evalContext` + `historyReader` are wired), then
+  // split the rows into:
+  //   - `<learned_facts>` for the system prompt (every factType).
+  //   - `rejectedFingerprints` extracted from `[fp:<fp>] ...` text
+  //     of `rejected_finding` rows, for the dedup middleware's
+  //     post-LLM backstop.
+  // Failures bubble up — a transient DB outage in the reader is
+  // operator-visible and the operator decides whether to fall back
+  // to a no-history review or surface the error. We do NOT silently
+  // skip the section on read failure, because that would erase the
+  // learning signal without warning.
+  let learnedFacts: ReadonlyArray<{
+    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factText: string;
+  }> = [];
+  let rejectedFingerprints: ReadonlyArray<string> = [];
+  if (deps.historyReader && deps.evalContext) {
+    const rows = await deps.historyReader({
+      installationId: deps.evalContext.installationId,
+      repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+      limit: MAX_LEARNED_FACTS,
+    });
+    learnedFacts = rows;
+    rejectedFingerprints = rows
+      .filter((r) => r.factType === 'rejected_finding')
+      .map((r) => extractFingerprint(r.factText))
+      .filter((fp): fp is string => fp !== null);
+  }
+  if (learnedFacts.length > 0) {
+    (promptOptions as { learnedFacts?: typeof learnedFacts }).learnedFacts = learnedFacts;
+  }
+
   const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
-  const scanContent = deps.scanContent ?? quickScanContent;
+  // Bind the operator's `privacy.redact_patterns` into the default
+  // scanner so the diff pre-scan and the LLM-output post-scan both
+  // run built-in detectors AND the custom regex set in one pass
+  // (spec §7.4). `deps.scanContent` injection still wins for tests
+  // — those callers either include any custom patterns themselves
+  // or deliberately scope the scan to a fixed corpus.
+  const customRedactPatterns = job.privacy.redactPatterns;
+  const scanContent =
+    deps.scanContent ?? ((text: string) => quickScanContent(text, customRedactPatterns));
 
-  const diffFindings = [...scanContent(job.diffText)];
+  // Cap pipeline (spec §10) — runs BEFORE the gitleaks pre-scan and
+  // before the LLM call so an over-size PR costs nothing to refuse.
+  //
+  // Order of operations:
+  //   1. parseDiffByFile  — split job.diffText into per-file segments
+  //   2. applyPathFilters — drop files matching reviews.path_filters
+  //                         (exclude semantics, spec §10 L1435)
+  //   3. max_files cap    — skip if filtered.files.length > maxFiles
+  //   4. max_diff_lines   — skip if countDiffLines(filtered) > cap
+  //
+  // Caps fire BEFORE secret scanning. Rationale: an operator who
+  // configured `max_files: 50` is asking "don't even look at PRs
+  // bigger than this." Scanning a 5000-file PR for secrets, only to
+  // then skip the LLM call, would burn gitleaks CPU and run a
+  // `SecretLeakAbortedError` exit path that surfaces a finding the
+  // operator already opted out of acting on. The cap-skip path
+  // returns `aborted.reason = 'max_files_exceeded'` /
+  // `'max_diff_lines_exceeded'` instead — the operator sees the
+  // size signal, and the secret-scan budget is preserved for PRs
+  // that will actually go through the LLM. Test
+  // `runReview — reviews.{max_files,max_diff_lines} caps` pins
+  // both this priority and the cost-zero invariant.
+  //
+  // `applyPathFilters` returns the same reference when no file
+  // matched any filter (or filters is empty). We use that as the
+  // "is the diff payload unchanged?" check: when nothing was
+  // dropped, the downstream code paths see `job.diffText` and
+  // `job.changedPaths` exactly as upstream sent them. Only when a
+  // file was actually filtered out do we reassemble the diff (so
+  // the LLM and the diff pre-scan never see the excluded content)
+  // and shrink `changedPaths` (so `collectAutoFetchContext` does
+  // not pull companion files for paths the operator excluded —
+  // path_filters is a "ignore this path tree entirely" lever, not
+  // a "still fetch siblings but hide the change" one).
+  const parsedDiff = parseDiffByFile(job.diffText);
+  const filteredDiff = applyPathFilters(parsedDiff, job.pathFilters);
+  if (filteredDiff.files.length > job.maxFiles) {
+    return buildCapSkipResult(
+      provider,
+      'max_files_exceeded',
+      maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
+    );
+  }
+  const diffLineCount = countDiffLines(filteredDiff);
+  if (diffLineCount > job.maxDiffLines) {
+    return buildCapSkipResult(
+      provider,
+      'max_diff_lines_exceeded',
+      maxDiffLinesSkipSummary(diffLineCount, job.maxDiffLines),
+    );
+  }
+  const filtersApplied = filteredDiff !== parsedDiff;
+  const effectiveDiffText = filtersApplied ? reassembleDiff(filteredDiff) : job.diffText;
+  const effectiveChangedPaths = filtersApplied
+    ? filteredDiff.files.map((f) => f.path)
+    : (job.changedPaths ?? []);
+
+  const diffFindings = [...scanContent(effectiveDiffText)];
   const diffDecision = shouldAbortReview(diffFindings);
   if (diffDecision.abort) {
     throw new SecretLeakAbortedError(
@@ -72,6 +272,16 @@ export async function runReview(
     );
   }
 
+  // Compile operator-supplied glob deny paths once per review.
+  // Built-in `DENY_PATTERNS` are unioned in by the dispatcher
+  // (spec §7.4 "extend, not relax"); we only need to forward the
+  // operator-extended layer here. The YAML schema rejects invalid
+  // entries up front via `z.string().min(1).refine(isValidGlob)`
+  // on `PrivacySchema.deny_paths`, so a `globToRegExp` throw here
+  // would indicate a programmer error upstream (e.g. a caller
+  // bypassing the schema) and should fail loudly, not be swallowed.
+  const denyPatterns: ReadonlyArray<RegExp> = job.privacy.denyPaths.map((g) => globToRegExp(g));
+
   // Counter shared with the AI-SDK tool wrappers so we can attribute
   // tool calls to the agent step that initiated them. The provider
   // also reports `toolCalls` derived from the AI-SDK step results;
@@ -80,6 +290,7 @@ export async function runReview(
   let toolCallCounter = 0;
   const tools = createAiSdkToolset({
     workspace: job.workspaceDir,
+    denyPatterns,
     onCall: (_name: ToolName) => {
       toolCallCounter += 1;
     },
@@ -102,16 +313,21 @@ export async function runReview(
   // original #70 commit as I-1; the fix moves the rendering into
   // the wrapper.
   const autoFetch = await collectAutoFetchContext({
-    changedPaths: job.changedPaths ?? [],
+    changedPaths: effectiveChangedPaths,
     pathInstructions: job.pathInstructions,
     workspaceDir: job.workspaceDir,
+    // Same compiled `denyPatterns` instance the dispatcher uses, so
+    // auto-fetched companion files honor `privacy.deny_paths`. Built-in
+    // `DENY_PATTERNS` are unioned in by `createTools` regardless;
+    // this just closes the operator-extended layer (spec §7.4).
+    denyPatterns,
   });
   const wrappedMetadata = wrapUntrusted(job.prMetadata, {
     files: autoFetch.files,
     hitBudgetLimit: autoFetch.hitBudgetLimit,
     totalBytes: autoFetch.totalBytes,
   });
-  const diffPayload = `${wrappedMetadata}\n\n${job.diffText}`;
+  const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
 
   const baseInput: ReviewInput = {
     systemPrompt,
@@ -129,11 +345,19 @@ export async function runReview(
     createCostGuard({ state: costState }),
   ];
 
+  // Build the per-job factory schema once and reuse for both the
+  // first attempt and the retry. `prRepo` / `privacy.allowedUrlPrefixes`
+  // are wired by T3 through ReviewJob; no env lookup happens here.
+  const outputSchema = createReviewOutputSchema({
+    allowedUrlPrefixes: job.privacy.allowedUrlPrefixes,
+    prRepo: job.prRepo,
+  });
+
   const ctx: MiddlewareCtx = { job, input: baseInput, provider };
   const main = async (): Promise<ReviewOutput> => {
     try {
       const out = await provider.generateReview(ctx.input);
-      validateOutput(out);
+      validateOutput(outputSchema, out);
       return out;
     } catch (err) {
       if (!(err instanceof SchemaValidationError)) throw err;
@@ -141,13 +365,55 @@ export async function runReview(
         ...ctx.input,
         systemPrompt: ctx.input.systemPrompt + RETRY_PROMPT_SUFFIX,
       });
-      validateOutput(retried);
+      validateOutput(outputSchema, retried);
       return retried;
     }
   };
 
-  const result = await compose(middlewares, ctx, main);
-  const dedup = dedupComments(result, { previousState: job.previousState });
+  // Graceful abort path (spec §7.3 #4): when the second attempt also
+  // fails schema validation we DO NOT throw — surfacing the abort as
+  // an exception would crash the Action / CLI and leave the PR
+  // without any signal. Instead we collapse to an empty-comments
+  // RunnerResult whose `summary` is the operator-facing notice and
+  // whose `aborted.reason` discriminates URL allowlist vs other
+  // schema failures. Cost accounting is preserved (the cost-guard
+  // middleware has already accumulated both attempts into
+  // `costState`).
+  let result: ReviewOutput;
+  try {
+    result = await compose(middlewares, ctx, main);
+  } catch (err) {
+    if (err instanceof SchemaValidationError) {
+      const { reason, summary } = classifyAbort(err);
+      return {
+        comments: [],
+        // The summary is the ONLY string that will reach a public
+        // surface (PR comment via vcs.postReview). It's a generic
+        // notice with no URL substring — see `classifyAbort` and the
+        // `*_ABORT_SUMMARY` constants. The raw Zod issues (which
+        // contain the rejected URL, potentially with attacker-
+        // injected secrets in the query string) go on
+        // `aborted.internalIssues` strictly for audit / telemetry.
+        summary,
+        costUsd: costState.totalCostUsd,
+        tokensUsed: { input: 0, output: 0 },
+        model: provider.model,
+        provider: provider.name,
+        droppedDuplicates: 0,
+        toolCalls: toolCallCounter,
+        reviewEvent: 'COMMENT',
+        aborted: {
+          reason,
+          internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
+        },
+      };
+    }
+    throw err;
+  }
+  const dedup = dedupComments(result, {
+    previousState: job.previousState,
+    rejectedFingerprints,
+  });
 
   // Apply the operator-configured confidence floor *after* dedup so the
   // fingerprint set on the kept list is still well-formed; comments
@@ -205,9 +471,59 @@ export async function runReview(
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
+    droppedByFeedback: dedup.droppedByFeedback,
     toolCalls,
     reviewEvent,
   };
+}
+
+/**
+ * Wraps the agent loop with the v1.2 eval recorder (#83 Phase 2).
+ * Measures wall-clock latency around the entire `runReview` flow
+ * (including the gitleaks pre-scan, the LLM call, and dedup), and
+ * fires `deps.evalRecorder` once with a `ReviewEvalEvent` built
+ * from the final `RunnerResult`. Recording errors are routed
+ * through `deps.onEvalRecordError` and never bubble out — by the
+ * time we record, the review comments have already been posted (or
+ * the abort summary already emitted), so a transient DB failure
+ * must not retroactively crash the user-visible review.
+ *
+ * When `evalRecorder` is absent we keep the v1.1 behavior and just
+ * forward the inner result so callers that don't run a DB worker
+ * (local CLI, eval-only tests) pay zero overhead.
+ */
+export async function runReview(
+  job: ReviewJob,
+  provider: LlmProvider,
+  deps: RunReviewDeps = {},
+): Promise<RunnerResult> {
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
+  const result = await runReviewInner(job, provider, deps);
+  const latencyMs = Math.max(0, now() - startedAt);
+  if (deps.evalRecorder && deps.evalContext) {
+    const recorderOpts = {
+      recorder: deps.evalRecorder,
+      context: {
+        installationId: deps.evalContext.installationId,
+        jobId: job.jobId,
+        repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+        prNumber: deps.evalContext.prNumber,
+        headSha: deps.evalContext.headSha,
+      },
+      ...(deps.onEvalRecordError !== undefined ? { onRecordError: deps.onEvalRecordError } : {}),
+    };
+    await recordEvalEvent(recorderOpts, result, latencyMs);
+  }
+  return result;
+}
+
+function extractFingerprint(factText: string): string | null {
+  // Parses `[fp:<hex>]` written by createFeedbackWriter. Returns null
+  // for rows predating the writer so a partially-migrated table never
+  // produces spurious dedup matches.
+  const m = /^\[fp:([0-9a-f]+)\]/.exec(factText);
+  return m?.[1] ?? null;
 }
 
 function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<string> {
@@ -216,8 +532,11 @@ function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<
   return [...seen];
 }
 
-function validateOutput(out: ReviewOutput): void {
-  const parsed = ReviewOutputSchema.safeParse({
+function validateOutput(
+  schema: ReturnType<typeof createReviewOutputSchema>,
+  out: ReviewOutput,
+): void {
+  const parsed = schema.safeParse({
     summary: out.summary,
     comments: out.comments.map((c) => ({
       path: c.path,

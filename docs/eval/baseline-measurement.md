@@ -129,6 +129,37 @@ Open `packages/eval/baseline.json` and:
      unrealistically. The PR description must explain *why* the
      real-world quality is preserved despite the looser gate.
 
+### 5b. (v1.2) Severity-consistency score (automated path)
+
+The `severity_consistency_score` field is the only `current_pass_rates`
+entry that has a fully-automated measurement pipeline as of v1.2 epic
+#83 Phase 1 (#90). For the other rows in step 4 the operator still
+aggregates by hand; for this one the CLI handles end-to-end:
+
+```bash
+cd packages/eval
+ANTHROPIC_API_KEY=... pnpm eval:severity-consistency
+pnpm shim:severity-input -- --in severity-consistency-results.json \
+                            --out severity-consistency-input.json
+GIT_SHA=$(git rev-parse HEAD)
+pnpm baseline:measure -- --results severity-consistency-input.json \
+                          --git-sha "$GIT_SHA" \
+                          --notes "Re-measurement after prompt tweak" \
+                          --apply
+```
+
+`--apply` rewrites the `severity_consistency_score` /
+`measurement_metadata` fields in `baseline.json` and appends an entry
+to `history[]`. Without `--apply` the CLI exits 0 after printing the
+computed score — useful for code-review dry-runs.
+
+The eval CI workflow (`.github/workflows/eval.yml`) runs the same
+shim + scoring pair on every PR with `ANTHROPIC_API_KEY` configured.
+When `severity_consistency_score` is `null` in `baseline.json` the
+gate is informational; once the operator runs `--apply`, subsequent
+runs that drop more than `severity_consistency_drop_max_pp` (default
+5pp) fail the build.
+
 ### 6. Run the per-provider matrix runs (optional but expected for #46)
 
 For each non-default provider in
@@ -139,7 +170,6 @@ Then refresh the rendered table:
 
 ```bash
 pnpm --filter @review-agent/eval matrix:write
-pnpm --filter @review-agent/eval matrix:check    # CI-friendly verify
 ```
 
 ### 7. Commit

@@ -2,10 +2,13 @@ import { GitleaksScanError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyRedactions,
+  CUSTOM_RULE_ID_PREFIX,
+  liftCustomPatternsToToml,
   quickScanContent,
   type SpawnFn,
   scanWorkspaceWithGitleaks,
   shouldAbortReview,
+  writeCustomRegexFile,
 } from './gitleaks.js';
 
 describe('quickScanContent — well-known secret patterns', () => {
@@ -52,6 +55,204 @@ describe('quickScanContent — well-known secret patterns', () => {
 
   it('returns empty for benign text', () => {
     expect(quickScanContent('hello world\nconst x = 1;\n')).toHaveLength(0);
+  });
+});
+
+describe('quickScanContent — custom redact_patterns (#87)', () => {
+  it('emits findings tagged with the custom-N rule id when a custom pattern hits', () => {
+    const findings = quickScanContent('INTERNAL-TOKEN-12345 in code', ['INTERNAL-TOKEN-\\d+']);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.ruleId).toBe(`${CUSTOM_RULE_ID_PREFIX}0`);
+    expect(findings[0]?.secret).toBe('INTERNAL-TOKEN-12345');
+    expect(findings[0]?.tags).toEqual(['high']);
+  });
+
+  it('uses positional ids so multiple custom patterns are distinguishable', () => {
+    const findings = quickScanContent('FOO-1 then BAR-2', ['FOO-\\d', 'BAR-\\d']);
+    expect(findings.map((f) => f.ruleId).sort()).toEqual([
+      `${CUSTOM_RULE_ID_PREFIX}0`,
+      `${CUSTOM_RULE_ID_PREFIX}1`,
+    ]);
+  });
+
+  it('keeps built-in matches active alongside custom patterns (overlap case)', () => {
+    // `AKIA...` hits the built-in aws-access-key rule AND the operator's
+    // custom `AKIA.*` rule. Both should appear — operators should see
+    // their custom rule fire even when a built-in already caught it,
+    // since the redaction layer dedups by secret string anyway.
+    const findings = quickScanContent('AKIAIOSFODNN7EXAMPLE', ['AKIA[A-Z0-9]+']);
+    const ids = findings.map((f) => f.ruleId);
+    expect(ids).toContain('aws-access-key');
+    expect(ids).toContain(`${CUSTOM_RULE_ID_PREFIX}0`);
+  });
+
+  it('matches every occurrence of a custom pattern (global flag)', () => {
+    const findings = quickScanContent('X-1 X-2 X-3', ['X-\\d']);
+    expect(findings.filter((f) => f.ruleId === `${CUSTOM_RULE_ID_PREFIX}0`)).toHaveLength(3);
+  });
+
+  it('drops zero-width custom patterns without infinite looping', () => {
+    // `^` matches an empty position. Without the zero-width guard the
+    // matchAll loop or its underlying engine would spin or emit empty
+    // findings; with it, the pattern is silently dropped.
+    const findings = quickScanContent('abc', ['^']);
+    expect(findings).toHaveLength(0);
+  });
+
+  it('defaults customPatterns to [] (built-in scan still runs)', () => {
+    // Back-compat assertion: existing call sites that pass only the
+    // content arg must keep working.
+    const findings = quickScanContent('AKIAIOSFODNN7EXAMPLE');
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.ruleId).toBe('aws-access-key');
+  });
+
+  it('produces [REDACTED:custom-N] tokens when threaded through applyRedactions', () => {
+    const input = 'leak INTERNAL-TOKEN-12345 leak';
+    const findings = quickScanContent(input, ['INTERNAL-TOKEN-\\d+']);
+    const out = applyRedactions(input, findings);
+    expect(out).not.toContain('INTERNAL-TOKEN-12345');
+    expect(out).toContain(`[REDACTED:${CUSTOM_RULE_ID_PREFIX}0]`);
+  });
+});
+
+describe('liftCustomPatternsToToml (#87)', () => {
+  it('returns empty string for an empty list (caller skips tempfile)', () => {
+    expect(liftCustomPatternsToToml([])).toBe('');
+  });
+
+  it('emits one [[rules]] block per pattern with positional ids and the regex value', () => {
+    const out = liftCustomPatternsToToml(['AKIA[0-9A-Z]{16}', 'ghp_[A-Za-z0-9]{36}']);
+    expect(out).toContain('[[rules]]');
+    expect(out).toContain('id = "custom-0"');
+    expect(out).toContain('id = "custom-1"');
+    // Multi-line literal form — no escapes inside the regex value.
+    expect(out).toContain("regex = '''AKIA[0-9A-Z]{16}'''");
+    expect(out).toContain("regex = '''ghp_[A-Za-z0-9]{36}'''");
+    expect(out.match(/\[\[rules\]\]/g)).toHaveLength(2);
+  });
+
+  it('keeps gitleaks built-in rules active via [extend] useDefault = true', () => {
+    // Spec §7.4 "extend, not relax": without `useDefault = true`, the
+    // gitleaks --config flag REPLACES the default ruleset and we
+    // silently lose every built-in AWS/GitHub/Anthropic/OpenAI/PEM
+    // detector. This is the most important invariant of the helper.
+    const out = liftCustomPatternsToToml(['anything']);
+    expect(out).toMatch(/\[extend\]/);
+    expect(out).toMatch(/useDefault\s*=\s*true/);
+  });
+
+  it("emits regex values as TOML '''literal''' strings so backslashes survive verbatim (reviewer M-2)", () => {
+    // Reviewer M-2: basic strings ("…") force a \\ / \" / \n escape
+    // pass that is easy to get wrong. Multi-line literals ('''…''')
+    // pass every byte through unchanged, so `\d{4}` written in YAML
+    // arrives at Go's RE2 compiler as exactly `\d{4}`.
+    const out = liftCustomPatternsToToml(['\\d{4}-\\d{4}']);
+    expect(out).toContain("regex = '''\\d{4}-\\d{4}'''");
+  });
+
+  it('round-trips a double-quote without escape (literal-string semantic)', () => {
+    const out = liftCustomPatternsToToml(['"quoted"']);
+    expect(out).toContain("regex = '''\"quoted\"'''");
+  });
+
+  it('round-trips a dollar sign without escape', () => {
+    // `$` is not special in any TOML string form, but it IS special
+    // in some shells / templating engines — pin it so a future
+    // misguided escape doesn't slip in.
+    const out = liftCustomPatternsToToml(['^password=\\$secret']);
+    expect(out).toContain("regex = '''^password=\\$secret'''");
+  });
+
+  it('round-trips an embedded newline as a literal byte (multi-line literal allows it)', () => {
+    const out = liftCustomPatternsToToml(['line1\nline2']);
+    expect(out).toContain("regex = '''line1\nline2'''");
+  });
+
+  it("rejects a pattern containing the TOML literal terminator ''' (reviewer M-2 edge case)", () => {
+    // Multi-line literal strings cannot contain `'''`. Rather than
+    // re-encode to basic-string form (which re-introduces the
+    // escape footgun the literal form was meant to dodge), throw a
+    // clear error so the operator restructures the pattern.
+    expect(() => liftCustomPatternsToToml(["foo'''bar"])).toThrow(
+      /TOML multi-line literal terminator/,
+    );
+  });
+
+  it('round-trips a pattern ending in 1 single quote (mll-quotes 1*1) (reviewer M-4)', () => {
+    // TOML 1.0 multi-line literal strings explicitly permit 1 or 2
+    // single quotes adjacent to the closing delimiter — the parser
+    // greedily consumes up to 2 trailing quotes as content before
+    // matching the final `'''`. So a pattern like `foo'` serialises
+    // to `'''foo''''` (10 chars: 3 opens + `foo'` + 3 closes) and
+    // parses back to exactly `foo'`. Our simple `'''<pattern>'''`
+    // concatenation produces this naturally; pin it so a future
+    // "escape trailing quotes" patch doesn't accidentally break the
+    // case the TOML spec already covers.
+    const out = liftCustomPatternsToToml(["foo'"]);
+    expect(out).toContain("regex = '''foo''''");
+  });
+
+  it('round-trips a pattern ending in 2 single quotes (mll-quotes 1*2) (reviewer M-4)', () => {
+    // Same mechanism as the 1-quote case, exercising the upper
+    // boundary of TOML's "1 or 2 trailing quotes" allowance. Three
+    // adjacent quotes anywhere in the pattern still trips the
+    // `'''` terminator check above.
+    const out = liftCustomPatternsToToml(["foo''"]);
+    expect(out).toContain("regex = '''foo'''''");
+  });
+
+  it('tags every custom rule "high" so any match aborts the review like a built-in high-confidence hit', () => {
+    const out = liftCustomPatternsToToml(['anything']);
+    expect(out).toContain('tags = ["high"]');
+  });
+});
+
+describe('writeCustomRegexFile (#87)', () => {
+  it('returns null for an empty pattern list (caller skips try/finally)', async () => {
+    const result = await writeCustomRegexFile([]);
+    expect(result).toBeNull();
+  });
+
+  it('writes the lifted TOML to a fresh tempdir and exposes cleanup', async () => {
+    const writeFile = vi.fn<(p: string, c: string, e: string) => Promise<void>>(async () => {});
+    const mkdtemp = vi.fn<(prefix: string) => Promise<string>>(async () => '/tmp/ra-fake-abc');
+    const rmFn = vi.fn<(p: string, opts: object) => Promise<void>>(async () => {});
+    const result = await writeCustomRegexFile(['AKIA[0-9A-Z]{16}'], {
+      writeFile: writeFile as unknown as typeof import('node:fs/promises').writeFile,
+      mkdtemp: mkdtemp as unknown as typeof import('node:fs/promises').mkdtemp,
+      rm: rmFn as unknown as typeof import('node:fs/promises').rm,
+      tmpdir: () => '/tmp',
+    });
+    expect(result).not.toBeNull();
+    expect(result?.path).toBe('/tmp/ra-fake-abc/rules.toml');
+    // mkdtemp got a prefix path under our injected tmpdir.
+    expect(mkdtemp).toHaveBeenCalledWith('/tmp/review-agent-gitleaks-');
+    // The TOML body contains the rule we asked to lift.
+    const [, body] = writeFile.mock.calls[0] ?? [];
+    expect(body).toContain('id = "custom-0"');
+    expect(body).toContain("regex = '''AKIA[0-9A-Z]{16}'''");
+    expect(body).toContain('useDefault = true');
+    // cleanup() removes the dir.
+    await result?.cleanup();
+    expect(rmFn).toHaveBeenCalledWith('/tmp/ra-fake-abc', {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it('cleanup() is idempotent (second call is a no-op)', async () => {
+    const rmFn = vi.fn<(p: string, opts: object) => Promise<void>>(async () => {});
+    const result = await writeCustomRegexFile(['x'], {
+      writeFile: (async () => {}) as unknown as typeof import('node:fs/promises').writeFile,
+      mkdtemp: (async () =>
+        '/tmp/ra-fake-xyz') as unknown as typeof import('node:fs/promises').mkdtemp,
+      rm: rmFn as unknown as typeof import('node:fs/promises').rm,
+      tmpdir: () => '/tmp',
+    });
+    await result?.cleanup();
+    await result?.cleanup();
+    expect(rmFn).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -242,6 +443,62 @@ describe('scanWorkspaceWithGitleaks', () => {
     const args = spawnFn.mock.calls[0]?.[1] as ReadonlyArray<string>;
     expect(args).toContain('--config');
     expect(args).toContain('/tmp/extra.toml');
+  });
+
+  it('wraps a gitleaks regex-compile failure with a RE2-subset docs hint (#87 reviewer M-1)', async () => {
+    // gitleaks compiles patterns with Go's RE2, which is a strict
+    // subset of V8 regex — backreferences / lookbehind / lookahead
+    // are rejected even though `isValidRegex` accepts them. When
+    // that fires we want the operator to see a docs pointer, not
+    // a raw Go runtime backtrace.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error(
+        'gitleaks exited 2: error parsing regexp: invalid or unsupported Perl syntax: `(?<=`',
+      );
+    });
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/RE2 engine.*subset of JavaScript regex/s);
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/docs\/configuration\/privacy\.md/);
+  });
+
+  it('leaves the bare error alone when no customRegexFile is in play (reviewer M-1)', async () => {
+    // Without operator-supplied patterns there is no RE2 subset
+    // mismatch to hint at — surface the raw error so the operator
+    // sees the actual underlying cause.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied');
+    });
+    await expect(scanWorkspaceWithGitleaks({ workspace: '/tmp/x', spawnFn })).rejects.toThrow(
+      /^gitleaks exited 2: permission denied$/,
+    );
+  });
+
+  it('does not falsely tag a non-regex error as an RE2 mismatch (reviewer M-1)', async () => {
+    // The wrap only fires when stderr mentions parse/regex/regexp/
+    // compile keywords. Other errors that surface via the catch
+    // branch (permission denied, missing binary, etc.) must pass
+    // through verbatim even when `customRegexFile` is set.
+    const spawnFn: SpawnFn = vi.fn(async () => {
+      throw new Error('gitleaks exited 2: permission denied opening source directory');
+    });
+    await expect(
+      scanWorkspaceWithGitleaks({
+        workspace: '/tmp/x',
+        spawnFn,
+        customRegexFile: '/tmp/extra.toml',
+      }),
+    ).rejects.toThrow(/^gitleaks exited 2: permission denied opening source directory$/);
   });
 
   // H-1 (audit-w1 W1-B03 sec): `GitleaksScanError.stdoutExcerpt` is the

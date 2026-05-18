@@ -17,24 +17,35 @@ export {
   decideCoordination,
   renderDeferralSummary,
 } from './coordination.js';
-export { createCostKillSwitch, type KillSwitchOpts } from './cost-kill-switch.js';
 export {
-  assertDailyCapNotExceeded,
-  type PreflightDecision,
-  type PreflightDeps,
-  type PreflightInput,
-  preflightDailyCap,
-} from './cost-preflight.js';
+  applyPathFilters,
+  countDiffLines,
+  type ParsedDiff,
+  type ParsedDiffFile,
+  parseDiffByFile,
+  reassembleDiff,
+} from './diff-filter.js';
+export {
+  createFeedbackWriter,
+  type FeedbackWriter,
+  type FeedbackWriterOptions,
+  type ReviewHistoryWriter,
+} from './feedback-writer.js';
 export {
   applyRedactions,
+  CUSTOM_RULE_ID_PREFIX,
+  type CustomRegexFile,
   defaultSpawn,
   type GitleaksFinding,
   type GitleaksResult,
+  liftCustomPatternsToToml,
   quickScanContent,
   type ScanDiffOptions,
   type SpawnFn,
   scanWorkspaceWithGitleaks,
   shouldAbortReview,
+  type WriteCustomRegexFileDeps,
+  writeCustomRegexFile,
 } from './gitleaks.js';
 export {
   type CostGuardOptions,

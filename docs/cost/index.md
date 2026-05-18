@@ -10,16 +10,18 @@ Spec references: §6.2, §10.1, §13.2, §16.3.
 
 ## How enforcement works
 
-Two checks fire on every job:
+The per-call cost-guard middleware (`createCostGuard` from
+`@review-agent/runner`, implemented in
+`packages/runner/src/middleware/cost-guard.ts`) fires on every
+`generateReview` call. Before delegating to the provider it:
 
-1. **Job-start preflight** — `preflightDailyCap()` reads the current
-   day's `installation_cost_daily.cost_usd` row. If it's already
-   >= `cost.daily_cap_usd`, the worker rejects the job before any LLM
-   call. The agent posts a "Daily cap reached" summary and exits.
-
-2. **Per-call cost guard middleware** — for each `generateReview` call
-   the cost-guard middleware estimates input tokens, projects total
-   cost, and consults the four-tier decision engine.
+1. Reads the current day's `installation_cost_daily.cost_usd` row via
+   the operator-supplied `readTotals` callback. If the running daily
+   total has already reached `cost.daily_cap_usd`, the middleware
+   throws `CostExceededError` and fires an `onThresholdCrossed` event
+   with `threshold: 'daily_cap'` — no LLM call is made.
+2. Otherwise, estimates input tokens, projects total cost, and
+   consults the four-tier decision engine.
 
 The decision engine (`decideCostAction` in `@review-agent/core`)
 returns one of:
@@ -65,11 +67,7 @@ effectively per-repo via the same `cost.daily_cap_usd` value.
 ## Wiring in a worker
 
 ```ts
-import {
-  assertDailyCapNotExceeded,
-  createCostGuard,
-  createCostKillSwitch,
-} from '@review-agent/runner';
+import { createCostGuard } from '@review-agent/runner';
 import { createCostTotalsReader, createCostLedgerRecorder } from '@review-agent/db';
 import { withSpan } from '@review-agent/server';
 
@@ -77,18 +75,11 @@ export async function processJob(job: Job, deps: Deps) {
   const readTotals = createCostTotalsReader(deps.db);
   const recorder = createCostLedgerRecorder(deps.db);
 
-  // 1. Job-start preflight — burns ~5ms but saves an LLM call when capped.
-  await assertDailyCapNotExceeded(
-    {
-      installationId: job.installationId,
-      jobId: job.jobId,
-      dailyCapUsd: job.config.cost.daily_cap_usd,
-    },
-    { readTotals },
-  );
-
-  // 2. Build the per-call middleware with all the threshold hooks wired up.
-  const killSwitch = createCostKillSwitch();
+  // The cost-guard middleware reads the daily total before each call,
+  // fires `onThresholdCrossed` on every transition
+  // (fallback / abort / kill / daily_cap), and throws
+  // CostExceededError when an abort / kill / daily-cap trigger hits —
+  // so no separate preflight or kill-switch helper is needed.
   const costGuard = createCostGuard({
     state: { totalCostUsd: 0 },
     dailyCapUsd: job.config.cost.daily_cap_usd,
@@ -107,7 +98,13 @@ export async function processJob(job: Job, deps: Deps) {
     },
     onThresholdCrossed: (event) => {
       withSpan('llm.call', { ...spanCtx, ...costAttrs(event) }, async () => undefined);
-      killSwitch(event); // SIGTERM only on the kill threshold
+      if (event.threshold === 'kill') {
+        // 150%+ overrun: drop the worker so SQS redelivers to a fresh
+        // process. The cost-exceeded ledger row written by the
+        // middleware blocks the redelivered job from re-running until
+        // the next day.
+        process.kill(process.pid, 'SIGTERM');
+      }
       if (event.threshold !== 'fallback') {
         deps.audit.append({
           installationId: job.installationId,
