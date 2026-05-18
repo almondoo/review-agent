@@ -26,6 +26,12 @@ export {
   reassembleDiff,
 } from './diff-filter.js';
 export {
+  createFeedbackWriter,
+  type FeedbackWriter,
+  type FeedbackWriterOptions,
+  type ReviewHistoryWriter,
+} from './feedback-writer.js';
+export {
   applyRedactions,
   CUSTOM_RULE_ID_PREFIX,
   type CustomRegexFile,

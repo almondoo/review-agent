@@ -38,6 +38,12 @@ export {
   ToolDispatchRefusedError,
 } from './errors.js';
 export type { ReviewEvalEvent, ReviewEvalEventRecorder } from './eval.js';
+export {
+  FEEDBACK_KINDS,
+  type FeedbackEvent,
+  type FeedbackKind,
+  feedbackKindToFactType,
+} from './feedback.js';
 export { type FingerprintInput, fingerprint } from './fingerprint.js';
 export { globToRegExp, isValidGlob } from './glob.js';
 export {
