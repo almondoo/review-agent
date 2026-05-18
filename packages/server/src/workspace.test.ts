@@ -257,6 +257,80 @@ describe('provisionWorkspace — strategy: sparse-clone', () => {
     expect(cloneRepo).not.toHaveBeenCalled();
   });
 
+  it('forwards cloneHints.submodules=true to vcs.cloneRepo opts (spec §9.3)', async () => {
+    const cloneRepo = vi.fn<VCS['cloneRepo']>(async () => undefined);
+    const vcs = makeVcs({ cloneRepo });
+    await provisionWorkspace(
+      {
+        strategy: 'sparse-clone',
+        vcs,
+        ref,
+        headSha: 'H',
+        diff: makeDiff([{ path: 'src/a.ts' }]),
+        cloneHints: { submodules: true },
+      },
+      {
+        tmpdir: () => '/tmp-fake',
+        mkdtemp: vi.fn(async (prefix) => `${prefix}clone`),
+        mkdir: vi.fn(async () => undefined) as never,
+        writeFile: vi.fn(async () => undefined) as never,
+        rm: vi.fn(async () => undefined),
+      },
+    );
+    const opts = cloneRepo.mock.calls[0]?.[2] as CloneOpts;
+    expect(opts.submodules).toBe(true);
+    expect(opts.lfs).toBeUndefined();
+  });
+
+  it('forwards cloneHints.lfs=true to vcs.cloneRepo opts (spec §9.3 opt-in)', async () => {
+    const cloneRepo = vi.fn<VCS['cloneRepo']>(async () => undefined);
+    const vcs = makeVcs({ cloneRepo });
+    await provisionWorkspace(
+      {
+        strategy: 'sparse-clone',
+        vcs,
+        ref,
+        headSha: 'H',
+        diff: makeDiff([{ path: 'src/a.ts' }]),
+        cloneHints: { lfs: true },
+      },
+      {
+        tmpdir: () => '/tmp-fake',
+        mkdtemp: vi.fn(async (prefix) => `${prefix}clone`),
+        mkdir: vi.fn(async () => undefined) as never,
+        writeFile: vi.fn(async () => undefined) as never,
+        rm: vi.fn(async () => undefined),
+      },
+    );
+    const opts = cloneRepo.mock.calls[0]?.[2] as CloneOpts;
+    expect(opts.lfs).toBe(true);
+    expect(opts.submodules).toBeUndefined();
+  });
+
+  it('omits submodules/lfs flags when cloneHints is absent (default off per spec §9.3)', async () => {
+    const cloneRepo = vi.fn<VCS['cloneRepo']>(async () => undefined);
+    const vcs = makeVcs({ cloneRepo });
+    await provisionWorkspace(
+      {
+        strategy: 'sparse-clone',
+        vcs,
+        ref,
+        headSha: 'H',
+        diff: makeDiff([{ path: 'src/a.ts' }]),
+      },
+      {
+        tmpdir: () => '/tmp-fake',
+        mkdtemp: vi.fn(async (prefix) => `${prefix}clone`),
+        mkdir: vi.fn(async () => undefined) as never,
+        writeFile: vi.fn(async () => undefined) as never,
+        rm: vi.fn(async () => undefined),
+      },
+    );
+    const opts = cloneRepo.mock.calls[0]?.[2] as CloneOpts;
+    expect(opts.submodules).toBeUndefined();
+    expect(opts.lfs).toBeUndefined();
+  });
+
   it('drops denylisted paths from the sparse-checkout pattern set', async () => {
     const cloneRepo = vi.fn<VCS['cloneRepo']>(async () => undefined);
     const vcs = makeVcs({ cloneRepo });

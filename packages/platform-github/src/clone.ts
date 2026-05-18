@@ -49,6 +49,20 @@ function buildCloneArgs(url: string, dest: string, opts: CloneOpts): string[] {
   return args;
 }
 
+/**
+ * Spec §9.3: "LFS: disabled by default. Skip via env
+ * `GIT_LFS_SKIP_SMUDGE=1`." When `opts.lfs` is not set to `true`, every
+ * `git` subprocess inherits this env so the LFS smudge filter is a
+ * no-op even if the host has `git-lfs` installed and the repository
+ * declares `*.bin filter=lfs` patterns. We deliberately gate on
+ * `=== true` so the default (undefined) follows the spec's "off by
+ * default" stance without surprising opt-in.
+ */
+function lfsEnvFor(opts: CloneOpts): NodeJS.ProcessEnv | undefined {
+  if (opts.lfs === true) return undefined;
+  return { GIT_LFS_SKIP_SMUDGE: '1' };
+}
+
 export async function cloneWithStrategy(
   url: string,
   dest: string,
@@ -58,16 +72,18 @@ export async function cloneWithStrategy(
   runGit: RunGit = defaultRunGit,
 ): Promise<void> {
   assertSafeRef(headSha);
-  await runGit(buildCloneArgs(url, dest, opts));
+  const env = lfsEnvFor(opts);
+  const runOpts: RunGitOptions = env ? { env } : {};
+  await runGit(buildCloneArgs(url, dest, opts), runOpts);
 
   if (opts.sparsePaths && opts.sparsePaths.length > 0 && opts.sparsePaths.length <= 100) {
-    await runGit(['-C', dest, 'sparse-checkout', 'init', '--cone']);
-    await runGit(['-C', dest, 'sparse-checkout', 'set', ...opts.sparsePaths]);
+    await runGit(['-C', dest, 'sparse-checkout', 'init', '--cone'], runOpts);
+    await runGit(['-C', dest, 'sparse-checkout', 'set', ...opts.sparsePaths], runOpts);
   }
 
   const depth = opts.depth ?? DEFAULT_DEPTH;
-  await runGit(['-C', dest, 'fetch', 'origin', headSha, `--depth=${depth}`]);
-  await runGit(['-C', dest, 'checkout', headSha]);
+  await runGit(['-C', dest, 'fetch', 'origin', headSha, `--depth=${depth}`], runOpts);
+  await runGit(['-C', dest, 'checkout', headSha], runOpts);
 
   void ref;
 }

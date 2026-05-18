@@ -75,6 +75,19 @@ export type ProvisionWorkspaceInput = {
   readonly ref: PRRef;
   readonly headSha: string;
   readonly diff: Diff;
+  /**
+   * Operator-supplied repo clone hints from `.review-agent.yml`
+   * `repo.{submodules, lfs}` (spec §9.3 / §10). Only meaningful for
+   * strategy `'sparse-clone'`; ignored by `'contents-api'` and
+   * `'none'` since those don't run `git clone`. Defaults match the
+   * spec: both off. When `lfs: false` (or unset), the clone runs
+   * with `GIT_LFS_SKIP_SMUDGE=1` so large objects are never
+   * materialized.
+   */
+  readonly cloneHints?: {
+    readonly submodules?: boolean;
+    readonly lfs?: boolean;
+  };
 };
 
 /**
@@ -137,13 +150,24 @@ async function sparseClone(input: ProvisionWorkspaceInput, dir: string): Promise
   const sparsePaths = uniqueParentDirs(
     input.diff.files.filter((f) => pathIsAllowed(f.path)).map((f) => f.path),
   );
-  const opts: { depth: number; filter: 'blob:none'; sparsePaths?: ReadonlyArray<string> } = {
+  const opts: {
+    depth: number;
+    filter: 'blob:none';
+    sparsePaths?: ReadonlyArray<string>;
+    submodules?: boolean;
+    lfs?: boolean;
+  } = {
     depth: 1,
     filter: 'blob:none',
   };
   if (sparsePaths.length > 0) {
     opts.sparsePaths = sparsePaths;
   }
+  // Only forward truthy hints — `exactOptionalPropertyTypes` rejects
+  // an explicit `undefined` here, and the clone adapter already treats
+  // missing keys as "spec default off".
+  if (input.cloneHints?.submodules) opts.submodules = true;
+  if (input.cloneHints?.lfs) opts.lfs = true;
   await input.vcs.cloneRepo(input.ref, dir, opts);
 }
 
