@@ -272,3 +272,35 @@ lint + test:coverage + build green ✓ (823/823 unit tests pass at HEAD
 `ffe6aa6`). Eval baseline measurement (`severity_consistency_score`)
 remains null in `packages/eval/baseline.json` — the gate is dormant until
 the promptfoo→scoring-input shim lands as a wave-end follow-up.
+
+---
+
+## v1.2 — continuous review evaluation & improvement loop (epic #83, 4 phases)
+
+Epic [#83](https://github.com/almondoo/review-agent/issues/83) defines a
+closed loop: review → measure → learn → improved review. The four phases
+were split into child issues on 2026-05-18 with locked design decisions
+from the epic body's "Open questions" section.
+
+| Phase | Issue | Title (short) | Main packages |
+|---|---|---|---|
+| 1 | [#90](https://github.com/almondoo/review-agent/issues/90) | eval: baseline.json measurement + severity-consistency CI gate enablement | `packages/eval/`, `.github/workflows/eval.yml` |
+| 2 | [#91](https://github.com/almondoo/review-agent/issues/91) | runner,core,db: per-review metrics middleware + review_eval_event table + latency | `packages/runner/middleware/`, `packages/core/db/schema/` |
+| 3 | [#92](https://github.com/almondoo/review-agent/issues/92) | platform-github,server,runner: feedback signal collection + review_history writer | `packages/platform-github/`, `packages/server/handlers/`, `packages/runner/` |
+| 4 | [#93](https://github.com/almondoo/review-agent/issues/93) | runner: composeSystemPrompt <learned_facts> injection + feedback-aware dedup | `packages/runner/prompts/`, `packages/runner/middleware/dedup.ts` |
+
+**Suggested execution order**: Phase 2 first (observability blocks
+effect measurement) → Phase 1 and Phase 3 in parallel → Phase 4 after
+Phase 3 ships the writer side.
+
+**Locked design decisions** (from epic Open questions):
+
+- Q1 — new `review_eval_event` table over `cost_ledger` extension (per-review vs per-call granularity).
+- Q2 — comment-reply LLM interpretation deferred; Phase 3 uses explicit signals only (👍 / 👎 / dismiss).
+- Q3 — `accepted_pattern` triggered by 👍 only; pattern (b) and (c) deferred.
+- Q4 — Anthropic Sonnet (`claude-sonnet-4-6`) for the first baseline measurement; multi-provider parity handled separately via #46.
+- Q5 — `<learned_facts>` injection capped at 50 entries per spec §7.6.
+
+**v1.2 release gate**: all 4 phase issues closed + spec §7.6 "writer /
+reader 未実装" notation updated. `pnpm typecheck && pnpm lint &&
+pnpm test:coverage && pnpm build` green at the wave-end commit.
