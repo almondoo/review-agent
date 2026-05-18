@@ -21,6 +21,13 @@ export {
   type RunGit,
   type RunGitOptions,
 } from './clone.js';
+export {
+  type FeedbackSignalRow,
+  type GetReviewArgs,
+  getReviewState,
+  type ListReactionsArgs,
+  listReviewCommentReactions,
+} from './feedback.js';
 export { createGithubOrgConfigFetch, type GithubOrgConfigDeps } from './org-config.js';
 export { assertSafeRelativePath } from './path-guard.js';
 export { GITHUB_PLATFORM_ID, githubPlatform } from './platform.js';
