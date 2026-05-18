@@ -86,7 +86,7 @@ export function buildReviewEvalEvent(
     severityDist,
     confidenceDist,
     droppedDuplicates: result.droppedDuplicates,
-    droppedByFeedback: 0,
+    droppedByFeedback: result.droppedByFeedback ?? 0,
     toolCalls: result.toolCalls,
     latencyMs,
     costUsd: result.costUsd,

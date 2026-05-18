@@ -29,7 +29,7 @@ import {
   dedupComments,
   recordEvalEvent,
 } from './middleware/index.js';
-import { composeSystemPrompt } from './prompts/system-prompt.js';
+import { composeSystemPrompt, MAX_LEARNED_FACTS } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
 import type {
@@ -158,6 +158,40 @@ async function runReviewInner(
     (promptOptions as { previousFingerprints?: ReadonlyArray<string> }).previousFingerprints =
       previousFingerprints;
   }
+
+  // v1.2 epic #83 Phase 4 / #93 — load `review_history` for this
+  // repo (when an `evalContext` + `historyReader` are wired), then
+  // split the rows into:
+  //   - `<learned_facts>` for the system prompt (every factType).
+  //   - `rejectedFingerprints` extracted from `[fp:<fp>] ...` text
+  //     of `rejected_finding` rows, for the dedup middleware's
+  //     post-LLM backstop.
+  // Failures bubble up — a transient DB outage in the reader is
+  // operator-visible and the operator decides whether to fall back
+  // to a no-history review or surface the error. We do NOT silently
+  // skip the section on read failure, because that would erase the
+  // learning signal without warning.
+  let learnedFacts: ReadonlyArray<{
+    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factText: string;
+  }> = [];
+  let rejectedFingerprints: ReadonlyArray<string> = [];
+  if (deps.historyReader && deps.evalContext) {
+    const rows = await deps.historyReader({
+      installationId: deps.evalContext.installationId,
+      repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+      limit: MAX_LEARNED_FACTS,
+    });
+    learnedFacts = rows;
+    rejectedFingerprints = rows
+      .filter((r) => r.factType === 'rejected_finding')
+      .map((r) => extractFingerprint(r.factText))
+      .filter((fp): fp is string => fp !== null);
+  }
+  if (learnedFacts.length > 0) {
+    (promptOptions as { learnedFacts?: typeof learnedFacts }).learnedFacts = learnedFacts;
+  }
+
   const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
   // Bind the operator's `privacy.redact_patterns` into the default
@@ -376,7 +410,10 @@ async function runReviewInner(
     }
     throw err;
   }
-  const dedup = dedupComments(result, { previousState: job.previousState });
+  const dedup = dedupComments(result, {
+    previousState: job.previousState,
+    rejectedFingerprints,
+  });
 
   // Apply the operator-configured confidence floor *after* dedup so the
   // fingerprint set on the kept list is still well-formed; comments
@@ -434,6 +471,7 @@ async function runReviewInner(
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
+    droppedByFeedback: dedup.droppedByFeedback,
     toolCalls,
     reviewEvent,
   };
@@ -478,6 +516,14 @@ export async function runReview(
     await recordEvalEvent(recorderOpts, result, latencyMs);
   }
   return result;
+}
+
+function extractFingerprint(factText: string): string | null {
+  // Parses `[fp:<hex>]` written by createFeedbackWriter. Returns null
+  // for rows predating the writer so a partially-migrated table never
+  // produces spurious dedup matches.
+  const m = /^\[fp:([0-9a-f]+)\]/.exec(factText);
+  return m?.[1] ?? null;
 }
 
 function uniqueRuleIds(findings: ReadonlyArray<GitleaksFinding>): ReadonlyArray<string> {

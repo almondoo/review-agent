@@ -244,6 +244,15 @@ export type RunnerResult = {
   readonly provider: string;
   readonly droppedDuplicates: number;
   /**
+   * Comments the dedup middleware suppressed because their
+   * fingerprint matched a prior `factType: 'rejected_finding'` row
+   * in `review_history` (spec §7.6, v1.2 epic #83 Phase 4 / #93).
+   * Optional for back-compat — callers that don't wire a
+   * `historyReader` get `undefined` rather than zero so eval
+   * recorders can tell "feature off" from "feature on, no drops".
+   */
+  readonly droppedByFeedback?: number;
+  /**
    * Number of tool calls (`read_file` / `glob` / `grep`) that the
    * LLM made during this review. Surfaced for cost-guard accounting
    * (§spec 6.2) and for the eval harness so regressions in tool use
@@ -325,6 +334,28 @@ export type RunReviewDeps = {
    * or their logger here.
    */
   readonly onEvalRecordError?: (err: unknown) => void;
+  /**
+   * Optional reader that loads `review_history` rows for this PR's
+   * repo (v1.2 epic #83 Phase 4 / #93). When present the runner
+   * splits the rows into:
+   *   - `rejected_finding` rows -> `rejectedFingerprints` for the
+   *     dedup middleware (post-LLM backstop).
+   *   - All rows -> `<learned_facts>` section in the system prompt.
+   *
+   * `installationId` + `repo` are derived from `evalContext.installationId`
+   * and `job.prRepo`; the reader returns up to `MAX_LEARNED_FACTS`
+   * rows ordered desc by `created_at`.
+   */
+  readonly historyReader?: (q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+    readonly limit: number;
+  }) => Promise<
+    ReadonlyArray<{
+      readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+      readonly factText: string;
+    }>
+  >;
 };
 
 export type Middleware = (

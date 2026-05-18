@@ -114,4 +114,65 @@ describe('dedupComments', () => {
     );
     expect(result.kept).toHaveLength(2);
   });
+
+  // v1.2 epic #83 Phase 4 (#93) — feedback-aware dedup.
+
+  it('drops a comment whose fingerprint matches a rejectedFingerprints entry', () => {
+    const fingerprintFn = fixedFingerprint('f');
+    const fp = fingerprintFn({
+      path: 'src/auth.ts',
+      line: 10,
+      ruleId: 'major',
+      suggestionType: 'comment',
+    });
+    const result = dedupComments(output(comment()), {
+      fingerprintFn,
+      rejectedFingerprints: [fp],
+    });
+    expect(result.kept).toHaveLength(0);
+    expect(result.droppedCount).toBe(0);
+    expect(result.droppedByFeedback).toBe(1);
+  });
+
+  it('counts rejectedFingerprint drops separately from previousState drops', () => {
+    // Two comments — one matches a rejected_finding row (Phase 4),
+    // the other matches a previousState fingerprint (Phase 1 dedup).
+    const fingerprintFn = fixedFingerprint('g');
+    const fpA = fingerprintFn({
+      path: 'a.ts',
+      line: 1,
+      ruleId: 'major',
+      suggestionType: 'comment',
+    });
+    const fpB = fingerprintFn({
+      path: 'b.ts',
+      line: 2,
+      ruleId: 'major',
+      suggestionType: 'comment',
+    });
+    const previous: ReviewState = {
+      schemaVersion: 1,
+      lastReviewedSha: '0123456789abcdef0123456789abcdef01234567',
+      baseSha: 'fedcba9876543210fedcba9876543210fedcba98',
+      reviewedAt: '2026-04-30T10:00:00.000Z',
+      modelUsed: 'm',
+      totalTokens: 100,
+      totalCostUsd: 0.01,
+      commentFingerprints: [fpA],
+    };
+    const result = dedupComments(
+      output(comment({ path: 'a.ts', line: 1 }), comment({ path: 'b.ts', line: 2 })),
+      { previousState: previous, fingerprintFn, rejectedFingerprints: [fpB] },
+    );
+    expect(result.kept).toHaveLength(0);
+    expect(result.droppedCount).toBe(1);
+    expect(result.droppedByFeedback).toBe(1);
+  });
+
+  it('returns droppedByFeedback=0 when no rejectedFingerprints are passed', () => {
+    const result = dedupComments(output(comment()), {
+      fingerprintFn: fixedFingerprint('h'),
+    });
+    expect(result.droppedByFeedback).toBe(0);
+  });
 });

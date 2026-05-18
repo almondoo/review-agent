@@ -1310,3 +1310,73 @@ describe('runReview — eval recorder integration (#91 / spec v1.2 Phase 2)', ()
     expect(onEvalRecordError).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('runReview — learned_facts injection + feedback-aware dedup (#93 / spec v1.2 Phase 4)', () => {
+  it('threads accepted_pattern + rejected_finding rows into the system prompt', async () => {
+    const provider = makeProvider();
+    await runReview(baseJob, provider, {
+      evalContext: { installationId: 9n, prNumber: 1, headSha: 'h' },
+      historyReader: async () => [
+        { factType: 'accepted_pattern', factText: '[fp:aaa] 👍 by alice' },
+        { factType: 'rejected_finding', factText: '[fp:bbb] dismissed by bob' },
+      ],
+    });
+    const callArgs = (provider.generateReview as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(callArgs?.systemPrompt).toContain('<learned_facts>');
+    expect(callArgs?.systemPrompt).toContain('alice');
+    expect(callArgs?.systemPrompt).toContain('bob');
+  });
+
+  it('drops comments whose fingerprint matches a rejected_finding row and counts droppedByFeedback', async () => {
+    // The validOutput LLM mock emits two comments; we precompute the
+    // fingerprint of one and inject it via the history reader so
+    // the dedup middleware suppresses that comment as feedback.
+    const provider = makeProvider();
+    const firstRun = await runReview(baseJob, provider);
+    const fp = firstRun.comments[0]?.fingerprint;
+    expect(fp).toBeTruthy();
+    const secondRun = await runReview(baseJob, provider, {
+      evalContext: { installationId: 9n, prNumber: 1, headSha: 'h' },
+      historyReader: async () => [
+        { factType: 'rejected_finding', factText: `[fp:${fp}] dismissed` },
+      ],
+    });
+    expect(secondRun.comments.map((c) => c.fingerprint)).not.toContain(fp);
+    expect(secondRun.droppedByFeedback).toBe(1);
+  });
+
+  it('forwards droppedByFeedback into the eval recorder event', async () => {
+    const provider = makeProvider();
+    const firstRun = await runReview(baseJob, provider);
+    const fp = firstRun.comments[0]?.fingerprint as string;
+    const evalRecorder = vi.fn(async () => undefined);
+    await runReview(baseJob, provider, {
+      evalContext: { installationId: 9n, prNumber: 1, headSha: 'h' },
+      historyReader: async () => [
+        { factType: 'rejected_finding', factText: `[fp:${fp}] dismissed` },
+      ],
+      evalRecorder,
+    });
+    const event = evalRecorder.mock.calls[0]?.[0];
+    expect(event?.droppedByFeedback).toBe(1);
+  });
+
+  it('ignores rejected_finding rows without a parseable [fp:...] prefix', async () => {
+    const provider = makeProvider();
+    const secondRun = await runReview(baseJob, provider, {
+      evalContext: { installationId: 9n, prNumber: 1, headSha: 'h' },
+      historyReader: async () => [
+        { factType: 'rejected_finding', factText: 'malformed without fp prefix' },
+      ],
+    });
+    expect(secondRun.comments).toHaveLength(2);
+    expect(secondRun.droppedByFeedback).toBe(0);
+  });
+
+  it('skips history-reader entirely when evalContext is missing', async () => {
+    const provider = makeProvider();
+    const historyReader = vi.fn(async () => []);
+    await runReview(baseJob, provider, { historyReader });
+    expect(historyReader).not.toHaveBeenCalled();
+  });
+});

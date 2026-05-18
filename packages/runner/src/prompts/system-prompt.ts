@@ -114,7 +114,37 @@ export type ComposeSystemPromptOptions = {
    * also post-filters by fingerprint via the dedup middleware).
    */
   readonly previousFingerprints?: ReadonlyArray<string>;
+  /**
+   * "Learned facts" rows pulled from `review_history` for this repo
+   * (spec §7.6, v1.2 epic #83 Phase 4 / #93). When non-empty, the
+   * prompt includes a `<learned_facts>` section pinning two kinds
+   * of guidance:
+   *
+   *   - `accepted_pattern` — positive: prior 👍 reactions on this
+   *     repo's reviews. The LLM is told to prioritize the same
+   *     observation shape.
+   *   - `rejected_finding` — negative: prior 👎 or dismiss events.
+   *     The LLM is told to suppress equivalents; the dedup
+   *     middleware ALSO post-filters by fingerprint as a backstop.
+   *   - `arch_decision` — neutral context: architectural decisions
+   *     the operator recorded out-of-band.
+   *
+   * Default cap is `MAX_LEARNED_FACTS` (50, per spec §7.6) and is
+   * applied by the caller (the runner's history reader). The
+   * composer trusts the input list length.
+   */
+  readonly learnedFacts?: ReadonlyArray<{
+    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factText: string;
+  }>;
 };
+
+/**
+ * Default cap on `<learned_facts>` entries injected into the
+ * prompt (spec §7.6). Exported so the runner-level history reader
+ * can apply the same limit at SELECT time.
+ */
+export const MAX_LEARNED_FACTS = 50;
 
 // Truncation cap on the fingerprint list to keep the prompt bounded.
 // 32 fingerprints @ ~16 hex chars = ~640 bytes — small enough to not
@@ -148,6 +178,9 @@ export function composeSystemPrompt(opts: ComposeSystemPromptOptions): string {
   if (opts.previousFingerprints && opts.previousFingerprints.length > 0) {
     sections.push(renderPreviousFindingsSection(opts.previousFingerprints));
   }
+  if (opts.learnedFacts && opts.learnedFacts.length > 0) {
+    sections.push(renderLearnedFactsSection(opts.learnedFacts));
+  }
   sections.push(
     `Write all comment bodies and the summary in ${opts.language}. Code identifiers, file paths, and technical terms stay in their original form.`,
   );
@@ -165,6 +198,50 @@ function renderIncrementalSection(sinceSha: string | undefined): string {
     '',
     'Do not re-flag issues that live entirely outside this incremental diff. If a new commit introduces a regression in a previously-untouched line, you may comment on that line; otherwise treat unchanged regions as out-of-scope context only.',
   ].join('\n');
+}
+
+function renderLearnedFactsSection(
+  facts: ReadonlyArray<{
+    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factText: string;
+  }>,
+): string {
+  // Split by factType so the per-row guidance reads cleanly. Within
+  // each block we keep the writer's [fp:<fp>] prefix intact — the
+  // LLM does not need to parse it, but operators reading the prompt
+  // in a transcript can map a fact back to the originating comment.
+  const accepted = facts.filter((f) => f.factType === 'accepted_pattern');
+  const rejected = facts.filter((f) => f.factType === 'rejected_finding');
+  const arch = facts.filter((f) => f.factType === 'arch_decision');
+  const lines: string[] = [
+    '## <learned_facts>',
+    '',
+    'Prior human feedback on this repo. Use these as priors, not absolutes. The runner still post-filters by fingerprint as a backstop.',
+    '',
+  ];
+  if (accepted.length > 0) {
+    lines.push('### Accepted patterns (prior 👍 — prioritize equivalent findings)');
+    for (const f of accepted) {
+      lines.push(`- ${f.factText}`);
+    }
+    lines.push('');
+  }
+  if (rejected.length > 0) {
+    lines.push('### Rejected findings (prior 👎 / dismiss — suppress equivalent findings)');
+    for (const f of rejected) {
+      lines.push(`- ${f.factText}`);
+    }
+    lines.push('');
+  }
+  if (arch.length > 0) {
+    lines.push('### Architectural decisions (operator-recorded context)');
+    for (const f of arch) {
+      lines.push(`- ${f.factText}`);
+    }
+    lines.push('');
+  }
+  lines.push('</learned_facts>');
+  return lines.join('\n');
 }
 
 function renderPreviousFindingsSection(fingerprints: ReadonlyArray<string>): string {
