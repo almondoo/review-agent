@@ -63,13 +63,22 @@ jobs:
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
         run: pnpm --filter @review-agent/eval eval:severity-consistency
 
+      # Translate promptfoo output JSON into the per-fixture scoring
+      # input shape the gate consumes (#83 Phase 1 / #90). The shim
+      # runs every CI execution that has an API key; the previous
+      # hashFiles gate is removed because the shim is the producer.
+      - name: Shape promptfoo output into scoring input
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        working-directory: packages/eval
+        run: pnpm shim:severity-input -- --in severity-consistency-results.json --out severity-consistency-input.json
+
       # Gate severity_consistency_score against baseline (5pp drop max).
-      # The scoring step expects a pre-shaped results JSON; until the
-      # promptfoo-output → scoring-input shim lands, operators provide
-      # the file via the docs/eval workflow. Run only when that file
-      # exists so the gate is opt-in until the shim is wired up.
+      # With `severity_consistency_score: null` in baseline.json the
+      # gate is informational - checkGate returns ok and the current
+      # score is reported in stdout for the operator to copy into
+      # baseline.json on the first measurement.
       - name: Gate severity_consistency_score against baseline
-        if: ${{ env.ANTHROPIC_API_KEY != '' && hashFiles('packages/eval/severity-consistency-input.json') != '' }}
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
         run: pnpm --filter @review-agent/eval score:severity-consistency -- --results severity-consistency-input.json --max-drop-pp 5
 
       - name: Skip notice
