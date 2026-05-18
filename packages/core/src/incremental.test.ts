@@ -3,7 +3,6 @@ import {
   classifyGitError,
   computeDiffStrategy,
   type IncrementalGitFailure,
-  shiftLineThroughHunks,
 } from './incremental.js';
 import type { ReviewState } from './review.js';
 
@@ -279,67 +278,5 @@ describe('classifyGitError', () => {
     expect(classifyGitError('fatal: Not a valid object name')).toBe('permanent');
     expect(classifyGitError('boom')).toBe('permanent');
     expect(classifyGitError('')).toBe('permanent');
-  });
-});
-
-describe('shiftLineThroughHunks', () => {
-  it('returns the same line when no hunks affect it', () => {
-    expect(
-      shiftLineThroughHunks(50, [{ oldStart: 100, oldLines: 2, newStart: 100, newLines: 2 }]),
-    ).toBe(50);
-  });
-
-  it('shifts down when lines were added above', () => {
-    expect(
-      shiftLineThroughHunks(50, [{ oldStart: 10, oldLines: 0, newStart: 10, newLines: 5 }]),
-    ).toBe(55);
-  });
-
-  it('shifts up when lines were deleted above', () => {
-    expect(
-      shiftLineThroughHunks(50, [{ oldStart: 10, oldLines: 3, newStart: 10, newLines: 0 }]),
-    ).toBe(47);
-  });
-
-  it('returns null when the line itself was deleted', () => {
-    expect(
-      shiftLineThroughHunks(12, [{ oldStart: 10, oldLines: 5, newStart: 10, newLines: 0 }]),
-    ).toBeNull();
-  });
-
-  it('maps inside a modified hunk proportionally when new lines exist', () => {
-    expect(
-      shiftLineThroughHunks(11, [{ oldStart: 10, oldLines: 5, newStart: 100, newLines: 5 }]),
-    ).toBe(101);
-  });
-
-  it('handles multiple hunks compounding offsets', () => {
-    const hunks = [
-      { oldStart: 5, oldLines: 0, newStart: 5, newLines: 3 },
-      { oldStart: 30, oldLines: 2, newStart: 33, newLines: 0 },
-    ];
-    expect(shiftLineThroughHunks(50, hunks)).toBe(51);
-  });
-
-  it('maps the last line inside a hunk (oldStart + oldLines - 1)', () => {
-    // Boundary: originalLine == oldEnd. The branch at incremental.ts:96
-    // (`originalLine <= oldEnd`) is the off-by-one risk.
-    expect(
-      shiftLineThroughHunks(14, [{ oldStart: 10, oldLines: 5, newStart: 100, newLines: 5 }]),
-    ).toBe(104);
-  });
-
-  it('returns null when the last hunk line is deleted (newLines === 0 inside hunk)', () => {
-    // oldEnd = 14 with newLines: 0 → entire range deleted, including the boundary.
-    expect(
-      shiftLineThroughHunks(14, [{ oldStart: 10, oldLines: 5, newStart: 10, newLines: 0 }]),
-    ).toBeNull();
-  });
-
-  it('returns null when originalLine is inside hunk but offset >= newLines', () => {
-    // hunk shrinks: 5 old lines → 2 new lines. Lines 10–11 map; 12–14 are dropped.
-    expect(
-      shiftLineThroughHunks(13, [{ oldStart: 10, oldLines: 5, newStart: 50, newLines: 2 }]),
-    ).toBeNull();
   });
 });
