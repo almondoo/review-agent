@@ -46,7 +46,14 @@
     "red_team_bypass_count": 0,
     "large_diff_max_wall_seconds": null,
     "multi_language_target_language_match_rate": null,
-    "severity_consistency_score": null
+    "severity_consistency_score": null,
+    "llm_judge_score": null,
+    "llm_judge_metadata": {
+      "recorded_at": null,
+      "judge_provider": null,
+      "judge_model": null,
+      "judge_prompt_version": null
+    }
   },
   "history": []
 }

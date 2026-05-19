@@ -81,6 +81,16 @@ jobs:
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
         run: pnpm --filter @review-agent/eval score:severity-consistency -- --results severity-consistency-input.json --max-drop-pp 5
 
+      # #101: LLM-as-a-Judge auto-grader. Informational only -- the
+      # step is allowed to fail without blocking merge while we collect
+      # calibration data. Promotion to enforcing happens in a follow-up
+      # PR (see docs/eval/llm-as-judge.md).
+      - name: Run LLM-as-a-Judge (informational)
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        continue-on-error: true
+        working-directory: packages/eval
+        run: pnpm judge -- --candidate-results severity-consistency-input.json --judge-provider anthropic --judge-model claude-opus-4-7
+
       - name: Skip notice
         if: ${{ env.ANTHROPIC_API_KEY == '' }}
         run: echo "ANTHROPIC_API_KEY not set - skipping promptfoo eval. Add the secret to enable regression gating."
