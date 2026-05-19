@@ -2,6 +2,8 @@
 
 Spec references: §13.1 (span hierarchy), §13.2 (metrics), §13.3 (Langfuse).
 
+**SLO / alerting**: SLO 目標と alert 閾値は [`docs/operations/slo-playbook.md`](../operations/slo-playbook.md) を参照。
+
 ## What this gives you
 
 - **Distributed tracing** for every webhook → job → review pipeline using
