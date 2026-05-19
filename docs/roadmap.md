@@ -1,20 +1,35 @@
 # Roadmap
 
-Implementation order and dependency map for v0.1 → v1.0. Each row links to a
-GitHub Issue. Pick up the next unblocked issue in version order.
+**SSOT for wave / issue state.** This file is the single source of truth for:
+
+- どの wave がどこにシップ済か (`main` / `develop` / open PR)
+- どの issue がアクティブで何にブロックされているか
+- operator-runtime のみで完結する待機タスク (API key / DB 接続が要るもの)
+
+CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方向にしない。
+
+---
+
+## Current state (as of 2026-05-19)
+
+| 観点 | 状態 |
+|---|---|
+| Latest wave on `main` | **v1.0** (#43〜#51 + follow-on #58) |
+| Latest wave on `develop` (unmerged) | **v1.0.1 + v1.1 + v1.2** — PR [#94](https://github.com/almondoo/review-agent/pull/94) が `develop → main` を提案中、`Closes #83〜#93` で 11 issue を解決 |
+| Active follow-on issues (post-v1.2) | **#95〜#108** — 下記「Active follow-on issues」セクション参照 |
+| Operator-runtime 待機タスク | **#97 (default baseline)** / **#102 (per-provider parity)** — 本物の `ANTHROPIC_API_KEY` + 課金枠が必要 |
+
+Live state は GitHub の検索で確認:
+
+```
+gh issue list --repo almondoo/review-agent --state open
+gh issue view <N> --repo almondoo/review-agent
+gh pr view 94 --repo almondoo/review-agent
+```
 
 The full implementation specification is at
 [`docs/specs/review-agent-spec.md`](./specs/review-agent-spec.md). Issue bodies
 reference its sections (e.g. §5.2, §7.7, §12.3, §21.1).
-
-Live state on GitHub:
-
-```
-gh issue list --repo almondoo/review-agent --milestone v0.1 --state open
-gh issue list --repo almondoo/review-agent --milestone v0.2 --state open
-gh issue list --repo almondoo/review-agent --milestone v0.3 --state open
-gh issue view <N> --repo almondoo/review-agent
-```
 
 ---
 
@@ -304,3 +319,91 @@ Phase 3 ships the writer side.
 **v1.2 release gate**: all 4 phase issues closed + spec §7.6 "writer /
 reader 未実装" notation updated. `pnpm typecheck && pnpm lint &&
 pnpm test:coverage && pnpm build` green at the wave-end commit.
+
+### v1.2 wave — landed on `develop` (2026-05-18 〜 19)
+
+Coding AC は全て完了。`Closes #83〜#93` で PR #94 から main へ送出予定。
+1221 unit tests pass + 7 skipped (DB integration、`TEST_DATABASE_APP_URL` で
+unlock)。typecheck / lint / build green。
+
+- #83 (epic) — 子 #90/#91/#92/#93 + roadmap v1.2 section / spec §7.6.1 更新 — `dbec488`
+- #84 — audit Section A: dead `shiftLineThroughHunks` 削除 — `d1c100e`
+- #85 — privacy.allowed_url_prefixes URL allowlist refine — `9466d30` 他
+- #86 — privacy.deny_paths in read_file/glob/grep — `1fc1799` 他
+- #87 — privacy.redact_patterns alongside gitleaks — `3dec688` 他
+- #88 — reviews.{path_filters,max_files,max_diff_lines} — `1b60fe9` 他
+- #89 — repo.{submodules,lfs} cloneHints → CloneOpts — `7548fca`
+- #90 (Phase 1) — promptfoo→scoring shim + baseline-measure CLI + E2E gate test — `5bc7861`, `14c92e0`
+- #91 (Phase 2) — review_eval_event テーブル + EvalMiddleware + cost_ledger.latency_ms — `f03f4e5`, `14c92e0`
+- #92 (Phase 3) — feedback writer (PII redact + 10/job rate-limit + `[fp:…]` prefix) + webhook reaction/dismiss recognition + startReviewHistoryCleanup — `aee4209`, `4b99a1b`, `14c92e0`
+- #93 (Phase 4) — `<learned_facts>` injection + feedback-aware dedup + droppedByFeedback — `bff75ce`
+- 統合 test (v1.2 wave) — RLS / TTL integration test + reactions/dismissed helpers — `445d8c6`, `4b99a1b`
+
+---
+
+## Active follow-on issues (post-v1.2 wave)
+
+PR #94 マージ後に着手する実装 / docs / ops タスク。Refined 列が ✅ のものは
+open question 解決済みで「issue を読んで即着手」できる状態。
+
+### 実装系
+
+| # | タイトル | Refined |
+|---|---|---|
+| [#95](https://github.com/almondoo/review-agent/issues/95) | CodeCommit `/feedback` comment command (reactions 代替) | ✅ |
+| [#96](https://github.com/almondoo/review-agent/issues/96) | fingerprint embedding in posted PR comments | — |
+| [#99](https://github.com/almondoo/review-agent/issues/99) | feedback backfill CLI | ✅ |
+| [#101](https://github.com/almondoo/review-agent/issues/101) | LLM-as-a-Judge auto-grader (initial prompt + rubric pinned) | ✅ |
+| [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
+| [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
+
+### Docs
+
+| # | タイトル | Refined |
+|---|---|---|
+| [#98](https://github.com/almondoo/review-agent/issues/98) | worked-example Server-mode worker handler | — |
+| [#100](https://github.com/almondoo/review-agent/issues/100) | v1.1 → v1.2 migration guide | — |
+| [#103](https://github.com/almondoo/review-agent/issues/103) | review_eval_event SQL playbook | — |
+| [#104](https://github.com/almondoo/review-agent/issues/104) | SLO / dashboard playbook (SLO 数値 / Severity ルーブリック確定) | ✅ |
+
+### Test
+
+| # | タイトル |
+|---|---|
+| [#107](https://github.com/almondoo/review-agent/issues/107) | migration rollback / forward-compat regression suite |
+| [#108](https://github.com/almondoo/review-agent/issues/108) | self-feedback loop end-to-end integration test |
+
+### Operator runtime (コード作業なし、API key / DB 必須)
+
+| # | タイトル | 推定コスト |
+|---|---|---|
+| [#97](https://github.com/almondoo/review-agent/issues/97) | first baseline measurement (Anthropic Sonnet) | \$2.20 / ラン |
+| [#102](https://github.com/almondoo/review-agent/issues/102) | populate parity.json (8 プロバイダ) | \$5〜\$15 |
+
+### 依存関係 / 実装順序
+
+```
+#95 (CodeCommit /feedback)  ──depends─► #96 (fingerprint embed) ──fallback引数経路で部分着手可
+#99 (feedback backfill)     ──depends─► #92 writer API 拡張 (本 issue 内で対応)
+#104 (SLO playbook)         ──recommends► #106 (新 metric) landed 後に完成度↑
+#107 (migration compat)     ──relates──► #100 (migration guide)
+#108 (E2E self-feedback)    ──relates──► #107 (CI infra 共有)
+#97  ──blocks──► CI gate enforcing 化 (現在 informational)
+#102 ──recommends► #97 完了後に並行で
+```
+
+---
+
+## Out-of-scope (各 issue 内 `## Out of scope` で明示済、独立 issue 化しない)
+
+ここに列挙したものは「ニーズが顕在化した時に新規 issue として起票する」運用。
+
+- LLM 自由テキスト解釈 (`thanks, fixed!` 自動分類) — epic #83 Q2
+- GraphQL Resolve conversation state — GitHub API 未提供
+- Pairwise LLM judge — #101 単発スコア完了後
+- 人間フィードバック ↔ judge score correlation — #99 + #101 完了後
+- CodeCommit 過去ログ scrape — #95 完了後
+- Grafana JSON dump — #104 完成後
+- BI ツール統合 terraform — vendor 個別
+- `reviews.auto_review.base_branches` — auto-review epic 待ち (#84 内)
+- GitHub draft review への `/feedback` — 仕様判断 (ADR)
