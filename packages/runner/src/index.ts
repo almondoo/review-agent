@@ -26,6 +26,12 @@ export {
   reassembleDiff,
 } from './diff-filter.js';
 export {
+  extractFingerprintMarker,
+  type FingerprintResolution,
+  type FingerprintResolutionInput,
+  resolveFingerprint,
+} from './feedback-fingerprint-resolver.js';
+export {
   createFeedbackWriter,
   type FeedbackWriter,
   type FeedbackWriterOptions,
