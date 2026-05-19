@@ -1,7 +1,14 @@
 import type { JobMessage, QueueClient } from '@review-agent/core';
 import type { Context } from 'hono';
+import { getMetrics } from '../metrics.js';
 import type { SnsMessage } from '../middleware/verify-sns-signature.js';
-import { parseCommand } from '../utils/parse-command.js';
+import { checkCodeCommitFeedbackAuthz } from '../utils/feedback-authz.js';
+import {
+  type FeedbackCommand,
+  parseCommand,
+  parseFeedbackCommand,
+} from '../utils/parse-command.js';
+import type { FeedbackCommandOutcome } from './webhook.js';
 
 export type CodecommitWebhookDeps = {
   readonly queue: QueueClient;
@@ -12,6 +19,13 @@ export type CodecommitWebhookDeps = {
    * stub to avoid network calls.
    */
   readonly confirmFetch?: (url: string) => Promise<{ ok: boolean; status: number }>;
+  /**
+   * v1.2 #95: `/feedback` allowlist override. Tests inject the CSV
+   * directly; production reads `REVIEW_AGENT_FEEDBACK_ALLOWLIST` env.
+   * The env-read path keeps the same fail-closed semantics as the
+   * SNS topic allowlist: empty / unset → every `/feedback` denied.
+   */
+  readonly feedbackAllowlistEnv?: string;
   /**
    * Allowlist of SNS Topic ARNs accepted by this receiver (SEC-1).
    *
@@ -36,7 +50,14 @@ export type CodecommitWebhookResult =
   | { kind: 'enqueued'; messageId: string }
   | { kind: 'noop'; reason: string }
   | { kind: 'ignored'; reason: string }
-  | { kind: 'forbidden'; reason: string };
+  | { kind: 'forbidden'; reason: string }
+  | {
+      kind: 'feedback_command';
+      signal: 'thumbs_up' | 'thumbs_down' | 'dismissed';
+      outcome: FeedbackCommandOutcome;
+      fpPrefix?: string;
+      prNumber: number;
+    };
 
 /**
  * Shape of the CodeCommit event delivered inside the SNS envelope's
@@ -61,6 +82,13 @@ type CodecommitEvent = {
   readonly callerUserArn?: string;
   readonly commentContent?: string;
   readonly notificationBody?: string;
+  /**
+   * IAM principal id of the comment author. Surfaced on CodeCommit
+   * SNS notifications under `userIdentity.principalId` (EventBridge
+   * envelope) or sometimes flat on the event body. Used by the
+   * `/feedback` authz guard to gate writes (v1.2 #95).
+   */
+  readonly userIdentity?: { readonly principalId?: string };
 };
 
 type EventBridgeEnvelope = {
@@ -257,6 +285,16 @@ export async function handleCodecommitWebhook(
 
   if (ev.event === 'commentOnPullRequest') {
     const text = ev.commentContent ?? ev.notificationBody ?? '';
+
+    // v1.2 #95: recognise `/feedback ...` before the legacy
+    // `@review-agent <cmd>` parser. CodeCommit has no reaction API
+    // so this is the only path for accept / reject / dismiss
+    // signals on CodeCommit deliveries.
+    const fb = parseFeedbackCommand(text);
+    if (fb) {
+      return handleCodecommitFeedbackCommand(fb, ev, deps);
+    }
+
     const command = parseCommand(text);
     if (!command) return { kind: 'ignored', reason: 'no agent command' };
     if (command !== 'review') {
@@ -269,4 +307,74 @@ export async function handleCodecommitWebhook(
   }
 
   return { kind: 'ignored', reason: `unhandled codecommit event '${ev.event}'` };
+}
+
+/**
+ * v1.2 #95: run a CodeCommit `/feedback` command through the
+ * allowlist guard and surface the outcome for the worker to act on.
+ *
+ * CodeCommit has no reaction API, so this is the only path through
+ * which accept / reject / dismiss signals enter the feedback writer
+ * for the CodeCommit platform. The receiver-side accounting mirrors
+ * the GitHub handler: `recorded` is the optimistic positive case;
+ * the worker re-labels via `recordFeedbackCommandOutcome` when it
+ * detects rate-limit or unresolved fingerprint.
+ */
+function handleCodecommitFeedbackCommand(
+  fb: FeedbackCommand,
+  ev: CodecommitEvent,
+  deps: CodecommitWebhookDeps,
+): CodecommitWebhookResult {
+  const prNumber = pickPrNumber(ev);
+  const repo = pickRepositoryName(ev);
+  const metrics = getMetrics();
+
+  if (prNumber === null || repo === null) {
+    metrics.feedbackCommandTotal.add(1, {
+      platform: 'codecommit',
+      kind: fb.kind,
+      outcome: 'unresolved',
+    });
+    return {
+      kind: 'feedback_command',
+      signal: fb.kind,
+      outcome: 'unresolved',
+      ...(fb.fpPrefix !== undefined ? { fpPrefix: fb.fpPrefix } : {}),
+      prNumber: prNumber ?? 0,
+    };
+  }
+
+  const principalId = ev.userIdentity?.principalId ?? '';
+  const authz = checkCodeCommitFeedbackAuthz({
+    principalId,
+    ...(deps.feedbackAllowlistEnv !== undefined ? { allowlistEnv: deps.feedbackAllowlistEnv } : {}),
+  });
+
+  if (!authz.allowed) {
+    metrics.feedbackCommandTotal.add(1, {
+      platform: 'codecommit',
+      kind: fb.kind,
+      outcome: 'unauthorized',
+    });
+    return {
+      kind: 'feedback_command',
+      signal: fb.kind,
+      outcome: 'unauthorized',
+      ...(fb.fpPrefix !== undefined ? { fpPrefix: fb.fpPrefix } : {}),
+      prNumber,
+    };
+  }
+
+  metrics.feedbackCommandTotal.add(1, {
+    platform: 'codecommit',
+    kind: fb.kind,
+    outcome: 'recorded',
+  });
+  return {
+    kind: 'feedback_command',
+    signal: fb.kind,
+    outcome: 'recorded',
+    ...(fb.fpPrefix !== undefined ? { fpPrefix: fb.fpPrefix } : {}),
+    prNumber,
+  };
 }

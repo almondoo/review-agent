@@ -1,6 +1,6 @@
 # Feedback loop — `review_history` writer
 
-Spec references: §7.6 (learned facts), v1.2 epic [#83](https://github.com/almondoo/review-agent/issues/83) Phase 3 ([#92](https://github.com/almondoo/review-agent/issues/92)).
+Spec references: §7.6 (learned facts), v1.2 epic [#83](https://github.com/almondoo/review-agent/issues/83) Phase 3 ([#92](https://github.com/almondoo/review-agent/issues/92)), `/feedback` command ([#95](https://github.com/almondoo/review-agent/issues/95)).
 
 ## Signals collected
 
@@ -94,6 +94,129 @@ async function onReactionWebhook(result: WebhookResult, payload: GitHubReactionP
 }
 ```
 
+## CodeCommit path
+
+CodeCommit has no reaction API and no `pull_request_review.dismissed`
+equivalent — there is **no implicit signal** the reviewer can emit
+that maps cleanly onto `thumbs_up` / `thumbs_down` / `dismissed`. To
+keep CodeCommit tenants from running with the feedback writer
+permanently disabled, v1.2 #95 introduces an **explicit `/feedback`
+comment command** as the CodeCommit replacement (and as a fallback
+on GitHub for users who prefer typed commands).
+
+### Command syntax
+
+| Comment body | `FeedbackKind` | Notes |
+|---|---|---|
+| `/feedback accept` | `thumbs_up` | Reply on a bot comment whose body carries a `<!-- fingerprint:<fp> -->` marker (pending #96). |
+| `/feedback reject` | `thumbs_down` | Same. Marker-based path. |
+| `/feedback accept <fp_prefix>` | `thumbs_up` | Argument path. `<fp_prefix>` must be `[0-9a-f]{8,}` and prefix-match exactly one entry in `review_state.commentFingerprints`. |
+| `/feedback reject <fp_prefix>` | `thumbs_down` | Same. Argument path. |
+| `/feedback dismiss` | `dismissed` | PR-level comment — targets the summary review by id, not an inline comment. |
+
+The command parser (`parseFeedbackCommand` in
+`packages/server/src/utils/parse-command.ts`) is case-insensitive on
+the subcommand and validates `<fp_prefix>` as **at least 8 lowercase
+hex characters**. Shorter / non-hex prefixes fail parsing and are
+treated as ignored noise rather than malformed `/feedback`.
+
+`/feedback` is recognised on **both** platforms:
+
+- **GitHub**: in `issue_comment`, `pull_request_review`, and
+  `pull_request_review_comment` event bodies. The reaction-based
+  path (👍 / 👎) remains the primary signal — `/feedback` is a
+  fallback.
+- **CodeCommit**: in `commentOnPullRequest` event bodies. This is the
+  **only** path on CodeCommit.
+
+### Permission guard
+
+`/feedback` writes into `review_history`, which the runner re-injects
+on subsequent reviews as `<learned_facts>`. An attacker who can
+comment on PRs but cannot push to the repo therefore has a low-cost
+path to poison future outputs unless we gate the command on **write
+permission** to the repository.
+
+Per-platform guard:
+
+| Platform | Check | Failure mode |
+|---|---|---|
+| GitHub | `octokit.rest.repos.getCollaboratorPermissionLevel({owner, repo, username})` → `permission ∈ {'admin', 'maintain', 'write'}`. Wired via `AppDeps.checkGithubFeedbackAuthz`. | Silently ignored (no PR reply). Logged + counter `outcome: 'unauthorized'`. |
+| CodeCommit | CSV allowlist in `REVIEW_AGENT_FEEDBACK_ALLOWLIST` env (or `AppDeps.codecommitFeedbackAllowlistEnv` override). Matched against the SNS event's `userIdentity.principalId`. | Silently ignored. Empty / unset env → fail-closed (every `/feedback` denied). |
+
+The guards intentionally **never** post a reply on the PR explaining
+why a command was ignored — that would let any unauthenticated
+visitor force the bot to comment by spamming `/feedback`, creating a
+comment-forward DoS vector. See `docs/security/feedback-command-authz.md`.
+
+### Fingerprint resolution
+
+The webhook receiver does **not** itself resolve the targeted
+fingerprint — it forwards the optional `<fp_prefix>` argument to the
+worker, which has the DB connection needed to read
+`review_state.commentFingerprints`. The resolver
+(`resolveFingerprint` in `packages/runner/src/feedback-fingerprint-resolver.ts`)
+runs in the worker with this precedence:
+
+1. **`<!-- fingerprint:<fp> -->` marker** on the parent (bot) comment
+   body. Matches a known fingerprint → success.
+2. **`<fp_prefix>` argument** prefix-match against
+   `commentFingerprints`. Unique hit → success. 2+ matches →
+   `ambiguous_prefix`. 0 matches → `no_match`.
+3. Otherwise → `no_marker_and_no_prefix`.
+
+**Status note (2026-05-19)**: marker embedding (#96) is not yet
+shipped, so the resolver's path (1) is currently inert — no bot
+comment carries the marker. Operators get end-to-end resolution
+**only via path (2) (argument)** until #96 lands. The marker regex
+is implemented and unit-tested today so the day #96 ships a bot
+comment containing the marker, no further code change is needed
+here.
+
+### Receiver-side flow (extended)
+
+```
+GitHub webhook              CodeCommit SNS
+    │                              │
+    ▼                              ▼
+handleWebhook(...)        handleCodecommitWebhook(...)
+    │  parseFeedbackCommand        │  parseFeedbackCommand
+    │  checkGithubFeedbackAuthz    │  checkCodeCommitFeedbackAuthz
+    ▼                              ▼
+WebhookResult { kind: 'feedback_command', signal, outcome, fpPrefix?, prNumber }
+    │
+    ▼
+operator worker handler
+    │  loads review_state.commentFingerprints
+    │  resolveFingerprint(...)
+    │  builds FeedbackEvent (when ok)
+    ▼
+createFeedbackWriter(...)
+    │  PII redact + rate-limit + factType mapping
+    ▼
+createReviewHistoryWriter(db) → review_history
+```
+
+The receiver-side handler returns one of four outcome labels via the
+`review_agent_feedback_command_total{platform, kind, outcome}` counter:
+
+- `recorded` — authz passed, worker should attempt the write.
+- `unauthorized` — permission check failed (or no checker wired).
+- `unresolved` — PR fields missing; worker also surfaces this when
+  fingerprint resolution returns `no_match` / `ambiguous_prefix` /
+  `no_marker_and_no_prefix` via `recordFeedbackCommandOutcome`.
+- `rate_limited` — writer's per-job cap dropped the write; the worker
+  re-labels via `recordFeedbackCommandOutcome` when
+  `createFeedbackWriter.record` returns `{ dropped: true }`.
+
+### Failure semantics
+
+All `/feedback` paths return HTTP **200** to the platform — including
+`unauthorized`, `unresolved`, and `rate_limited`. This is intentional:
+returning non-2xx to GitHub / SNS would invite retry storms on a
+signal that is **best-effort** by design (the next review still runs
+fine without the feedback row).
+
 ## Out of scope (deferred to later issues)
 
 - **LLM-based comment-reply interpretation** (epic #83 Q2). "thanks,
@@ -104,3 +227,15 @@ async function onReactionWebhook(result: WebhookResult, payload: GitHubReactionP
   commit) are deferred.
 - **GraphQL Resolve conversation state**. REST cannot fetch the
   resolved-vs-open state of a conversation, so it is not consulted.
+- **GitHub draft review `/feedback`** — draft reviews are not yet
+  submitted, so they carry no fingerprint. The command parser
+  recognises them but the receiver returns `unresolved`.
+- **CodeCommit `Resolved` state** — CodeCommit has no equivalent
+  concept; `/feedback dismiss` is the only "this is wrong" signal.
+- **Chained `/feedback` replies** — `/feedback` posted as a reply to
+  another `/feedback` reply (rather than the bot comment) is not
+  recognised; nested resolution is a future issue.
+- **IAM `simulate-principal-policy` for CodeCommit** — the initial
+  release uses a CSV allowlist; a future iteration can replace it
+  with `codecommit:GitPush` simulation against the principal once
+  STS / IAM trust paths are settled in production deployments.

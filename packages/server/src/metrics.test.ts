@@ -34,6 +34,7 @@ describe('getMetrics', () => {
       'review_agent_rate_limit_hits_total',
       'review_agent_prompt_injection_blocked_total',
       'review_agent_incremental_skipped_lines_total',
+      'review_agent_feedback_command_total',
     ]);
     expect(createHistogram).toHaveBeenCalledWith(
       'review_agent_latency_seconds',
@@ -62,8 +63,8 @@ describe('getMetrics', () => {
     const first = getMetrics(meter);
     const second = getMetrics(meter);
     expect(first).toBe(second);
-    // 6 counters were created on the first call only.
-    expect(createCounter).toHaveBeenCalledTimes(6);
+    // 7 counters were created on the first call only.
+    expect(createCounter).toHaveBeenCalledTimes(7);
   });
 
   it('falls back to the global meter provider when no meter is supplied', () => {
