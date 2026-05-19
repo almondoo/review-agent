@@ -15,6 +15,7 @@
     "score:severity-consistency": "tsx scripts/severity-consistency.ts",
     "shim:severity-input": "tsx scripts/promptfoo-to-severity-input.ts",
     "baseline:measure": "tsx scripts/baseline-measure.ts",
+    "judge": "tsx scripts/llm-as-judge.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
@@ -25,6 +26,7 @@
   },
   "dependencies": {
     "@review-agent/db": "workspace:*",
+    "@review-agent/llm": "workspace:*",
     "zod": "3.25.76"
   },
   "devDependencies": {
