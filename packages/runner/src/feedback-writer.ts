@@ -54,9 +54,13 @@ export type FeedbackWriterOptions = {
   /**
    * Per-job soft cap on `review_history` inserts. spec §7.6 sets
    * the default at 10 / job to keep one PR's feedback bursts from
-   * polluting the table.
+   * polluting the table. Pass the sentinel `'unlimited'` to bypass
+   * the rate-limit entirely — intended for operator-driven backfill
+   * paths (CLI `review-agent feedback backfill`, v1.2 follow-on #99)
+   * where the operator has consciously opted out of the per-job cap.
+   * The webhook receive path keeps the numeric default.
    */
-  readonly maxWritesPerJob?: number;
+  readonly maxWritesPerJob?: number | 'unlimited';
   /** Optional hook fired when the rate-limit drops a feedback event. */
   readonly onRateLimit?: (ev: FeedbackEvent) => void;
 };
@@ -79,12 +83,12 @@ export type FeedbackWriter = {
  * webhook batch). Construct a new writer per job.
  */
 export function createFeedbackWriter(opts: FeedbackWriterOptions): FeedbackWriter {
-  const max = opts.maxWritesPerJob ?? DEFAULT_MAX_WRITES_PER_JOB;
+  const max: number | 'unlimited' = opts.maxWritesPerJob ?? DEFAULT_MAX_WRITES_PER_JOB;
   const patterns = (opts.redactPatterns ?? []).filter(isValidRegex);
   let count = 0;
   return {
     record: async (event) => {
-      if (count >= max) {
+      if (max !== 'unlimited' && count >= max) {
         opts.onRateLimit?.(event);
         return { dropped: true };
       }
