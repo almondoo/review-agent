@@ -2,6 +2,7 @@ import { Command, Option } from 'commander';
 import { auditExportCommand } from './commands/audit-export.js';
 import { auditPruneCommand } from './commands/audit-prune.js';
 import { runEvalCommand } from './commands/eval.js';
+import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
 import { recoverSyncStateCommand } from './commands/recover.js';
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
@@ -148,6 +149,50 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'ok' || result.status === 'dry_run' ? 0 : 1);
     });
 
+  const feedback = program
+    .command('feedback')
+    .description('review_history backfill / inspection helpers (spec §7.6).');
+
+  feedback
+    .command('backfill')
+    .description(
+      'Walk every PR in a GitHub repo and ingest historical +1/-1 reactions on Bot review comments into review_history.',
+    )
+    .requiredOption('--installation-id <id>', 'GitHub App installation ID', (v) => BigInt(v))
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
+    .option(
+      '--since <date>',
+      'inclusive lower bound on PR updated_at (YYYY-MM-DD or full ISO 8601)',
+    )
+    .option('--state-file <path>', 'JSON resume file for interrupted runs')
+    .option('--dry-run', 'compute the plan without writing review_history rows', false)
+    .option(
+      '--rate <req-per-sec>',
+      'GitHub API request rate ceiling (default: 2)',
+      (v) => Number.parseFloat(v),
+      2,
+    )
+    .option('--bot-login <login>', 'pin the bot login that authored review comments to ingest')
+    .action(async (opts: FeedbackBackfillCliOpts) => {
+      const result = await feedbackBackfillCommand(io, {
+        installationId: opts.installationId,
+        repo: opts.repo,
+        platform: opts.platform,
+        ...(opts.since !== undefined ? { since: opts.since } : {}),
+        ...(opts.stateFile !== undefined ? { stateFile: opts.stateFile } : {}),
+        dryRun: !!opts.dryRun,
+        ...(opts.rate !== undefined ? { rate: opts.rate } : {}),
+        ...(opts.botLogin !== undefined ? { botLogin: opts.botLogin } : {}),
+        env,
+      });
+      io.exit(result.status === 'ok' || result.status === 'dry_run' ? 0 : 1);
+    });
+
   const recover = program
     .command('recover')
     .description('Disaster-recovery commands (spec §8.6.6).');
@@ -215,6 +260,17 @@ type AuditExportCliOpts = {
 type AuditPruneCliOpts = {
   before: string;
   confirm?: boolean;
+};
+
+type FeedbackBackfillCliOpts = {
+  installationId: bigint;
+  repo: string;
+  platform: (typeof PLATFORMS)[number];
+  since?: string;
+  stateFile?: string;
+  dryRun?: boolean;
+  rate?: number;
+  botLogin?: string;
 };
 
 export type { ProgramIo } from './io.js';

@@ -32,6 +32,7 @@ describe('buildProgram', () => {
     expect(names).toContain('eval');
     expect(names).toContain('setup');
     expect(names).toContain('audit');
+    expect(names).toContain('feedback');
     const config = program.commands.find((c) => c.name() === 'config');
     const subNames = config?.commands.map((c) => c.name());
     expect(subNames).toContain('validate');
@@ -40,6 +41,8 @@ describe('buildProgram', () => {
     expect(setup?.commands.map((c) => c.name())).toContain('workspace');
     const audit = program.commands.find((c) => c.name() === 'audit');
     expect(audit?.commands.map((c) => c.name())).toEqual(['export', 'prune']);
+    const feedback = program.commands.find((c) => c.name() === 'feedback');
+    expect(feedback?.commands.map((c) => c.name())).toEqual(['backfill']);
   });
 
   it('wires `config schema` to print to stdout', async () => {
