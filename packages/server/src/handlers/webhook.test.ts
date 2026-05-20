@@ -1,6 +1,11 @@
 import type { Context } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
-import { handleWebhook } from './webhook.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { _resetMetricsForTest } from '../metrics.js';
+import { handleWebhook, recordFeedbackCommandOutcome } from './webhook.js';
+
+afterEach(() => {
+  _resetMetricsForTest();
+});
 
 const ctx = {} as unknown as Context;
 
@@ -218,5 +223,191 @@ describe('handleWebhook', () => {
     );
     expect(r).toEqual({ kind: 'feedback', signal: 'dismissed', commentId: 555 });
     expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // v1.2 #95: `/feedback` comment command on the GitHub path.
+
+  it('routes /feedback accept through the authz checker and records the outcome', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/feedback accept abcd1234', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toEqual({
+      kind: 'feedback_command',
+      signal: 'thumbs_up',
+      outcome: 'recorded',
+      fpPrefix: 'abcd1234',
+      prNumber: 9,
+    });
+    expect(checkAuthz).toHaveBeenCalledWith({ owner: 'o', repo: 'r', username: 'alice' });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('routes /feedback reject (no fp_prefix) through the authz checker', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'bob' },
+        comment: { body: '/feedback reject', user: { login: 'bob' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toEqual({
+      kind: 'feedback_command',
+      signal: 'thumbs_down',
+      outcome: 'recorded',
+      prNumber: 9,
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('routes /feedback dismiss through the authz checker', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/feedback dismiss', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toMatchObject({
+      kind: 'feedback_command',
+      signal: 'dismissed',
+      outcome: 'recorded',
+    });
+  });
+
+  it('returns outcome: unauthorized when the authz checker denies', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only user' });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'eve' },
+        comment: { body: '/feedback accept', user: { login: 'eve' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toMatchObject({
+      kind: 'feedback_command',
+      signal: 'thumbs_up',
+      outcome: 'unauthorized',
+      prNumber: 9,
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome: unauthorized when no authz checker is wired (fail-closed)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/feedback accept', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue },
+    );
+    expect(r).toMatchObject({
+      kind: 'feedback_command',
+      outcome: 'unauthorized',
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome: unresolved when PR fields are missing', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn();
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        sender: { login: 'alice' },
+        comment: { body: '/feedback accept', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toMatchObject({
+      kind: 'feedback_command',
+      outcome: 'unresolved',
+    });
+    // authz never called when we cannot identify the PR
+    expect(checkAuthz).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('falls back to comment.user.login when sender is absent', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        comment: { body: '/feedback reject', user: { login: 'commenter' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(checkAuthz).toHaveBeenCalledWith({
+      owner: 'o',
+      repo: 'r',
+      username: 'commenter',
+    });
+  });
+
+  it('ignores a /feedback with malformed fp_prefix (too short)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn();
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/feedback reject abc', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    // Malformed `/feedback` falls through to `parseCommand`, which sees
+    // 'feedback' as an unknown agent command.
+    expect(r.kind).toBe('ignored');
+    expect(checkAuthz).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('recordFeedbackCommandOutcome is callable for worker re-labelling (rate_limited / unresolved)', () => {
+    // Just pin the contract; the underlying counter is a stubbed
+    // counter at test time so we only assert no throw.
+    expect(() => recordFeedbackCommandOutcome('github', 'thumbs_up', 'rate_limited')).not.toThrow();
+    expect(() =>
+      recordFeedbackCommandOutcome('codecommit', 'thumbs_down', 'unresolved'),
+    ).not.toThrow();
   });
 });

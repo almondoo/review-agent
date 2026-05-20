@@ -14,9 +14,9 @@ CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方
 
 | 観点 | 状態 |
 |---|---|
-| Latest wave on `main` | **v1.0** (#43〜#51 + follow-on #58) |
-| Latest wave on `develop` (unmerged) | **v1.0.1 + v1.1 + v1.2** — PR [#94](https://github.com/almondoo/review-agent/pull/94) が `develop → main` を提案中、`Closes #83〜#93` で 11 issue を解決 |
-| Active follow-on issues (post-v1.2) | **#95〜#108** — 下記「Active follow-on issues」セクション参照 |
+| Latest wave on `main` | **v1.0.1 + v1.1 + v1.2** — PR [#94](https://github.com/almondoo/review-agent/pull/94) merged 2026-05-18、`Closes #83〜#93` で 11 issue を解決 |
+| Latest wave on `develop` (unmerged) | **post-v1.2 wave A** — #95 (partial, fp_prefix path) / #99 / #101 / #104 を 2026-05-19 に landed (Refined 4 件)。develop→main PR は未作成 |
+| Active follow-on issues (post-v1.2 wave A 後) | **#95 (marker path) / #96〜#108** — 下記「Active follow-on issues」セクション参照 |
 | Operator-runtime 待機タスク | **#97 (default baseline)** / **#102 (per-provider parity)** — 本物の `ANTHROPIC_API_KEY` + 課金枠が必要 |
 
 Live state は GitHub の検索で確認:
@@ -341,19 +341,35 @@ unlock)。typecheck / lint / build green。
 
 ---
 
-## Active follow-on issues (post-v1.2 wave)
+## post-v1.2 wave A — Refined 4 件、 `develop` 上 (2026-05-19)
 
-PR #94 マージ後に着手する実装 / docs / ops タスク。Refined 列が ✅ のものは
+| # | Issue | Title (short) | Merge commit |
+|---|---|---|---|
+| 95 | [#95](https://github.com/almondoo/review-agent/issues/95) | CodeCommit `/feedback` コマンド (fp_prefix 経路のみ、marker は #96 後送り stub) | `03e8230` |
+| 99 | [#99](https://github.com/almondoo/review-agent/issues/99) | `review-agent feedback backfill` CLI + writer `maxWritesPerJob: 'unlimited'` | `6bf43c5` |
+| 101 | [#101](https://github.com/almondoo/review-agent/issues/101) | LLM-as-a-Judge auto-grader + judge prompt v1 + informational CI step | `b8d82d4` |
+| 104 | [#104](https://github.com/almondoo/review-agent/issues/104) | SLO / dashboard playbook (`docs/operations/slo-playbook.md`) | `f8817e9` |
+
+**Wave 検証**: typecheck / lint / build green、unit tests 1351 passed + 7 skipped
+(DB integration、`TEST_DATABASE_APP_URL` で unlock)。`main` への送出は別 PR で。
+
+**#95 の補足**: fingerprint 解決は (b) 経路 `<fp_prefix>` 引数明示のみ。
+`extractFingerprintMarker(body)` は実装済 + テスト済の helper として残してあり、
+#96 (Bot コメントに `<!-- fingerprint:<fp> -->` を埋め込む) が landed すると
+コード変更なしで (a) 経路が有効化される。
+
+---
+
+## Active follow-on issues (post-v1.2 wave A 後)
+
+実装 / docs / ops タスク。Refined 列が ✅ のものは
 open question 解決済みで「issue を読んで即着手」できる状態。
 
 ### 実装系
 
 | # | タイトル | Refined |
 |---|---|---|
-| [#95](https://github.com/almondoo/review-agent/issues/95) | CodeCommit `/feedback` comment command (reactions 代替) | ✅ |
-| [#96](https://github.com/almondoo/review-agent/issues/96) | fingerprint embedding in posted PR comments | — |
-| [#99](https://github.com/almondoo/review-agent/issues/99) | feedback backfill CLI | ✅ |
-| [#101](https://github.com/almondoo/review-agent/issues/101) | LLM-as-a-Judge auto-grader (initial prompt + rubric pinned) | ✅ |
+| [#96](https://github.com/almondoo/review-agent/issues/96) | fingerprint embedding in posted PR comments (#95 marker 経路の前提) | — |
 | [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
 | [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
 
@@ -364,7 +380,6 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 | [#98](https://github.com/almondoo/review-agent/issues/98) | worked-example Server-mode worker handler | — |
 | [#100](https://github.com/almondoo/review-agent/issues/100) | v1.1 → v1.2 migration guide | — |
 | [#103](https://github.com/almondoo/review-agent/issues/103) | review_eval_event SQL playbook | — |
-| [#104](https://github.com/almondoo/review-agent/issues/104) | SLO / dashboard playbook (SLO 数値 / Severity ルーブリック確定) | ✅ |
 
 ### Test
 
@@ -383,9 +398,7 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 ### 依存関係 / 実装順序
 
 ```
-#95 (CodeCommit /feedback)  ──depends─► #96 (fingerprint embed) ──fallback引数経路で部分着手可
-#99 (feedback backfill)     ──depends─► #92 writer API 拡張 (本 issue 内で対応)
-#104 (SLO playbook)         ──recommends► #106 (新 metric) landed 後に完成度↑
+#96 (fingerprint embed)     ──unblocks──► #95 marker (a) path 有効化 (現在 fp_prefix のみ)
 #107 (migration compat)     ──relates──► #100 (migration guide)
 #108 (E2E self-feedback)    ──relates──► #107 (CI infra 共有)
 #97  ──blocks──► CI gate enforcing 化 (現在 informational)

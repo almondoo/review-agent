@@ -232,6 +232,9 @@ importers:
       '@review-agent/db':
         specifier: workspace:*
         version: link:../db
+      '@review-agent/llm':
+        specifier: workspace:*
+        version: link:../llm
       zod:
         specifier: 3.25.76
         version: 3.25.76

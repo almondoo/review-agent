@@ -31,6 +31,23 @@ export type AppDeps = {
    * environment variable; tests inject the array directly.
    */
   readonly allowedSnsTopicArns?: ReadonlyArray<string>;
+  /**
+   * v1.2 #95: `/feedback` GitHub permission check. Operators inject
+   * the installation-scoped Octokit-bound checker (typically built
+   * via `checkGithubFeedbackAuthz` from this package). When unset
+   * every `/feedback` from the GitHub path is denied (fail-closed).
+   */
+  readonly checkGithubFeedbackAuthz?: (input: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly username: string;
+  }) => Promise<{ readonly allowed: boolean; readonly reason?: string }>;
+  /**
+   * v1.2 #95: `/feedback` CodeCommit allowlist override. Tests inject
+   * the CSV directly; production reads `REVIEW_AGENT_FEEDBACK_ALLOWLIST`
+   * env (fail-closed when unset).
+   */
+  readonly codecommitFeedbackAllowlistEnv?: string;
 };
 
 /**
@@ -101,6 +118,7 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       const result = await handleWebhook(c, event as Parameters<typeof handleWebhook>[1], body, {
         queue: deps.queue,
         ...(deps.now ? { now: deps.now } : {}),
+        ...(deps.checkGithubFeedbackAuthz ? { checkAuthz: deps.checkGithubFeedbackAuthz } : {}),
       });
       return c.json(result, 200);
     },
@@ -117,6 +135,9 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
         queue: deps.queue,
         allowedTopicArns: allowedSnsTopicArns,
         ...(deps.now ? { now: deps.now } : {}),
+        ...(deps.codecommitFeedbackAllowlistEnv !== undefined
+          ? { feedbackAllowlistEnv: deps.codecommitFeedbackAllowlistEnv }
+          : {}),
       });
       if (result.kind === 'forbidden') {
         return c.json({ error: 'forbidden', reason: result.reason }, 403);

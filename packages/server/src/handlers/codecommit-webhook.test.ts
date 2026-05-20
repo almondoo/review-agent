@@ -1,7 +1,12 @@
 import type { Context } from 'hono';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { _resetMetricsForTest } from '../metrics.js';
 import type { SnsMessage } from '../middleware/verify-sns-signature.js';
 import { handleCodecommitWebhook } from './codecommit-webhook.js';
+
+afterEach(() => {
+  _resetMetricsForTest();
+});
 
 const ctx = {} as unknown as Context;
 
@@ -334,6 +339,150 @@ describe('handleCodecommitWebhook', () => {
       });
       expect(r.kind).toBe('forbidden');
       expect(confirmFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  // v1.2 #95: `/feedback` comment command on the CodeCommit path.
+  describe('/feedback command (v1.2 #95)', () => {
+    it('returns recorded when /feedback accept passes the IAM allowlist', async () => {
+      const { queue, enqueue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          pullRequestId: '9',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback accept abcd1234',
+          userIdentity: { principalId: 'AIDAALICE' },
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: 'AIDAALICE,AIDABOB',
+      });
+      expect(r).toEqual({
+        kind: 'feedback_command',
+        signal: 'thumbs_up',
+        outcome: 'recorded',
+        fpPrefix: 'abcd1234',
+        prNumber: 9,
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('returns unauthorized when the IAM principal is not on the allowlist', async () => {
+      const { queue, enqueue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          pullRequestId: '9',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback reject',
+          userIdentity: { principalId: 'AIDAEVE' },
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: 'AIDAALICE',
+      });
+      expect(r).toMatchObject({
+        kind: 'feedback_command',
+        signal: 'thumbs_down',
+        outcome: 'unauthorized',
+        prNumber: 9,
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('returns unauthorized (fail-closed) when feedbackAllowlistEnv is empty', async () => {
+      const { queue, enqueue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          pullRequestId: '9',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback accept',
+          userIdentity: { principalId: 'AIDAALICE' },
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: '',
+      });
+      expect(r).toMatchObject({
+        kind: 'feedback_command',
+        outcome: 'unauthorized',
+      });
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+
+    it('routes /feedback dismiss through the allowlist guard', async () => {
+      const { queue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          pullRequestId: '42',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback dismiss',
+          userIdentity: { principalId: 'AIDAALICE' },
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: 'AIDAALICE',
+      });
+      expect(r).toMatchObject({
+        kind: 'feedback_command',
+        signal: 'dismissed',
+        outcome: 'recorded',
+        prNumber: 42,
+      });
+    });
+
+    it('returns unresolved when /feedback comes with no PR number', async () => {
+      const { queue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback accept',
+          userIdentity: { principalId: 'AIDAALICE' },
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: 'AIDAALICE',
+      });
+      expect(r).toMatchObject({
+        kind: 'feedback_command',
+        outcome: 'unresolved',
+      });
+    });
+
+    it('returns unauthorized when principalId is missing on the SNS body', async () => {
+      const { queue } = makeQueue();
+      const envelope = makeEnvelope({
+        Message: eventBridgeMessage({
+          event: 'commentOnPullRequest',
+          pullRequestId: '9',
+          repositoryName: 'repo-d',
+          commentContent: '/feedback accept',
+          // userIdentity absent on purpose
+        }),
+      });
+      const r = await handleCodecommitWebhook(ctx, envelope, {
+        queue,
+        allowedTopicArns,
+        feedbackAllowlistEnv: 'AIDAALICE',
+      });
+      expect(r).toMatchObject({
+        kind: 'feedback_command',
+        outcome: 'unauthorized',
+      });
     });
   });
 });

@@ -9,6 +9,13 @@ export type ReviewAgentMetrics = {
   rateLimitHitsTotal: Counter<{ api: string }>;
   promptInjectionBlockedTotal: Counter<Record<string, string>>;
   incrementalSkippedLinesTotal: Counter<Record<string, string>>;
+  /**
+   * v1.2 #95: `/feedback` command outcomes by platform + kind +
+   * outcome. `outcome ∈ {'recorded', 'unauthorized', 'unresolved',
+   * 'rate_limited'}` — see `docs/architecture/feedback-loop.md` for
+   * the semantics.
+   */
+  feedbackCommandTotal: Counter<{ platform: string; kind: string; outcome: string }>;
   latencySecondsHistogram: Histogram<{ phase: string }>;
 };
 
@@ -35,6 +42,9 @@ export function getMetrics(meter: Meter | null = null): ReviewAgentMetrics {
     }),
     incrementalSkippedLinesTotal: m.createCounter('review_agent_incremental_skipped_lines_total', {
       description: 'Lines skipped because incremental review found no relevant change.',
+    }),
+    feedbackCommandTotal: m.createCounter('review_agent_feedback_command_total', {
+      description: '/feedback command outcomes by platform, kind, and outcome (v1.2 #95).',
     }),
     latencySecondsHistogram: m.createHistogram('review_agent_latency_seconds', {
       description: 'End-to-end latency by phase.',

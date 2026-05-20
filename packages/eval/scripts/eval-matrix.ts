@@ -47,6 +47,9 @@ const ProviderSchema = z.object({
     known_bug_precision: z.number().nullable(),
     no_issue_false_positive_rate: z.number().nullable(),
     noise_rate_delta_vs_baseline: z.number().nullable(),
+    // #101: per-provider LLM-as-a-Judge overall score on the 1-5 scale.
+    // Optional during the rollout window — defaults to null in parity.json.
+    llm_judge_score: z.number().nullable().optional(),
   }),
   cost: z.object({
     median_pr_usd: z.number().nullable(),

@@ -108,4 +108,20 @@ describe('createFeedbackWriter', () => {
     expect(r.dropped).toBe(true);
     expect(writer).toHaveBeenCalledTimes(2);
   });
+
+  it("does not rate-limit when maxWritesPerJob: 'unlimited' (backfill path)", async () => {
+    // v1.2 follow-on #99: the backfill CLI ingests months of historical
+    // reactions in one job and must opt out of the default 10/job cap.
+    // The sentinel `'unlimited'` distinguishes this case at the type
+    // level so a typo'd number can never silently disable the cap.
+    const writer: ReviewHistoryWriter = vi.fn(async () => undefined);
+    const onRateLimit = vi.fn();
+    const fb = createFeedbackWriter({ writer, maxWritesPerJob: 'unlimited', onRateLimit });
+    for (let i = 0; i < 25; i += 1) {
+      const r = await fb.record(makeEvent({ fingerprint: `fp-${i}` }));
+      expect(r.dropped).toBe(false);
+    }
+    expect(writer).toHaveBeenCalledTimes(25);
+    expect(onRateLimit).not.toHaveBeenCalled();
+  });
 });
