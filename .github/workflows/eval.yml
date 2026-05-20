@@ -30,6 +30,10 @@ jobs:
           node-version: 24.14.1
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # `@review-agent/llm` (transitively imported by `llm-as-judge.ts`)
+      # exposes only `dist/`. Mirror ci.yml's pre-build step so workspace
+      # consumers can resolve the producer's entry on a fresh checkout.
+      - run: pnpm build
       - run: pnpm --filter @review-agent/eval validate:severity-consistency
       - run: pnpm --filter @review-agent/eval test
 
@@ -54,6 +58,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # Same reason as validate job: workspace deps export only `dist/`.
+      - run: pnpm build
 
       - name: Run promptfoo eval
         if: ${{ env.ANTHROPIC_API_KEY != '' }}
