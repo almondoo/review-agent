@@ -11,6 +11,10 @@ export {
   verifyAuditChainSegment,
 } from './audit.js';
 export {
+  appendFingerprintMarker,
+  extractFingerprintFromComment,
+} from './comment-fingerprint.js';
+export {
   COST_THRESHOLDS,
   type CostGuardDecision,
   type CostLedgerRecorder,

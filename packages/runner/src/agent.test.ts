@@ -1379,4 +1379,26 @@ describe('runReview — learned_facts injection + feedback-aware dedup (#93 / sp
     await runReview(baseJob, provider, { historyReader });
     expect(historyReader).not.toHaveBeenCalled();
   });
+
+  it('routes historyReader throws through onHistoryReaderError and still re-raises (#106)', async () => {
+    const provider = makeProvider();
+    const boom = new Error('reader exploded');
+    const historyReader = vi.fn(async () => {
+      throw boom;
+    });
+    const onHistoryReaderError = vi.fn();
+    await expect(
+      runReview(baseJob, provider, {
+        historyReader,
+        onHistoryReaderError,
+        evalContext: {
+          installationId: 1n,
+          prNumber: 7,
+          headSha: 'h',
+        },
+      }),
+    ).rejects.toBe(boom);
+    expect(onHistoryReaderError).toHaveBeenCalledTimes(1);
+    expect(onHistoryReaderError).toHaveBeenCalledWith(boom);
+  });
 });

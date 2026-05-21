@@ -237,6 +237,62 @@ describe('createCodecommitVCS — postReview', () => {
     };
     expect(inlineLeft.location.relativeFileVersion).toBe('BEFORE');
   });
+
+  it('appends the hidden fingerprint marker to each inline comment body (#96)', async () => {
+    const seen: Array<{ name: string; input: unknown }> = [];
+    const client = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input: unknown }) => {
+        seen.push({ name: cmd.constructor.name, input: cmd.input });
+        if (cmd.constructor.name === 'GetPullRequestCommand') {
+          return {
+            pullRequest: {
+              pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+            },
+          };
+        }
+        return { comment: { commentId: 'cid' } };
+      }),
+    };
+    const vcs = createCodecommitVCS({ client });
+    await vcs.postReview(REF, {
+      summary: 'two findings',
+      comments: [
+        {
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'first finding',
+          fingerprint: 'abcdef0123456789',
+          severity: 'minor',
+        },
+        {
+          path: 'b.ts',
+          line: 5,
+          side: 'RIGHT',
+          body: 'second finding\nwith two lines',
+          fingerprint: 'fedcba9876543210',
+          severity: 'critical',
+        },
+      ],
+      state: {
+        schemaVersion: 1,
+        lastReviewedSha: 'h1',
+        baseSha: 'b1',
+        reviewedAt: '2026-04-30T00:00:00Z',
+        modelUsed: 'm',
+        totalTokens: 0,
+        totalCostUsd: 0,
+        commentFingerprints: ['abcdef0123456789', 'fedcba9876543210'],
+      },
+    });
+    const inlinePosts = seen.filter((s) => s.name === 'PostCommentForPullRequestCommand').slice(1); // first post is the summary
+    expect((inlinePosts[0]?.input as { content: string }).content).toBe(
+      'first finding\n\n<!-- fingerprint:abcdef0123456789 -->',
+    );
+    expect((inlinePosts[1]?.input as { content: string }).content).toBe(
+      'second finding\nwith two lines\n\n<!-- fingerprint:fedcba9876543210 -->',
+    );
+  });
 });
 
 describe('createCodecommitVCS — postReview approvalState mapping (#74)', () => {

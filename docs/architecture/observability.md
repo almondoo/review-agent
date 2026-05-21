@@ -113,6 +113,61 @@ The instrument set is a singleton; the first call lazily binds against the
 global meter provider so it works whether or not telemetry is active.
 Unrecorded labels are dropped at export time by the backend.
 
+### Fail-open counters (v1.2 #106)
+
+The v1.2 wave added four counters that observe failures the runner / worker
+**deliberately swallow** (or expose only via callback) so the user-visible
+review still completes. Wire them via the default bridges exported from
+`@review-agent/server` — operators can wrap a bridge to add extra side
+effects (logging, additional counter) without rebuilding the OTel wiring.
+
+| Counter | Source | Bridge |
+|---|---|---|
+| `review_agent_eval_record_errors_total{provider, model}` | `recordEvalEvent` threw inside the eval middleware | `bridgeEvalRecordErrorsToMetrics({ provider, model })` → pass to `runReview({ onEvalRecordError })` |
+| `review_agent_feedback_rate_limit_drops_total` | `createFeedbackWriter` dropped an event because `maxWritesPerJob` was reached | `bridgeFeedbackRateLimitToMetrics()` → pass to `createFeedbackWriter({ onRateLimit })` |
+| `review_agent_review_history_pruned_total` | `startReviewHistoryCleanup` deleted N expired `review_history` rows on this tick (zero-count ticks suppressed) | `bridgePrunedRowsToMetrics()` → pass to `startReviewHistoryCleanup({ onPruned })` |
+| `review_agent_history_reader_errors_total` | `historyReader` threw inside the runner (the runner **does** re-raise — this fires *before* the throw propagates) | `bridgeHistoryReaderErrorsToMetrics()` → pass to `runReview({ onHistoryReaderError })` |
+
+Example wiring:
+
+```ts
+import {
+  bridgeEvalRecordErrorsToMetrics,
+  bridgeFeedbackRateLimitToMetrics,
+  bridgeHistoryReaderErrorsToMetrics,
+  bridgePrunedRowsToMetrics,
+  startReviewHistoryCleanup,
+} from '@review-agent/server';
+import { createFeedbackWriter, runReview } from '@review-agent/runner';
+
+// Worker boot
+const cleanup = startReviewHistoryCleanup({
+  db,
+  onPruned: bridgePrunedRowsToMetrics(),
+});
+
+// Per-job
+const feedback = createFeedbackWriter({
+  writer,
+  onRateLimit: bridgeFeedbackRateLimitToMetrics(),
+});
+await runReview(job, provider, {
+  evalRecorder,
+  historyReader,
+  onEvalRecordError: bridgeEvalRecordErrorsToMetrics({
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+  }),
+  onHistoryReaderError: bridgeHistoryReaderErrorsToMetrics(),
+});
+```
+
+These metrics feed the alert thresholds in
+[`docs/operations/slo-playbook.md`](../operations/slo-playbook.md) — the
+playbook's "Cost-guard `kill` 発火", "Feedback rate-limit drop", and
+"Dropped by feedback" rows correspond to these counters (the playbook was
+written speculatively against the planned metric names).
+
 ## Local development
 
 For local end-to-end debugging, run a Jaeger or Grafana Tempo container

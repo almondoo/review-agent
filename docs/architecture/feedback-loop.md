@@ -108,7 +108,7 @@ on GitHub for users who prefer typed commands).
 
 | Comment body | `FeedbackKind` | Notes |
 |---|---|---|
-| `/feedback accept` | `thumbs_up` | Reply on a bot comment whose body carries a `<!-- fingerprint:<fp> -->` marker (pending #96). |
+| `/feedback accept` | `thumbs_up` | Reply on a bot comment whose body carries a `<!-- fingerprint:<fp> -->` marker (writer: #96, see [Fingerprint embedding format](#fingerprint-embedding-format)). |
 | `/feedback reject` | `thumbs_down` | Same. Marker-based path. |
 | `/feedback accept <fp_prefix>` | `thumbs_up` | Argument path. `<fp_prefix>` must be `[0-9a-f]{8,}` and prefix-match exactly one entry in `review_state.commentFingerprints`. |
 | `/feedback reject <fp_prefix>` | `thumbs_down` | Same. Argument path. |
@@ -165,13 +165,40 @@ runs in the worker with this precedence:
    `ambiguous_prefix`. 0 matches → `no_match`.
 3. Otherwise → `no_marker_and_no_prefix`.
 
-**Status note (2026-05-19)**: marker embedding (#96) is not yet
-shipped, so the resolver's path (1) is currently inert — no bot
-comment carries the marker. Operators get end-to-end resolution
-**only via path (2) (argument)** until #96 lands. The marker regex
-is implemented and unit-tested today so the day #96 ships a bot
-comment containing the marker, no further code change is needed
-here.
+### Fingerprint embedding format
+
+(Writer: #96 — `packages/platform-github/src/adapter.ts` and
+`packages/platform-codecommit/src/adapter.ts` `postReview`.)
+
+Every inline comment the bot posts has the following marker appended
+to its body so the (1) resolver path above can recover the fingerprint
+without a DB lookup:
+
+```
+<finding body>
+
+<!-- fingerprint:<16-hex> -->
+```
+
+- `<16-hex>` is the 16-character `fingerprint()` output from
+  `packages/core/src/fingerprint.ts`. The full value is embedded so
+  the resolver's exact-match path against
+  `review_state.commentFingerprints` succeeds without prefix logic.
+- The marker is added via `appendFingerprintMarker()` from
+  `@review-agent/core` — both adapters use the same helper to keep the
+  format identical (regex `/<!--\s*fingerprint:([0-9a-f]{8,16})\s*-->/i`
+  in `extractFingerprintFromComment`).
+- `appendFingerprintMarker` is **idempotent** — passing the same
+  fingerprint twice does not produce duplicate markers. This makes
+  re-posts safe.
+- The marker is rendered as a hidden HTML comment on both platforms
+  (GitHub Markdown and CodeCommit Markdown both swallow it on render),
+  so the end-user view is unchanged.
+
+**Back-compat**: posted comments created **before** #96 shipped have
+no marker. `/feedback` on those comments falls back to path (2)
+(`<fp_prefix>` argument) automatically — that is the v1.2 #95 design.
+Operators do not need to repost the historical comments.
 
 ### Receiver-side flow (extended)
 
@@ -239,3 +266,9 @@ fine without the feedback row).
   release uses a CSV allowlist; a future iteration can replace it
   with `codecommit:GitPush` simulation against the principal once
   STS / IAM trust paths are settled in production deployments.
+
+## Worked-example handler
+
+For a full end-to-end worker that wires the writer, reader, recorder,
+adapters, OTel bridges, and both cleanup electors together, see
+[`docs/operations/v1-2-worker-example.md`](../operations/v1-2-worker-example.md).

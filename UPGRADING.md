@@ -183,6 +183,158 @@ ambitious gets a dedicated `docs/migrations/<topic>.md`.
 
 ---
 
+## From 1.1 → 1.2
+
+v1.2 is a **minor** bump — every change below is backwards-compatible.
+Existing `.review-agent.yml` files keep working byte-for-byte; existing
+`runReview` / `wrapUntrusted` / `postReview` call sites continue to
+compile without arg changes (every new `RunReviewDeps` field is
+optional). The migration adds one new table + one new column, both
+forward-compatible (v1.1 code keeps reading the DB without seeing them).
+
+### 1. DB migration (mandatory before deploying v1.2 code)
+
+Run the migration **before** rolling out the v1.2 code. The migration
+is forward-compatible — v1.1 code keeps working against the migrated
+schema (the v1.1 code does not reference `review_eval_event` or
+`cost_ledger.latency_ms`).
+
+```bash
+pnpm --filter @review-agent/db db:migrate
+```
+
+(or equivalent: `psql -f packages/db/migrations/0003_review_eval_event.sql`
+under the migrations-superuser role).
+
+| Object | Change |
+|---|---|
+| `review_eval_event` (new table) | Per-review metrics — token / cost / latency / `droppedByDedup` / `droppedByFeedback` / `feedbackCount`. RLS-isolated by `installation_id` (spec §7.5). |
+| `cost_ledger.latency_ms` (new nullable column) | Defaults to `NULL` for existing rows; v1.2 writes the per-row latency from the EvalMiddleware. |
+
+Rollback: do **not** run a down-migration. v1.1 code reads from
+neither object, so leaving them in place after a rollback is safe. If
+you genuinely need to remove them, drop the table / column manually
+**after** all v1.2 writers are off.
+
+### 2. New optional `runReview` deps (v1.2 epic #83)
+
+All four are off by default — omit them to preserve v1.1 behaviour.
+
+| Dep | Purpose | Wire when |
+|---|---|---|
+| `evalRecorder` + `evalContext` | Records one `ReviewEvalEvent` per `runReview` into `review_eval_event` (Phase 2 / #91). Fail-open. | You want per-review metrics, judge scores (#101), or feedback analytics. |
+| `historyReader` | Loads `review_history` rows (Phase 4 / #93) for `<learned_facts>` injection + dedup. | You want the feedback loop closed (signal-driven `<learned_facts>`). |
+| `onEvalRecordError` / `onHistoryReaderError` | Fail-open observability — bridge to OTel counters (#106). | You wired OTel and want fail-open errors visible. |
+
+See `docs/architecture/feedback-loop.md` for the wiring diagram. A worked
+example handler will live at `docs/operations/worker-example.md` (#98).
+
+### 3. New optional config keys (`.review-agent.yml` v1)
+
+Added on the same `version: 1` schema — no `version: 2` bump.
+
+| Key | Default | Section |
+|---|---|---|
+| `repo.submodules` | `false` | Set `true` to recurse submodules during sparse-clone workspace provisioning (#89). |
+| `repo.lfs` | `false` | Set `true` to fetch LFS pointers; default keeps `GIT_LFS_SKIP_SMUDGE=1` so reviews never pull binary blobs (#89). |
+| `reviews.path_filters` | `[]` (no skip) | Globs whose matching paths skip review entirely. Zero-cost cap — the agent emits a graceful "skipped" summary instead of calling the LLM (#88). |
+| `reviews.max_files` | unset (no cap) | Integer cap; PRs touching > N files skip review with a graceful summary (#88). |
+| `reviews.max_diff_lines` | unset (no cap) | Integer cap; PRs whose total diff exceeds N lines skip review with a graceful summary (#88). |
+| `privacy.allowed_url_prefixes` | own-repo auto-allow | URL allowlist for LLM-emitted links in `ReviewOutputSchema`. Retry-once-then-graceful-abort on schema violation (#85). |
+| `privacy.deny_paths` | `[]` | Glob list applied to `read_file` / `glob` / `grep` tool dispatch. **Extends** built-in `.env*` / `.ssh/**` / `.aws/credentials` denylist; never relaxes (#86). |
+| `privacy.redact_patterns` | `[]` | Additional gitleaks rules (`custom-N`) applied alongside built-ins on both diff pre-scan and post-LLM redaction (#87). |
+
+`.review-agent.yml` schema dump: regenerate via
+`pnpm --filter @review-agent/config generate-schema` (or pull the latest
+`schema/v1.json`). All v1.1 → v1.2 keys are optional; old files validate
+unchanged.
+
+**v1.1-was-silently-ignored note**: these keys *parsed* in v1.1 (they
+were in the schema) but were not enforced anywhere. v1.2 enforces them.
+Operators who left dead keys in their YAML thinking they were no-ops
+will now see behaviour change — review your existing YAML before
+deploying.
+
+### 4. New CLI subcommands
+
+| Subcommand | Purpose |
+|---|---|
+| `review-agent feedback backfill --installation-id N --repo owner/repo [--since YYYY-MM-DD] [--state-file path] [--dry-run]` | Populates `review_history` from historical GitHub reactions for tenants deployed before v1.2 (#99). Resumable via `--state-file`. CodeCommit tenants are out of scope (see #95 / #96). |
+
+### 5. New public exports
+
+The following identifiers are now part of the SemVer-stable public API
+surface:
+
+- `@review-agent/core`: `appendFingerprintMarker`,
+  `extractFingerprintFromComment`, `FeedbackEvent`, `FeedbackKind`,
+  `FEEDBACK_KINDS`, `feedbackKindToFactType`, `ReviewEvalEvent`,
+  `ReviewEvalEventRecorder`.
+- `@review-agent/runner`: `createFeedbackWriter`, `FeedbackWriter`,
+  `FeedbackWriterOptions`, `ReviewHistoryWriter`,
+  `extractFingerprintMarker`, `resolveFingerprint`,
+  `FingerprintResolution`, `FingerprintResolutionInput`.
+- `@review-agent/server`: `startReviewHistoryCleanup`,
+  `ReviewHistoryCleanupDeps`, `handleCodecommitWebhook`,
+  `CodecommitWebhookDeps`, `CodecommitWebhookResult`,
+  `recordFeedbackCommandOutcome`, `FeedbackCommandOutcome`,
+  `parseFeedbackCommand`, `FeedbackCommand`, `FeedbackCommandKind`,
+  `FEEDBACK_COMMAND_PREFIX`, `checkGithubFeedbackAuthz`,
+  `checkCodeCommitFeedbackAuthz`, `FeedbackAuthzResult`,
+  `bridgeEvalRecordErrorsToMetrics`, `bridgeFeedbackRateLimitToMetrics`,
+  `bridgePrunedRowsToMetrics`, `bridgeHistoryReaderErrorsToMetrics`.
+
+### 6. CodeCommit feature parity status
+
+| Phase | Status on CodeCommit |
+|---|---|
+| Phase 1 (eval baseline) | ✅ same as GitHub — `severity_consistency_score` etc. is repo-agnostic. |
+| Phase 2 (per-review metrics) | ✅ — `evalRecorder` runs in the worker regardless of platform. |
+| Phase 3 (feedback writer) | **Partial** — CodeCommit has no reaction API. v1.2 wave A adds `/feedback` comment command (#95 partial: `fp_prefix` path only; #96 enables marker path with no further code change). |
+| Phase 4 (`<learned_facts>` reader) | ✅ — reader is provider-agnostic. Fact density on CodeCommit tenants will lag GitHub until #95 / #96 land in full. |
+
+### 7. Behaviour changes operators may notice
+
+- **Bot inline comments now end with `<!-- fingerprint:<16-hex> -->`** (#96).
+  The marker is a hidden HTML comment so end-user UX is unchanged. It
+  unblocks the `/feedback` (#95) marker-based resolver path.
+- **`/feedback accept|reject|dismiss` comments are recognised on
+  both GitHub and CodeCommit** (#95). Guarded by repo write
+  permission (GitHub) or `REVIEW_AGENT_FEEDBACK_ALLOWLIST` env CSV
+  (CodeCommit, fail-closed when unset). See
+  `docs/security/feedback-command-authz.md`.
+- **`review_history` rows accumulate** if you wire the writer.
+  `startReviewHistoryCleanup` prunes them at the 180-day TTL — wire
+  it alongside `startWorker`. The default tick interval is 1h.
+- **Cost-guard accounting includes tool calls** (already true in v1.1
+  but now visible via `review_eval_event.totalTokens` /
+  `cost_ledger.latency_ms` per-review).
+
+### 8. Baseline / parity / judge enforcement
+
+The new evaluation infrastructure is **informational by default**:
+
+- `severity_consistency_score` in `baseline.json` is `null` until an
+  operator runs `pnpm --filter @review-agent/eval baseline:measure --apply`
+  with a real `ANTHROPIC_API_KEY` (#97).
+- `parity.json` per-provider scores are `null` until #102 populates
+  them.
+- `llm_judge_score` (#101) runs `continue-on-error: true` and is
+  always informational — promotion to an enforcing gate is a separate
+  follow-up.
+
+Skip the measurement steps to keep v1.2 fully passive.
+
+### 9. Detection
+
+`pnpm --filter @review-agent/config generate-schema` will refuse to
+emit if any new v1.2 key has a typo. Beyond that, all additions are
+silent opt-ins — operators who don't wire any of `evalRecorder`,
+`historyReader`, `createFeedbackWriter`, `startReviewHistoryCleanup`
+keep v1.1 runtime behaviour byte-for-byte.
+
+---
+
 ## From 1.0 → 1.1
 
 v1.1 is a **minor** bump — every change below is backwards-compatible.

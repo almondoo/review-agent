@@ -1,6 +1,10 @@
 import type { ReviewState, VCS } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
-import { recoverSyncStateCommand } from './recover.js';
+import {
+  recoverFeedbackHistoryCommand,
+  recoverReviewEvalEventsCommand,
+  recoverSyncStateCommand,
+} from './recover.js';
 
 function recordingIo() {
   const out: string[] = [];
@@ -171,5 +175,152 @@ describe('recoverSyncStateCommand', () => {
     });
     expect(result).toEqual({ status: 'ok', recovered: 0, missing: [] });
     expect(io.out.join('')).toContain('Found 0 open PR(s)');
+  });
+});
+
+describe('recoverReviewEvalEventsCommand (#105)', () => {
+  it('errors out without DATABASE_URL', async () => {
+    const io = recordingIo();
+    const result = await recoverReviewEvalEventsCommand(io, {
+      repo: 'almondoo/review-agent',
+      installationId: 1n,
+      env: {} as NodeJS.ProcessEnv,
+    });
+    expect(result).toEqual({
+      status: 'ok',
+      candidates: 0,
+      recovered: 0,
+      skippedExisting: 0,
+    });
+    expect(io.err.join('')).toContain('DATABASE_URL is required');
+  });
+
+  it('reports recovery counts from the createDb seam (zero candidates path)', async () => {
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    // Stub the db.select(...).from(...).where(...).groupBy(...) chain so
+    // candidateRows resolves to []. The helper's early-return at
+    // candidates=0 then exercises the format + close path without
+    // needing the full Drizzle chain mocked.
+    const groupBy = vi.fn(async () => []);
+    const where = vi.fn(() => ({ groupBy }));
+    const from = vi.fn(() => ({ where }));
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: vi.fn(() => ({ from })),
+      insert: vi.fn(() => ({ values: vi.fn(async () => undefined) })),
+    };
+
+    const result = await recoverReviewEvalEventsCommand(io, {
+      repo: 'almondoo/review-agent',
+      installationId: 42n,
+      env: { DATABASE_URL: 'postgres://stub' } as NodeJS.ProcessEnv,
+      dryRun: true,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client shape
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    expect(result).toEqual({
+      status: 'ok',
+      candidates: 0,
+      recovered: 0,
+      skippedExisting: 0,
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(io.out.join('')).toContain('review-eval-events recovery for installation=42');
+    expect(io.out.join('')).toContain('dry-run; no inserts');
+  });
+});
+
+describe('recoverFeedbackHistoryCommand (#105)', () => {
+  it('rejects --platform codecommit with reference to #110', async () => {
+    const io = recordingIo();
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'almondoo/review-agent',
+      installationId: 1n,
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      candidatesFile: '/tmp/x.jsonl',
+    });
+    expect(result).toEqual({
+      status: 'ok',
+      candidates: 0,
+      recovered: 0,
+      skippedExisting: 0,
+    });
+    expect(io.err.join('')).toContain('not yet supported');
+    expect(io.err.join('')).toContain('#110');
+  });
+
+  it('errors out without DATABASE_URL', async () => {
+    const io = recordingIo();
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'almondoo/review-agent',
+      installationId: 1n,
+      env: {} as NodeJS.ProcessEnv,
+      platform: 'github',
+      candidatesFile: '/tmp/x.jsonl',
+    });
+    expect(result.status).toBe('ok');
+    expect(io.err.join('')).toContain('DATABASE_URL is required');
+  });
+
+  it('parses JSONL candidates and reports counts (dry-run uses the createDb seam)', async () => {
+    const io = recordingIo();
+    const candidatesJsonl =
+      '{"factType":"rejected_finding","factText":"[fp:abc] one"}\n' +
+      '// comment line — operator note\n' +
+      '\n' +
+      '{"factType":"accepted_pattern","factText":"[fp:def] two"}\n';
+    const close = vi.fn(async () => undefined);
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({
+        from: () => ({
+          where: () => Promise.resolve([]),
+        }),
+      }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'almondoo/review-agent',
+      installationId: 7n,
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      platform: 'github',
+      candidatesFile: '/tmp/x.jsonl',
+      dryRun: true,
+      readFile: async () => candidatesJsonl,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client shape
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    expect(result.status).toBe('ok');
+    // 2 candidates parsed (the comment + blank line are skipped).
+    expect(result.candidates).toBe(2);
+    // dry-run reports skippedExisting = candidates - fresh; with no
+    // existing rows we keep all as fresh-but-not-inserted.
+    expect(result.recovered).toBe(0);
+    expect(io.out.join('')).toContain('candidates=2');
+    expect(io.out.join('')).toContain('dry-run; no inserts');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects malformed JSONL with a clear error', async () => {
+    const io = recordingIo();
+    await expect(() =>
+      recoverFeedbackHistoryCommand(io, {
+        repo: 'almondoo/review-agent',
+        installationId: 7n,
+        env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+        platform: 'github',
+        candidatesFile: '/tmp/bad.jsonl',
+        readFile: async () => '{"factType":"unknown","factText":"x"}\n',
+        createDb: () => ({
+          // biome-ignore lint/suspicious/noExplicitAny: not reached
+          db: {} as any,
+          close: async () => undefined,
+        }),
+      }),
+    ).rejects.toThrow(/Invalid factType/);
   });
 });

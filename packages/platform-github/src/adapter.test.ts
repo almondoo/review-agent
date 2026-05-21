@@ -469,6 +469,44 @@ describe('postReview', () => {
     const args = createReview.mock.calls[0]?.[0] as { event: string };
     expect(args.event).toBe('COMMENT');
   });
+
+  it('appends the hidden fingerprint marker to each inline comment body (#96)', async () => {
+    const createReview = vi.fn(async () => ({ data: { id: 4 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 'two findings',
+      comments: [
+        {
+          path: 'a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'first finding',
+          severity: 'minor',
+          fingerprint: 'abcdef0123456789',
+        },
+        {
+          path: 'b.ts',
+          line: 5,
+          side: 'RIGHT',
+          body: 'second finding\nwith two lines',
+          severity: 'critical',
+          fingerprint: 'fedcba9876543210',
+        },
+      ],
+      state: validState,
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as {
+      comments: { body: string }[];
+    };
+    expect(args.comments[0]?.body).toBe('first finding\n\n<!-- fingerprint:abcdef0123456789 -->');
+    expect(args.comments[1]?.body).toBe(
+      'second finding\nwith two lines\n\n<!-- fingerprint:fedcba9876543210 -->',
+    );
+  });
 });
 
 describe('getStateComment / upsertStateComment', () => {

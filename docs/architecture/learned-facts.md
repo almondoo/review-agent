@@ -87,4 +87,10 @@ operator answer:
   output, or is the dedup backstop carrying the win alone?
 
 A SQL recipe lives in `docs/eval/` (alongside the existing
-baseline-measurement workflow).
+baseline-measurement workflow); the operator-facing analytic recipes
+are in
+[`docs/operations/review-eval-event-playbook.md`](../operations/review-eval-event-playbook.md).
+
+A full Lambda / Fargate worker that wires the history reader into
+`runReview` alongside the eval recorder and feedback writer is at
+[`docs/operations/v1-2-worker-example.md`](../operations/v1-2-worker-example.md).

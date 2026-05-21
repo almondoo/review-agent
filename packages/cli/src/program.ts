@@ -3,7 +3,11 @@ import { auditExportCommand } from './commands/audit-export.js';
 import { auditPruneCommand } from './commands/audit-prune.js';
 import { runEvalCommand } from './commands/eval.js';
 import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
-import { recoverSyncStateCommand } from './commands/recover.js';
+import {
+  recoverFeedbackHistoryCommand,
+  recoverReviewEvalEventsCommand,
+  recoverSyncStateCommand,
+} from './commands/recover.js';
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
 import { setupWorkspaceCommand } from './commands/setup-workspace.js';
@@ -219,9 +223,73 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'auth_failed' ? 1 : 0);
     });
 
+  recover
+    .command('review-eval-events')
+    .description(
+      'Recover review_eval_event rows from cost_ledger aggregation (v1.2 #105). Idempotent: re-running with the same args inserts nothing on the second pass.',
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--installation-id <id>', 'installation ID', (v) => BigInt(v))
+    .option('--since <YYYY-MM-DD>', 'only consider cost_ledger rows newer than this date')
+    .option('--dry-run', 'count candidates but do not insert', false)
+    .action(async (opts: RecoverEvalEventsCliOpts) => {
+      await recoverReviewEvalEventsCommand(io, {
+        repo: opts.repo,
+        installationId: opts.installationId,
+        env,
+        ...(opts.since ? { since: opts.since } : {}),
+        dryRun: opts.dryRun ?? false,
+      });
+      io.exit(0);
+    });
+
+  recover
+    .command('feedback-history')
+    .description(
+      'Recover review_history rows from an operator-supplied candidates JSONL file (v1.2 #105). GitHub-only; CodeCommit is tracked as #110. Idempotent against existing fact_text values.',
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--installation-id <id>', 'installation ID', (v) => BigInt(v))
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
+    .requiredOption(
+      '--candidates-file <path>',
+      'JSONL file of {factType, factText} candidates; one row per line',
+    )
+    .option('--dry-run', 'count candidates vs existing rows but do not insert', false)
+    .action(async (opts: RecoverFeedbackHistoryCliOpts) => {
+      await recoverFeedbackHistoryCommand(io, {
+        repo: opts.repo,
+        installationId: opts.installationId,
+        platform: opts.platform,
+        env,
+        candidatesFile: opts.candidatesFile,
+        dryRun: opts.dryRun ?? false,
+      });
+      io.exit(0);
+    });
+
   program.exitOverride();
   return program;
 }
+
+type RecoverEvalEventsCliOpts = {
+  repo: string;
+  installationId: bigint;
+  since?: string;
+  dryRun?: boolean;
+};
+
+type RecoverFeedbackHistoryCliOpts = {
+  repo: string;
+  installationId: bigint;
+  platform: (typeof PLATFORMS)[number];
+  candidatesFile: string;
+  dryRun?: boolean;
+};
 
 type ReviewCliOpts = {
   repo: string;

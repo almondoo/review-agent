@@ -123,6 +123,17 @@ export type ReviewHistoryCleanupDeps = {
   readonly db: DbClient;
   readonly intervalMs?: number;
   readonly now?: () => Date;
+  /**
+   * v1.2 #106 observability hook. Fired once per tick with the count
+   * of `review_history` rows actually deleted. Operators wire
+   * `bridgePrunedRowsToMetrics()` from `./metrics.js` to bring this
+   * into `review_agent_review_history_pruned_total`.
+   *
+   * Zero-count ticks (no rows expired, or this worker was not the
+   * advisory-lock leader for this tick) do NOT fire the callback so
+   * a no-op operator hook does not need a guard.
+   */
+  readonly onPruned?: (deletedRowCount: number) => void;
 };
 
 /**
@@ -148,7 +159,17 @@ export function startReviewHistoryCleanup(deps: ReviewHistoryCleanupDeps): Clean
     const lockHeld = await tryAcquireLock(deps.db, REVIEW_HISTORY_CLEANUP_LOCK_KEY);
     if (!lockHeld) return;
     try {
-      await deps.db.delete(reviewHistory).where(lt(reviewHistory.expiresAt, now()));
+      const result = await deps.db.delete(reviewHistory).where(lt(reviewHistory.expiresAt, now()));
+      // The postgres-js driver surfaces deleted row count as
+      // `rowCount`; some drivers/adapters use array length instead.
+      // Drivers wrapped in `db.execute` may resolve to `undefined` when
+      // no row-count tracking is wired. Mirror the fallback in
+      // `@review-agent/db/review-history.ts` so both shapes are
+      // tolerated, and degrade silently when the driver gives us
+      // neither (treat as 0).
+      const r = (result ?? {}) as { rowCount?: number; length?: number };
+      const deleted = r.rowCount ?? r.length ?? 0;
+      if (deleted > 0) deps.onPruned?.(deleted);
     } finally {
       await releaseLock(deps.db, REVIEW_HISTORY_CLEANUP_LOCK_KEY);
     }
