@@ -335,6 +335,15 @@ export type RunReviewDeps = {
    */
   readonly onEvalRecordError?: (err: unknown) => void;
   /**
+   * v1.2 #106. Fired when `historyReader` (Phase 4 / #93) throws.
+   * The runner **does** re-throw — the historyReader failure is
+   * operator-visible per the v1.2 design (see `agent.ts`). The hook
+   * exists so operators can route the error to a counter
+   * (`review_agent_history_reader_errors_total`) before the cascading
+   * review failure surfaces to the queue.
+   */
+  readonly onHistoryReaderError?: (err: unknown) => void;
+  /**
    * Optional reader that loads `review_history` rows for this PR's
    * repo (v1.2 epic #83 Phase 4 / #93). When present the runner
    * splits the rows into:

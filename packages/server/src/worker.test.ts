@@ -218,6 +218,57 @@ describe('startReviewHistoryCleanup', () => {
     cleanup.stop();
   });
 
+  it('fires onPruned with the deleted row count when the driver reports rowCount (#106)', async () => {
+    const db = makeDb();
+    const deleteCall = vi.fn().mockResolvedValue({ rowCount: 4 });
+    // biome-ignore lint/suspicious/noExplicitAny: mock surface
+    (db as any).delete = () => ({ where: deleteCall });
+    const onPruned = vi.fn();
+    const cleanup = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+      onPruned,
+    });
+    await cleanup.tickOnce();
+    expect(onPruned).toHaveBeenCalledWith(4);
+    cleanup.stop();
+  });
+
+  it('fires onPruned using array length when the driver returns rows directly (#106)', async () => {
+    const db = makeDb();
+    const deleteCall = vi.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]);
+    // biome-ignore lint/suspicious/noExplicitAny: mock surface
+    (db as any).delete = () => ({ where: deleteCall });
+    const onPruned = vi.fn();
+    const cleanup = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+      onPruned,
+    });
+    await cleanup.tickOnce();
+    expect(onPruned).toHaveBeenCalledWith(2);
+    cleanup.stop();
+  });
+
+  it('does NOT fire onPruned for zero-count ticks (#106)', async () => {
+    const db = makeDb();
+    const deleteCall = vi.fn().mockResolvedValue({ rowCount: 0 });
+    // biome-ignore lint/suspicious/noExplicitAny: mock surface
+    (db as any).delete = () => ({ where: deleteCall });
+    const onPruned = vi.fn();
+    const cleanup = startReviewHistoryCleanup({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      intervalMs: 1_000_000,
+      onPruned,
+    });
+    await cleanup.tickOnce();
+    expect(onPruned).not.toHaveBeenCalled();
+    cleanup.stop();
+  });
+
   it('uses a distinct advisory lock key from the idempotency elector', async () => {
     // The two cleanup electors must not serialize on the same key —
     // otherwise webhook_deliveries pruning and review_history pruning

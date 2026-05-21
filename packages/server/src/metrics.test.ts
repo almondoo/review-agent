@@ -1,6 +1,13 @@
 import { type Counter, type Histogram, type Meter, metrics } from '@opentelemetry/api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { _resetMetricsForTest, getMetrics } from './metrics.js';
+import {
+  _resetMetricsForTest,
+  bridgeEvalRecordErrorsToMetrics,
+  bridgeFeedbackRateLimitToMetrics,
+  bridgeHistoryReaderErrorsToMetrics,
+  bridgePrunedRowsToMetrics,
+  getMetrics,
+} from './metrics.js';
 
 afterEach(() => {
   _resetMetricsForTest();
@@ -35,6 +42,10 @@ describe('getMetrics', () => {
       'review_agent_prompt_injection_blocked_total',
       'review_agent_incremental_skipped_lines_total',
       'review_agent_feedback_command_total',
+      'review_agent_eval_record_errors_total',
+      'review_agent_feedback_rate_limit_drops_total',
+      'review_agent_review_history_pruned_total',
+      'review_agent_history_reader_errors_total',
     ]);
     expect(createHistogram).toHaveBeenCalledWith(
       'review_agent_latency_seconds',
@@ -63,8 +74,8 @@ describe('getMetrics', () => {
     const first = getMetrics(meter);
     const second = getMetrics(meter);
     expect(first).toBe(second);
-    // 7 counters were created on the first call only.
-    expect(createCounter).toHaveBeenCalledTimes(7);
+    // 11 counters were created on the first call only.
+    expect(createCounter).toHaveBeenCalledTimes(11);
   });
 
   it('falls back to the global meter provider when no meter is supplied', () => {
@@ -83,5 +94,64 @@ describe('getMetrics', () => {
     const second = getMetrics(b.meter);
     expect(first).not.toBe(second);
     expect(b.createCounter).toHaveBeenCalled();
+  });
+});
+
+describe('fail-open metric bridges (#106)', () => {
+  it('bridgeEvalRecordErrorsToMetrics increments with provider/model labels', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.evalRecordErrorsTotal, 'add');
+    const bridge = bridgeEvalRecordErrorsToMetrics({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+    });
+    bridge(new Error('db outage'));
+    expect(addSpy).toHaveBeenCalledWith(1, {
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+    });
+  });
+
+  it('bridgeEvalRecordErrorsToMetrics defaults labels to empty strings when none provided', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.evalRecordErrorsTotal, 'add');
+    bridgeEvalRecordErrorsToMetrics()(new Error('x'));
+    expect(addSpy).toHaveBeenCalledWith(1, { provider: '', model: '' });
+  });
+
+  it('bridgeFeedbackRateLimitToMetrics increments unlabelled', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.feedbackRateLimitDropsTotal, 'add');
+    bridgeFeedbackRateLimitToMetrics()();
+    expect(addSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('bridgePrunedRowsToMetrics adds the delete row count for positive ticks', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.reviewHistoryPrunedTotal, 'add');
+    bridgePrunedRowsToMetrics()(42);
+    expect(addSpy).toHaveBeenCalledWith(42);
+  });
+
+  it('bridgePrunedRowsToMetrics suppresses zero-count ticks', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.reviewHistoryPrunedTotal, 'add');
+    bridgePrunedRowsToMetrics()(0);
+    expect(addSpy).not.toHaveBeenCalled();
+  });
+
+  it('bridgeHistoryReaderErrorsToMetrics increments on every error', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.historyReaderErrorsTotal, 'add');
+    bridgeHistoryReaderErrorsToMetrics()(new Error('reader exploded'));
+    bridgeHistoryReaderErrorsToMetrics()(new Error('again'));
+    expect(addSpy).toHaveBeenCalledTimes(2);
+    expect(addSpy).toHaveBeenNthCalledWith(1, 1);
   });
 });

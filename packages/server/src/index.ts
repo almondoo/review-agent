@@ -12,7 +12,15 @@ export {
   type WebhookResult,
 } from './handlers/webhook.js';
 export { createSqsLambdaHandler, type LambdaWorkerOpts } from './lambda-worker.js';
-export { _resetMetricsForTest, getMetrics, type ReviewAgentMetrics } from './metrics.js';
+export {
+  _resetMetricsForTest,
+  bridgeEvalRecordErrorsToMetrics,
+  bridgeFeedbackRateLimitToMetrics,
+  bridgeHistoryReaderErrorsToMetrics,
+  bridgePrunedRowsToMetrics,
+  getMetrics,
+  type ReviewAgentMetrics,
+} from './metrics.js';
 export { type IdempotencyDeps, idempotency } from './middleware/idempotency.js';
 export { type VerifyEnv, verifyGithubSignature } from './middleware/verify-signature.js';
 export {

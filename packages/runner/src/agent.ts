@@ -177,11 +177,20 @@ async function runReviewInner(
   }> = [];
   let rejectedFingerprints: ReadonlyArray<string> = [];
   if (deps.historyReader && deps.evalContext) {
-    const rows = await deps.historyReader({
-      installationId: deps.evalContext.installationId,
-      repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
-      limit: MAX_LEARNED_FACTS,
-    });
+    let rows: Awaited<ReturnType<NonNullable<typeof deps.historyReader>>>;
+    try {
+      rows = await deps.historyReader({
+        installationId: deps.evalContext.installationId,
+        repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+        limit: MAX_LEARNED_FACTS,
+      });
+    } catch (err) {
+      // v1.2 #106: fire the observability hook before re-raising so the
+      // counter sees the error even though the existing behavior of
+      // bubbling the failure to the queue is preserved.
+      deps.onHistoryReaderError?.(err);
+      throw err;
+    }
     learnedFacts = rows;
     rejectedFingerprints = rows
       .filter((r) => r.factType === 'rejected_finding')
