@@ -39,7 +39,8 @@ Spec §8.4. The minimum permissions for the worker IAM role are:
         "codecommit:GetCommentsForPullRequest",
         "codecommit:PostCommentForPullRequest",
         "codecommit:PostCommentReply",
-        "codecommit:UpdatePullRequestApprovalState"
+        "codecommit:UpdatePullRequestApprovalState",
+        "codecommit:ListPullRequests"
       ],
       "Resource": "arn:aws:codecommit:<region>:<account>:<repository>"
     }

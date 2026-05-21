@@ -233,23 +233,41 @@ describe('recoverReviewEvalEventsCommand (#105)', () => {
 });
 
 describe('recoverFeedbackHistoryCommand (#105)', () => {
-  it('rejects --platform codecommit with reference to #110', async () => {
+  it('--platform codecommit walks PR comments via the injected client (dry-run, #110)', async () => {
     const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    // Stub the CodeCommit SDK client: empty repo (zero PRs) so the
+    // path through the helper exits without any candidates.
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string } }) => {
+        if (cmd.constructor.name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: [] };
+        }
+        throw new Error(`Unmocked SDK command: ${cmd.constructor.name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
     const result = await recoverFeedbackHistoryCommand(io, {
       repo: 'almondoo/review-agent',
       installationId: 1n,
       env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
       platform: 'codecommit',
-      candidatesFile: '/tmp/x.jsonl',
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
     });
-    expect(result).toEqual({
-      status: 'ok',
-      candidates: 0,
-      recovered: 0,
-      skippedExisting: 0,
-    });
-    expect(io.err.join('')).toContain('not yet supported');
-    expect(io.err.join('')).toContain('#110');
+    expect(result.status).toBe('ok');
+    expect(result.candidates).toBe(0);
+    expect(io.out.join('')).toContain('codecommit re-scrape');
+    expect(io.out.join('')).toContain('0 resolved');
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('errors out without DATABASE_URL', async () => {

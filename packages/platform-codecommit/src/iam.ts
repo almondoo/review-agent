@@ -48,6 +48,9 @@ export const EXPECTED_COMMANDS = [
     command: 'UpdatePullRequestApprovalStateCommand',
     permission: 'codecommit:UpdatePullRequestApprovalState',
   },
+  // v1.2 #110: ListPullRequestsCommand drives the disaster-recovery
+  // `/feedback` re-scrape (`recover feedback-history --platform codecommit`).
+  { command: 'ListPullRequestsCommand', permission: 'codecommit:ListPullRequests' },
 ] as const satisfies ReadonlyArray<ExpectedCommandPair>;
 
 /**

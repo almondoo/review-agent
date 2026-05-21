@@ -241,20 +241,34 @@ DATABASE_URL=... review-agent recover review-eval-events \
   [--since 2026-05-01] \
   [--dry-run]
 
-# 2. Recover review_history from an operator-supplied JSONL file. The
-#    file format is one JSON object per line:
-#      { "factType": "rejected_finding", "factText": "[fp:abc] ..." }
-#    Source the file from prior `feedback backfill` exports, manual
-#    SQL extracts, or log scraping. Lines starting with `//` are
-#    ignored so operators can annotate.
-#
-#    --platform codecommit is REJECTED in v1.2 (tracked as #110).
-#    For CodeCommit /feedback re-scrape, follow #110 once it ships.
+# 2a. (GitHub) Recover review_history from an operator-supplied
+#     JSONL file. The file format is one JSON object per line:
+#       { "factType": "rejected_finding", "factText": "[fp:abc] ..." }
+#     Source from prior `feedback backfill` exports, manual SQL
+#     extracts, or log scraping. Lines starting with `//` are
+#     ignored so operators can annotate.
 DATABASE_URL=... review-agent recover feedback-history \
   --installation-id <id> \
   --repo <owner/repo> \
   --platform github \
   --candidates-file ./feedback-candidates.jsonl \
+  [--dry-run]
+
+# 2b. (CodeCommit) Re-scrape /feedback comments directly via the
+#     CodeCommit SDK (v1.2 #110). Walks every PR (open + closed),
+#     paginates the comment list, resolves each /feedback reply to
+#     its parent Bot comment via inReplyTo and #96's fingerprint
+#     marker. Unresolved /feedback (no inReplyTo, or parent has no
+#     marker — typically pre-#96 comments) are skipped and counted.
+#     IAM: requires codecommit:ListPullRequests in addition to the
+#     standard worker permissions.
+AWS_REGION=... DATABASE_URL=... review-agent recover feedback-history \
+  --installation-id <id> \
+  --repo <repository-name> \
+  --platform codecommit \
+  [--since 2026-05-01] \
+  [--pr <n>] \
+  [--rate 2] \
   [--dry-run]
 ```
 
@@ -269,14 +283,17 @@ checks `fact_text` equality (full string match, which the
 - **Recovery source for `review_eval_event`** — `cost_ledger` GROUP BY
   `(installation_id, job_id)`. Financial fields reconstructed via SUM;
   LLM-output fields are best-effort blanks.
-- **Recovery source for `review_history`** — operator-supplied JSONL.
-  The CLI deliberately does NOT pull from GitHub directly to keep
-  recovery decoupled from a working installation token; pair the
+- **Recovery source for `review_history` (GitHub)** — operator-supplied
+  JSONL. The CLI deliberately does NOT pull from GitHub directly to
+  keep recovery decoupled from a working installation token; pair the
   JSONL prep step with whatever export the operator has on hand
   (Phase 3 logs, prior `feedback backfill --dry-run`).
-- **CodeCommit `/feedback` re-scrape** — out of scope for #105;
-  tracked as #110 (CodeCommit adapter does not yet implement PR
-  comment pagination).
+- **Recovery source for `review_history` (CodeCommit)** — direct
+  re-scrape via `ListPullRequests` + `GetCommentsForPullRequest` SDK
+  walk (v1.2 #110). Each `/feedback` reply's parent Bot comment must
+  carry the `<!-- fingerprint:<fp> -->` marker (#96) for resolution
+  to succeed; unmarked legacy comments are skipped and reported in
+  the run summary's `unresolved` counter.
 
 ### Step 5 — Resume normal operation
 

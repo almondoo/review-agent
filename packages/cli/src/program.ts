@@ -246,7 +246,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
   recover
     .command('feedback-history')
     .description(
-      'Recover review_history rows from an operator-supplied candidates JSONL file (v1.2 #105). GitHub-only; CodeCommit is tracked as #110. Idempotent against existing fact_text values.',
+      'Recover review_history rows. GitHub: from --candidates-file (#105). CodeCommit: re-scrapes /feedback comments via the CodeCommit SDK (#110). Idempotent against existing fact_text.',
     )
     .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
     .requiredOption('--installation-id <id>', 'installation ID', (v) => BigInt(v))
@@ -255,9 +255,16 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         .choices([...PLATFORMS])
         .default('github'),
     )
-    .requiredOption(
+    .option(
       '--candidates-file <path>',
-      'JSONL file of {factType, factText} candidates; one row per line',
+      'JSONL file of {factType, factText} candidates; required for --platform github',
+    )
+    .option('--since <YYYY-MM-DD>', '(codecommit) only consider comments newer than this date')
+    .option('--pr <n>', '(codecommit) single PR scope for debug', (v) => Number.parseInt(v, 10))
+    .option(
+      '--rate <req-per-sec>',
+      '(codecommit) rate-limit pacing for the CodeCommit walk; default 2 req/sec',
+      (v) => Number.parseFloat(v),
     )
     .option('--dry-run', 'count candidates vs existing rows but do not insert', false)
     .action(async (opts: RecoverFeedbackHistoryCliOpts) => {
@@ -266,7 +273,10 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         installationId: opts.installationId,
         platform: opts.platform,
         env,
-        candidatesFile: opts.candidatesFile,
+        ...(opts.candidatesFile ? { candidatesFile: opts.candidatesFile } : {}),
+        ...(opts.since ? { since: opts.since } : {}),
+        ...(opts.pr !== undefined ? { onlyPr: opts.pr } : {}),
+        ...(opts.rate !== undefined ? { rate: opts.rate } : {}),
         dryRun: opts.dryRun ?? false,
       });
       io.exit(0);
@@ -287,7 +297,10 @@ type RecoverFeedbackHistoryCliOpts = {
   repo: string;
   installationId: bigint;
   platform: (typeof PLATFORMS)[number];
-  candidatesFile: string;
+  candidatesFile?: string;
+  since?: string;
+  pr?: number;
+  rate?: number;
   dryRun?: boolean;
 };
 

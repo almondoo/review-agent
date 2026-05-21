@@ -1263,6 +1263,7 @@ const octokit = new Octokit({ auth: token });
   codecommit:PostCommentForPullRequest
   codecommit:PostCommentReply
   codecommit:UpdatePullRequestApprovalState  # only if approval is configured
+  codecommit:ListPullRequests                # only if `recover feedback-history` is used (#110)
   ```
 - No long-lived AWS access keys in code or env. STS only.
 

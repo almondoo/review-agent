@@ -11,8 +11,13 @@ import {
   recoverReviewEvalEvents,
   withTenant,
 } from '@review-agent/db';
+import {
+  type CodeCommitClientLike,
+  createDefaultCodeCommitClient,
+} from '@review-agent/platform-codecommit';
 import { createGithubVCS } from '@review-agent/platform-github';
 import type { ProgramIo } from '../io.js';
+import { scrapeCodeCommitFeedback } from './recover-codecommit-feedback.js';
 
 export type RecoverPlatform = 'github' | 'codecommit';
 
@@ -208,34 +213,70 @@ export type RecoverFeedbackHistoryOpts = {
   readonly installationId: bigint;
   readonly env: NodeJS.ProcessEnv;
   readonly platform: RecoverPlatform;
-  readonly candidatesFile: string;
+  /** Required when `platform === 'github'`. */
+  readonly candidatesFile?: string;
   readonly dryRun?: boolean;
+  /** v1.2 #110: optional date filter applied to CodeCommit comment creation date. */
+  readonly since?: string;
+  /** v1.2 #110: optional single-PR scope for CodeCommit debug runs. */
+  readonly onlyPr?: number;
+  /** v1.2 #110: CodeCommit rate-limit pacing (req/sec); converted to delayMs. */
+  readonly rate?: number;
   readonly createDb?: (url: string) => { db: DbClient; close: () => Promise<void> };
   /** Test seam: read the candidates file from disk. */
   readonly readFile?: (path: string) => Promise<string>;
+  /** Test seam: provide a CodeCommit client (the production path
+   *  defers to AWS_REGION / AWS_PROFILE via the platform-codecommit
+   *  default constructor). */
+  readonly codecommitClient?: CodeCommitClientLike;
 };
 
 export async function recoverFeedbackHistoryCommand(
   io: ProgramIo,
   opts: RecoverFeedbackHistoryOpts,
 ): Promise<RecoverFeedbackHistoryResult> {
-  // Locked Q2: GitHub-only in v1.2. CodeCommit `/feedback` re-scrape
-  // is tracked separately as #110.
-  if (opts.platform === 'codecommit') {
-    io.stderr(
-      'recover feedback-history: --platform codecommit is not yet supported. ' +
-        'CodeCommit /feedback re-scrape is tracked as #110.\n',
-    );
-    return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
-  }
   const dbUrl = opts.env.DATABASE_URL ?? '';
   if (!dbUrl) {
     io.stderr('DATABASE_URL is required for `recover feedback-history`.\n');
     return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
   }
-  const reader = opts.readFile ?? ((p: string) => readFile(p, 'utf8'));
-  const raw = await reader(opts.candidatesFile);
-  const candidates = parseCandidatesFile(raw);
+
+  // Source candidates either from a JSONL file (GitHub) or from a
+  // direct CodeCommit `/feedback` re-scrape (#110).
+  let candidates: ReadonlyArray<RecoverFeedbackHistoryCandidate>;
+  if (opts.platform === 'codecommit') {
+    // Production path constructs a default CodeCommit client (picks
+    // up AWS_REGION / AWS_PROFILE from the env chain); tests inject
+    // a stub via `opts.codecommitClient`.
+    const client = opts.codecommitClient ?? createDefaultCodeCommitClient();
+    // Locked Q1 (#110): default 2 req/sec → 500ms delay between page
+    // calls. operator-tunable.
+    const delayMs = opts.rate && opts.rate > 0 ? Math.floor(1000 / opts.rate) : 500;
+    const sinceDate = opts.since ? new Date(opts.since) : undefined;
+    const scrape = await scrapeCodeCommitFeedback({
+      client,
+      repositoryName: opts.repo.includes('/') ? (opts.repo.split('/')[1] ?? opts.repo) : opts.repo,
+      ...(sinceDate ? { sinceDate } : {}),
+      ...(opts.onlyPr !== undefined ? { onlyPr: opts.onlyPr } : {}),
+      delayMs,
+    });
+    candidates = scrape.candidates;
+    io.stdout(
+      `codecommit re-scrape: walked ${scrape.stats.prsWalked} PR(s), ` +
+        `${scrape.stats.commentsSeen} comments, ` +
+        `${scrape.stats.feedbackCommandsSeen} /feedback commands found, ` +
+        `${scrape.stats.resolved} resolved, ${scrape.stats.unresolved} unresolved (skipped).\n`,
+    );
+  } else {
+    if (!opts.candidatesFile) {
+      io.stderr('recover feedback-history --platform github requires --candidates-file <path>.\n');
+      return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
+    }
+    const reader = opts.readFile ?? ((p: string) => readFile(p, 'utf8'));
+    const raw = await reader(opts.candidatesFile);
+    candidates = parseCandidatesFile(raw);
+  }
+
   const makeDb = opts.createDb ?? ((u: string) => createDbClient({ url: u }));
   const { db, close } = makeDb(dbUrl);
   try {

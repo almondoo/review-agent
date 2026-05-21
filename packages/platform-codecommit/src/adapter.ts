@@ -9,6 +9,7 @@ import {
   GetDifferencesCommand,
   GetFileCommand,
   GetPullRequestCommand,
+  ListPullRequestsCommand,
   PostCommentForPullRequestCommand,
   type PullRequest,
   UpdatePullRequestApprovalStateCommand,
@@ -382,6 +383,11 @@ function toExistingComment(group: CommentsForPullRequest, c: Comment): ExistingC
   const side = group.location?.relativeFileVersion;
   const sideMapped: ExistingComment['side'] =
     side === 'BEFORE' ? 'LEFT' : side === 'AFTER' ? 'RIGHT' : null;
+  // v1.2 #110: CodeCommit threads `/feedback` replies via `inReplyTo`
+  // (set on the SDK Comment when the user replied to another comment).
+  // Surface it so the recovery walk can resolve the parent Bot
+  // comment carrying the fingerprint marker (#96).
+  const inReplyTo = c.inReplyTo;
   return {
     id: c.commentId ?? '',
     path: group.location?.filePath ?? null,
@@ -390,7 +396,147 @@ function toExistingComment(group: CommentsForPullRequest, c: Comment): ExistingC
     body: c.content ?? '',
     author: parseAuthor(c.authorArn),
     createdAt: c.creationDate?.toISOString() ?? new Date(0).toISOString(),
+    ...(inReplyTo !== undefined ? { inReplyTo } : {}),
   };
+}
+
+/**
+ * v1.2 #110: construct a default `CodeCommitClient` using the
+ * standard AWS SDK credential / region chain. Exposed so the CLI
+ * recovery path can build a client without pulling
+ * `@aws-sdk/client-codecommit` as a direct dependency.
+ */
+export function createDefaultCodeCommitClient(
+  cfg: CodeCommitClientConfig = {},
+): CodeCommitClientLike {
+  return new CodeCommitClient(cfg);
+}
+
+/**
+ * v1.2 #110: paginated walk of comments on a single PR for the
+ * recovery CLI. Returns the raw SDK shape (preserves `inReplyTo`,
+ * `creationDate`) so the caller can resolve `/feedback` replies to
+ * their parent Bot comments via #96's fingerprint marker.
+ *
+ * Standalone helper because the existing `getExistingComments` on
+ * the VCS adapter narrows to the abstract `ExistingComment` shape;
+ * the recovery walk wants the raw SDK fields without coupling the
+ * VCS interface to a CodeCommit-specific use case.
+ */
+export type CodeCommitRawComment = {
+  readonly commentId: string;
+  readonly content: string;
+  readonly inReplyTo?: string;
+  readonly creationDate?: Date;
+};
+
+export async function listCodeCommitCommentsForPullRequest(
+  client: CodeCommitClientLike,
+  opts: {
+    pullRequestId: string;
+    delayMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  },
+): Promise<readonly CodeCommitRawComment[]> {
+  const delayMs = opts.delayMs ?? 0;
+  const sleepFn = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const out: CodeCommitRawComment[] = [];
+  let nextToken: string | undefined;
+  do {
+    const resp = (await client.send(
+      new GetCommentsForPullRequestCommand({
+        pullRequestId: opts.pullRequestId,
+        nextToken,
+      }),
+    )) as {
+      commentsForPullRequestData?: ReadonlyArray<{
+        comments?: ReadonlyArray<{
+          commentId?: string;
+          content?: string;
+          inReplyTo?: string;
+          creationDate?: Date | string;
+        }>;
+      }>;
+      nextToken?: string;
+    };
+    for (const group of resp.commentsForPullRequestData ?? []) {
+      for (const c of group.comments ?? []) {
+        if (!c.commentId) continue;
+        const creationDate =
+          c.creationDate instanceof Date
+            ? c.creationDate
+            : typeof c.creationDate === 'string'
+              ? new Date(c.creationDate)
+              : undefined;
+        out.push({
+          commentId: c.commentId,
+          content: c.content ?? '',
+          ...(c.inReplyTo !== undefined ? { inReplyTo: c.inReplyTo } : {}),
+          ...(creationDate !== undefined ? { creationDate } : {}),
+        });
+      }
+    }
+    nextToken = resp.nextToken;
+    if (nextToken && delayMs > 0) await sleepFn(delayMs);
+  } while (nextToken);
+  return out;
+}
+
+/**
+ * v1.2 #110: paginated walk of all PR ids in a CodeCommit repository.
+ * `review_history` disaster recovery needs to enumerate every PR
+ * (open + closed) so the `/feedback` re-scrape sees every historical
+ * signal. Exposed as a standalone helper rather than added to the
+ * VCS abstraction because GitHub recovery already uses its own
+ * `Octokit.paginate(pulls.list)` path; adding a method to the
+ * abstract interface would force every adapter to implement it for
+ * a use case only one platform needs.
+ *
+ * `pullRequestStatus`:
+ *   - `'OPEN'`   — only open PRs.
+ *   - `'CLOSED'` — only closed PRs.
+ *   - `'ALL'`    — both (two SDK calls).
+ *
+ * AWS CodeCommit doesn't publish exact throttling limits. Callers
+ * that need to be polite should pace via `sleep` between pages; the
+ * helper itself does not sleep so tests stay fast.
+ */
+export async function listCodeCommitPullRequestIds(
+  client: CodeCommitClientLike,
+  opts: {
+    repositoryName: string;
+    pullRequestStatus?: 'OPEN' | 'CLOSED' | 'ALL';
+  },
+): Promise<readonly number[]> {
+  const status = opts.pullRequestStatus ?? 'ALL';
+  const statuses: ReadonlyArray<'OPEN' | 'CLOSED'> =
+    status === 'ALL' ? ['OPEN', 'CLOSED'] : [status];
+  const seen = new Set<number>();
+  const ids: number[] = [];
+  for (const s of statuses) {
+    let nextToken: string | undefined;
+    do {
+      const resp = (await client.send(
+        new ListPullRequestsCommand({
+          repositoryName: opts.repositoryName,
+          pullRequestStatus: s,
+          nextToken,
+        }),
+      )) as { pullRequestIds?: string[]; nextToken?: string };
+      for (const idStr of resp.pullRequestIds ?? []) {
+        const id = Number.parseInt(idStr, 10);
+        // Dedup across status passes: defensive guard against an SDK
+        // that returns the same id under multiple `pullRequestStatus`
+        // filters, and against test mocks that ignore the filter.
+        if (Number.isFinite(id) && !seen.has(id)) {
+          seen.add(id);
+          ids.push(id);
+        }
+      }
+      nextToken = resp.nextToken;
+    } while (nextToken);
+  }
+  return ids;
 }
 
 function parseAuthor(arn: string | undefined): string {
