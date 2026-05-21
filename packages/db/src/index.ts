@@ -29,6 +29,17 @@ export {
   verifyAuditChainSegmentFromDb,
 } from './hmac-chain.js';
 export { type MigrateOpts, runMigrations } from './migrate.js';
+export {
+  type RecoverEvalEventsOpts,
+  type RecoverEvalEventsResult,
+  recoverReviewEvalEvents,
+} from './recover-eval-events.js';
+export {
+  type RecoverFeedbackHistoryCandidate,
+  type RecoverFeedbackHistoryOpts,
+  type RecoverFeedbackHistoryResult,
+  recoverFeedbackHistory,
+} from './recover-feedback-history.js';
 export { createReviewEvalEventRecorder } from './review-eval-event.js';
 export {
   createReviewHistoryWriter,

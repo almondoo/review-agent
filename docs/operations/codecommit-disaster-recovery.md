@@ -207,6 +207,77 @@ re-review, the dedup pass will hit *existing* CodeCommit comments
 already there. The cost spend is still incurred for the LLM call — the
 saving is only on visible duplicate comments.
 
+### Step 4.5 — Recover v1.2 tables (v1.2 #105)
+
+In addition to `review_state`, the v1.2 wave added three Postgres
+tables that the runner / writer / reader fan-out depends on:
+`review_eval_event` (per-review metrics, #91), `cost_ledger.latency_ms`
+(per-call latency column, #91), and `review_history` (feedback signals,
+#92). After a Postgres restore + manual re-review pass (Step 4), you
+typically have:
+
+- `cost_ledger` rows for every re-reviewed PR (the runner writes these
+  unconditionally).
+- `review_state` rows in good shape from Step 4.
+- `review_eval_event` empty, because manual re-review goes through the
+  current code which records new rows; older pre-incident rows are
+  gone.
+- `review_history` empty, because feedback signals are not re-derivable
+  from CodeCommit (no reaction API).
+
+Two new subcommands fill the v1.2 gap:
+
+```bash
+# 1. Reconstruct review_eval_event rows from cost_ledger aggregation.
+#    Idempotent — re-running with the same args inserts nothing on the
+#    second pass. The recovered rows have aggregate financial fields
+#    (latency_ms / cost_usd / tokens_in/out from SUM) but the
+#    LLM-output fields (comment_count, severity_dist, dropped_*) are
+#    set to zero / empty JSONB because cost_ledger does not carry them.
+#    Per-PR fields (pr_number, head_sha) are placeholders.
+DATABASE_URL=... review-agent recover review-eval-events \
+  --installation-id <id> \
+  --repo <owner/repo> \
+  [--since 2026-05-01] \
+  [--dry-run]
+
+# 2. Recover review_history from an operator-supplied JSONL file. The
+#    file format is one JSON object per line:
+#      { "factType": "rejected_finding", "factText": "[fp:abc] ..." }
+#    Source the file from prior `feedback backfill` exports, manual
+#    SQL extracts, or log scraping. Lines starting with `//` are
+#    ignored so operators can annotate.
+#
+#    --platform codecommit is REJECTED in v1.2 (tracked as #110).
+#    For CodeCommit /feedback re-scrape, follow #110 once it ships.
+DATABASE_URL=... review-agent recover feedback-history \
+  --installation-id <id> \
+  --repo <owner/repo> \
+  --platform github \
+  --candidates-file ./feedback-candidates.jsonl \
+  [--dry-run]
+```
+
+Both commands run under `withTenant` so RLS scopes the read + insert
+to the matching `installation_id`. Both are idempotent: `review-eval-
+events` checks `(installation_id, job_id)` existence; `feedback-history`
+checks `fact_text` equality (full string match, which the
+`[fp:<fingerprint>]` prefix makes deterministic).
+
+**Locked design decisions** (issue #105):
+
+- **Recovery source for `review_eval_event`** — `cost_ledger` GROUP BY
+  `(installation_id, job_id)`. Financial fields reconstructed via SUM;
+  LLM-output fields are best-effort blanks.
+- **Recovery source for `review_history`** — operator-supplied JSONL.
+  The CLI deliberately does NOT pull from GitHub directly to keep
+  recovery decoupled from a working installation token; pair the
+  JSONL prep step with whatever export the operator has on hand
+  (Phase 3 logs, prior `feedback backfill --dry-run`).
+- **CodeCommit `/feedback` re-scrape** — out of scope for #105;
+  tracked as #110 (CodeCommit adapter does not yet implement PR
+  comment pagination).
+
 ### Step 5 — Resume normal operation
 
 Restart the worker pool, monitor the cost-ledger for the expected
