@@ -13,18 +13,19 @@ import {
   type PullRequest,
   UpdatePullRequestApprovalStateCommand,
 } from '@aws-sdk/client-codecommit';
-import type {
-  CloneOpts,
-  Diff,
-  DiffFile,
-  ExistingComment,
-  GetDiffOpts,
-  PR,
-  PRRef,
-  ReviewPayload,
-  ReviewState,
-  VCS,
-  VcsCapabilities,
+import {
+  appendFingerprintMarker,
+  type CloneOpts,
+  type Diff,
+  type DiffFile,
+  type ExistingComment,
+  type GetDiffOpts,
+  type PR,
+  type PRRef,
+  type ReviewPayload,
+  type ReviewState,
+  type VCS,
+  type VcsCapabilities,
 } from '@review-agent/core';
 
 /**
@@ -232,6 +233,9 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
       );
     }
     for (const c of review.comments) {
+      // #96: same hidden marker as the GitHub adapter so a
+      // CodeCommit `/feedback` (#95) reply can resolve the target
+      // comment via its parent body.
       await client.send(
         new PostCommentForPullRequestCommand({
           pullRequestId: toPullRequestId(ref),
@@ -243,7 +247,7 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
             filePosition: c.line,
             relativeFileVersion: c.side === 'LEFT' ? 'BEFORE' : 'AFTER',
           },
-          content: c.body,
+          content: appendFingerprintMarker(c.body, c.fingerprint),
         }),
       );
     }

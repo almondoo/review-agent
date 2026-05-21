@@ -1,17 +1,18 @@
 import { Buffer } from 'node:buffer';
 import { Octokit } from '@octokit/rest';
-import type {
-  CloneOpts,
-  Diff,
-  DiffFile,
-  ExistingComment,
-  GetDiffOpts,
-  PR,
-  PRRef,
-  ReviewPayload,
-  ReviewState,
-  VCS,
-  VcsCapabilities,
+import {
+  appendFingerprintMarker,
+  type CloneOpts,
+  type Diff,
+  type DiffFile,
+  type ExistingComment,
+  type GetDiffOpts,
+  type PR,
+  type PRRef,
+  type ReviewPayload,
+  type ReviewState,
+  type VCS,
+  type VcsCapabilities,
 } from '@review-agent/core';
 
 /**
@@ -268,11 +269,14 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
   const postReview = async (ref: PRRef, review: ReviewPayload): Promise<void> => {
     ensureGithub(ref);
     const summaryWithState = buildSummaryWithState(review.summary, review.state);
+    // #96: append the hidden `<!-- fingerprint:<fp> -->` marker so the
+    // `/feedback` command (#95) can resolve the target inline comment
+    // by reading its parent body, without a DB round-trip.
     const comments = review.comments.map((c) => ({
       path: c.path,
       line: c.line,
       side: c.side,
-      body: c.body,
+      body: appendFingerprintMarker(c.body, c.fingerprint),
     }));
     // `event` is optional on ReviewPayload so callers that haven't
     // been updated (or third-party adapters via the VCS interface)
