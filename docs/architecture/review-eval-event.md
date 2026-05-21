@@ -81,3 +81,11 @@ Schema and migration live in `@review-agent/core/db`:
 - `packages/core/src/db/migrations/0003_review_eval_event.sql` — DDL + RLS policy + `cost_ledger.latency_ms` column.
 
 Run `pnpm --filter @review-agent/db db:migrate` to apply.
+
+## Operator SQL playbook
+
+For canonical SELECT queries — per-provider averages, severity shifts,
+`dropped_by_feedback` ranking, dedup ratio trend, `abort_reason`
+distribution, per-call/per-review latency JOIN, `confidence_dist`
+calibration — see
+[`docs/operations/review-eval-event-playbook.md`](../operations/review-eval-event-playbook.md).
