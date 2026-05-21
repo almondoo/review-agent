@@ -89,3 +89,9 @@ For canonical SELECT queries — per-provider averages, severity shifts,
 distribution, per-call/per-review latency JOIN, `confidence_dist`
 calibration — see
 [`docs/operations/review-eval-event-playbook.md`](../operations/review-eval-event-playbook.md).
+
+## Worked-example handler
+
+A full Lambda / Fargate worker that constructs `evalRecorder` +
+`evalContext` and threads them through `withTenant` + `runReview` is at
+[`docs/operations/v1-2-worker-example.md`](../operations/v1-2-worker-example.md).

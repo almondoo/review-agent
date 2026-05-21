@@ -266,3 +266,9 @@ fine without the feedback row).
   release uses a CSV allowlist; a future iteration can replace it
   with `codecommit:GitPush` simulation against the principal once
   STS / IAM trust paths are settled in production deployments.
+
+## Worked-example handler
+
+For a full end-to-end worker that wires the writer, reader, recorder,
+adapters, OTel bridges, and both cleanup electors together, see
+[`docs/operations/v1-2-worker-example.md`](../operations/v1-2-worker-example.md).
