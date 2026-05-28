@@ -157,6 +157,24 @@ What each block does:
 
 In **Server mode** (Hono webhook → SQS → worker) the same runner is invoked from `packages/server/src/worker.ts`. The worker provisions a per-job ephemeral workspace via `provisionWorkspace` (strategy: `contents-api` for Lambda, `sparse-clone` when `git` is available); everything downstream of "Workspace" in the diagram is identical.
 
+## Local development
+
+This repo uses pnpm workspaces. Convenience targets are in the `Makefile`.
+
+```
+make setup           # pnpm install
+make dev-mock        # Web in mock mode — no DB or server required
+make dev             # Web + server concurrently (requires DATABASE_URL)
+make test            # Run all package tests
+make build           # Build all packages
+make help            # List all targets
+```
+
+For server dev, copy `packages/server/.env.example` to
+`packages/server/.env.local` and set at minimum `DATABASE_URL`.
+Start a local Postgres with `pnpm dev:up` (Docker Compose), then
+`make dev-server` or `make dev`.
+
 ## Supported VCS platforms
 
 | Platform | Modes | Status | Notes |
