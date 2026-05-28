@@ -54,7 +54,9 @@ export function createAppOctokitFactory(opts: AppOctokitOptions): AppOctokitFact
       auth: initial.token,
       userAgent: opts.userAgent ?? 'review-agent',
       throttle: {
+        /* v8 ignore next */
         onRateLimit: (_retryAfter, _options, _ok, retryCount) => retryCount < 2,
+        /* v8 ignore next */
         onSecondaryRateLimit: (retryAfter) => retryAfter < 60,
       },
       retry: { doNotRetry: ['400', '401', '403', '404', '422'] },

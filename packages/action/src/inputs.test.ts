@@ -70,4 +70,14 @@ describe('parseInputs', () => {
       /state-write-retries/,
     );
   });
+
+  it('honors an explicit config-path (covers the `||` truthy branch)', () => {
+    const inputs = parseInputs({ 'github-token': 't', 'config-path': 'custom/path.yml' });
+    expect(inputs.configPath).toBe('custom/path.yml');
+  });
+
+  it('treats whitespace-only config-path as missing and falls back to the default', () => {
+    const inputs = parseInputs({ 'github-token': 't', 'config-path': '   ' });
+    expect(inputs.configPath).toBe('.review-agent.yml');
+  });
 });

@@ -110,4 +110,43 @@ describe('withRetry', () => {
     await expect(withRetry(driver, fn, stubDeps())).rejects.toBe(err);
     expect(fn).toHaveBeenCalledTimes(4);
   });
+
+  // Stage C: branch coverage for default-deps coalescing.
+  it('falls back to Math.random when deps.random is omitted', async () => {
+    // The `deps.random ?? Math.random` coalesce: every other test in this
+    // file supplies a stub random. We let real Math.random run and pin
+    // only the observable: the call succeeds and the result propagates.
+    // The jitter math itself is non-deterministic, but `Math.max(0, ...)`
+    // bounds it so a positive resolved value is the only guaranteed shape.
+    const driver = { classifyError: vi.fn(() => ({ kind: 'transient' as const })) };
+    const sleep = vi.fn(async () => {});
+    const fn = vi
+      .fn<() => Promise<'ok'>>()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce('ok');
+    const result = await withRetry(driver, fn, { sleep });
+    expect(result).toBe('ok');
+    expect(sleep).toHaveBeenCalledTimes(1);
+    const delay = sleep.mock.calls[0]?.[0] as number;
+    expect(delay).toBeGreaterThanOrEqual(0);
+    // base = 1000 (first attempt), jitter ∈ ±200, so delay ∈ [800, 1200].
+    expect(delay).toBeLessThanOrEqual(1200);
+  });
+
+  it('forwards no sleep when deps.sleep is undefined (uses the core default)', async () => {
+    // The `deps.sleep === undefined ? {} : { sleep }` branch on the
+    // `undefined` side — we omit `sleep` entirely. The core retry's
+    // default sleep does a real setTimeout; we keep the delay small by
+    // using `transient` (1s base) and resolving on the second call.
+    // The contract: the call completes (no crash from missing sleep).
+    const driver = { classifyError: vi.fn(() => ({ kind: 'transient' as const })) };
+    const fn = vi
+      .fn<() => Promise<'ok'>>()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce('ok');
+    // Drive the random fallback the other way too: stub random so the
+    // sleep delay is at its lower bound (max(0, 1000 + 1000*0.2*(-1)) = 800ms).
+    const result = await withRetry(driver, fn, { random: () => 0 });
+    expect(result).toBe('ok');
+  }, 5000);
 });

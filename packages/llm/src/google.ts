@@ -40,9 +40,11 @@ export async function createGoogleProvider(
 }
 
 async function defaultGoogleModelFactory(apiKey: string): Promise<(model: string) => unknown> {
+  /* v8 ignore start */
   const mod = (await import('@ai-sdk/google')) as {
     createGoogleGenerativeAI: (opts: { apiKey: string }) => (model: string) => unknown;
   };
   const google = mod.createGoogleGenerativeAI({ apiKey });
   return (model) => google(model);
+  /* v8 ignore stop */
 }

@@ -488,4 +488,88 @@ describe('runAction', () => {
     expect(vcs.postReview).not.toHaveBeenCalled();
     expect(vcs.upsertStateComment).not.toHaveBeenCalled();
   });
+
+  // `inferGithubHost` is private but its result threads through into
+  // `runReview`'s `job.prRepo.host`. The runner's `runReview` doesn't
+  // expose host directly in `ReviewInput`, so we exercise the env-
+  // parsing branches by running the action end-to-end with each
+  // shape of `GITHUB_SERVER_URL` and asserting the success path
+  // (no schema failure, no thrown error). The host's downstream
+  // effect on the URL allowlist is covered by core/schemas tests.
+  it('honors a GHE GITHUB_SERVER_URL when present (URL.parse branch)', async () => {
+    const vcs = makeVCS();
+    const provider = makeProvider();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        // Real GHES deployments set GITHUB_SERVER_URL to the host URL;
+        // the parser should yield `ghe.example.com` rather than the
+        // default `github.com`.
+        env: { GITHUB_SERVER_URL: 'https://ghe.example.com' },
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to github.com when GITHUB_SERVER_URL is unparseable (catch branch)', async () => {
+    const vcs = makeVCS();
+    const provider = makeProvider();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        // `new URL('not-a-valid-url')` throws — the function must
+        // catch and fall back to 'github.com' rather than propagate.
+        env: { GITHUB_SERVER_URL: 'not-a-valid-url' },
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+  });
+
+  // `loadConfigOrDefault` reads the REVIEW_AGENT_* env vars and
+  // threads them into `mergeWithEnv`. Each env var has an `if` guard
+  // — the false branches (env var absent) are covered by every other
+  // test; here we cover the true branches by setting all four.
+  it('threads REVIEW_AGENT_LANGUAGE / PROVIDER / MODEL / MAX_USD_PER_PR env overrides into config', async () => {
+    const vcs = makeVCS();
+    const provider = makeProvider();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        env: {
+          REVIEW_AGENT_LANGUAGE: 'ja-JP',
+          REVIEW_AGENT_PROVIDER: 'anthropic',
+          REVIEW_AGENT_MODEL: 'claude-sonnet-4-6',
+          REVIEW_AGENT_MAX_USD_PER_PR: '2.5',
+        },
+      },
+    );
+    // The action runs to completion — confirms each `if (env.X)`
+    // truthy branch was taken without breaking the downstream merge.
+    expect(result.skipped).toBe(false);
+    // generateReview is fed the merged language so we can confirm
+    // the env override actually landed in the prompt path.
+    const generateMock = provider.generateReview as ReturnType<typeof vi.fn>;
+    const reviewInput = generateMock.mock.calls[0]?.[0] as { language: string } | undefined;
+    expect(reviewInput?.language).toBe('ja-JP');
+  });
 });

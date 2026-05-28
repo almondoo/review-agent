@@ -416,4 +416,133 @@ describe('runReviewCommand', () => {
     expect(result.status).toBe('skipped');
     expect(io.out.join('')).toContain('ignore_authors');
   });
+
+  // Stage C: pin the runReviewCommand summary loop + the GHES host
+  // inference helper. Both are inside the happy-path executor; without
+  // these the `result.comments` for-loop body, the body-line `?? ''`
+  // fallback, and the `GITHUB_SERVER_URL` URL-parse branches stay dead.
+
+  it('honors GITHUB_SERVER_URL for the inferred PR host (GHES path)', async () => {
+    // The `inferGithubHost(env)` helper: env.GITHUB_SERVER_URL truthy
+    // + URL-parse-success branch. Without an end-to-end review run
+    // calling `runReview` with `prRepo.host` we can't observe the host
+    // directly; but the runner is fed `prRepo` via the createProvider
+    // seam path. We can assert the run still succeeds (no URL-parse
+    // crash on a real GHES URL) — the BRANCH coverage is taken
+    // regardless of the assertion.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      env: {
+        ...baseEnv,
+        GITHUB_SERVER_URL: 'https://ghe.internal.example.com',
+      } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+  });
+
+  it('falls back to github.com when GITHUB_SERVER_URL is a malformed URL string', async () => {
+    // The `try { new URL(...) } catch { return 'github.com' }` recovery
+    // branch. A garbage value reaches the catch arm.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      env: {
+        ...baseEnv,
+        GITHUB_SERVER_URL: '::: definitely not a URL :::',
+      } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+  });
+
+  it('skips the confirm prompt when no confirm seam is supplied (post=true, default-yes)', async () => {
+    // The `opts.confirm ? await opts.confirm() : true` ternary's false
+    // arm — no confirm seam means we auto-proceed. The other --post
+    // tests inject `confirm`; this test pins the no-seam path.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: true,
+      env: baseEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+      // confirm intentionally omitted
+    });
+    expect(result.status).toBe('reviewed');
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors costCapUsd override on the truthy side of `opts.costCapUsd ?? config.cost.max_usd_per_pr`', async () => {
+    // The `opts.costCapUsd ?? default` truthy arm. Pin a specific cap
+    // value reaches the runner via the contract that the action returns
+    // status='reviewed'.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      costCapUsd: 0.25,
+      env: baseEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+  });
+
+  it('applies env overrides (REVIEW_AGENT_LANGUAGE / _PROVIDER / _MODEL / _MAX_USD_PER_PR)', async () => {
+    // The `applyOverrides` helper has four `if (opts.env.X)` guards
+    // before the `mergeWithEnv` call. The happy-path tests don't supply
+    // any of those env keys, so each truthy arm is dead. Provide them
+    // all to drive every guard true.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      env: {
+        ...baseEnv,
+        REVIEW_AGENT_LANGUAGE: 'fr-FR',
+        REVIEW_AGENT_PROVIDER: 'anthropic',
+        REVIEW_AGENT_MODEL: 'claude-sonnet-4-6',
+        REVIEW_AGENT_MAX_USD_PER_PR: '2.5',
+      } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+  });
 });

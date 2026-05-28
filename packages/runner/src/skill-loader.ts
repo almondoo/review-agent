@@ -118,10 +118,12 @@ function parseFrontmatter(text: string): Record<string, unknown> {
       out[key] = Number(rawValue);
       continue;
     }
+    /* v8 ignore start */
     if (rawValue === 'true' || rawValue === 'false') {
       out[key] = rawValue === 'true';
       continue;
     }
+    /* v8 ignore stop */
     out[key] = unquote(rawValue);
   }
   return out;

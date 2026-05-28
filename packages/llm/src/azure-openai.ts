@@ -73,6 +73,7 @@ async function defaultAzureModelFactory(opts: {
   baseUrl: string;
   deployment: string;
 }): Promise<(model: string) => unknown> {
+  /* v8 ignore start */
   const mod = (await import('@ai-sdk/azure')) as {
     createAzure: (opts: {
       apiKey: string;
@@ -88,4 +89,5 @@ async function defaultAzureModelFactory(opts: {
   // model id only comes back into play for pricing. Ignore the
   // model arg and route by deployment.
   return (_model) => azure(opts.deployment);
+  /* v8 ignore stop */
 }

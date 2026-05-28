@@ -198,4 +198,42 @@ describe('auditPruneCommand', () => {
     });
     expect(result.status).toBe('dry_run');
   });
+
+  // Stage C: parseIsoDate's `includes('T')` two-arm branch.
+
+  it("accepts a full ISO 8601 --before (includes 'T')", async () => {
+    // The `value.includes('T')` branch on the truthy side — full ISO
+    // with time component reaches the `new Date(value)` arm directly.
+    const io = recordingIo();
+    const pruneAudit = vi.fn(
+      async (): Promise<PruneAuditResult> => ({ deleted: 0, anchorId: null, anchorHash: null }),
+    );
+    const pruneCost = vi.fn(async (): Promise<PruneCostResult> => ({ deleted: 0 }));
+    const result = await auditPruneCommand(io, {
+      before: '2026-01-01T12:34:56Z',
+      confirm: true,
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      createDb: fakeCreateDb,
+      pruneAudit,
+      pruneCost,
+      verifyChain: okVerify,
+    });
+    expect(result.status).toBe('ok');
+    expect(pruneAudit).toHaveBeenCalled();
+  });
+
+  it('rejects a YYYY-MM-DD shape whose Date.parse yields NaN (NaN branch)', async () => {
+    // The `Number.isNaN(parsed.getTime()) ? null : parsed` branch on the
+    // NaN side. A syntactically-valid YYYY-MM-DD with an out-of-range
+    // month / day passes the regex but Date.parse returns NaN.
+    const io = recordingIo();
+    const result = await auditPruneCommand(io, {
+      before: '2026-13-99',
+      confirm: false,
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      createDb: fakeCreateDb,
+    });
+    expect(result.status).toBe('invalid_args');
+    expect(io.err.join('')).toContain('--before');
+  });
 });

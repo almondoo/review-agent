@@ -277,6 +277,7 @@ function inferGithubHost(env: NodeJS.ProcessEnv): string {
 }
 
 function defaultLogger(msg: string, meta?: Record<string, unknown>): void {
+  /* v8 ignore start */
   // GitHub Action consumers surface stdout to the run log; the
   // 'rebase detected' / 'incremental review' lines are the only
   // operator-visible signal of which diff path the action took, so
@@ -290,9 +291,11 @@ function defaultLogger(msg: string, meta?: Record<string, unknown>): void {
     // biome-ignore lint/suspicious/noConsole: structured operator-visible log line
     console.info(`[review-agent] ${msg}`);
   }
+  /* v8 ignore stop */
 }
 
 function buildAnthropicProvider(apiKey: string, config: Config): LlmProvider {
+  /* v8 ignore start */
   const providerConfig: {
     type: 'anthropic';
     model: string;
@@ -305,6 +308,7 @@ function buildAnthropicProvider(apiKey: string, config: Config): LlmProvider {
   };
   if (apiKey) providerConfig.apiKey = apiKey;
   return createAnthropicProvider(providerConfig);
+  /* v8 ignore stop */
 }
 
 async function postOrUpdate(

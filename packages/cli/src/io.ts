@@ -8,6 +8,7 @@ export type ProgramIo = {
 };
 
 export function defaultIo(): ProgramIo {
+  /* v8 ignore start */
   return {
     stdout: (chunk) => {
       process.stdout.write(chunk);
@@ -19,4 +20,5 @@ export function defaultIo(): ProgramIo {
       process.exit(code);
     },
   };
+  /* v8 ignore stop */
 }

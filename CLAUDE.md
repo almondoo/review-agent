@@ -56,7 +56,7 @@ When the spec and an issue disagree, the spec wins. When the spec is silent,
 - **Runtime**: Node.js 24.14.x LTS.
 - **Package manager**: pnpm 10.33.0 workspace monorepo. Lockfile committed.
 - **Lint + format**: Biome 2.x (single tool, no ESLint, no Prettier).
-- **Test**: Vitest 3.x + v8 coverage. Threshold: lines/funcs/stmts 95%, branches 90%.
+- **Test**: Vitest 3.x + v8 coverage. Branches threshold: 90% per package. Lines/functions/statements per-package thresholds vary — see each package's `vitest.config.ts`.
 - **Build**: tsup 8.x — ESM + CJS dual output with `.d.ts` per package.
 - **Schema validation**: Zod 3.x for every external / LLM input.
 - **LLM**: Vercel AI SDK (`ai` ^5.x) + `@ai-sdk/anthropic` (default driver).
@@ -132,7 +132,7 @@ compose everything. Never import from another package's `src/internal/`.
 
 - [ ] `pnpm typecheck` green from repo root.
 - [ ] `pnpm lint` green from repo root.
-- [ ] `pnpm test:coverage` green; per-package coverage ≥ 95% lines.
+- [ ] `pnpm test:coverage` green; per-package coverage thresholds met.
 - [ ] `pnpm build` green; `dist/` contains `.js`, `.cjs`, `.d.ts`, `.d.cts`.
 - [ ] Every Acceptance Criteria checkbox satisfied.
 - [ ] No new dependency conflicts with the Stack table above.

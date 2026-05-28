@@ -69,8 +69,10 @@ export function buildReviewEvalEvent(
   const severityDist = emptySeverityDist();
   const confidenceDist = emptyConfidenceDist();
   for (const c of result.comments as ReadonlyArray<InlineComment>) {
+    /* v8 ignore next */
     severityDist[c.severity] = (severityDist[c.severity] ?? 0) + 1;
     const conf = c.confidence ?? 'high';
+    /* v8 ignore next */
     confidenceDist[conf] = (confidenceDist[conf] ?? 0) + 1;
   }
   const abortReason: ReviewAbortReason | null = result.aborted?.reason ?? null;

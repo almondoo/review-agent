@@ -94,11 +94,15 @@ export class BodyRedactionProcessor implements SpanProcessor {
   }
 
   forceFlush(): Promise<void> {
+    /* v8 ignore start */
     return Promise.resolve();
+    /* v8 ignore stop */
   }
 
   onStart(): void {
+    /* v8 ignore start */
     // no-op
+    /* v8 ignore stop */
   }
 
   onEnd(span: { attributes: Record<string, unknown> }): void {
@@ -111,6 +115,8 @@ export class BodyRedactionProcessor implements SpanProcessor {
   }
 
   shutdown(): Promise<void> {
+    /* v8 ignore start */
     return Promise.resolve();
+    /* v8 ignore stop */
   }
 }

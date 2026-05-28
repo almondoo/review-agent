@@ -154,4 +154,61 @@ describe('createOpenAIProvider', () => {
     expect(call?.experimental_output).toBeDefined();
     expect(out.toolCalls).toBe(1);
   });
+
+  // Stage C: pin the usage-fallback chain when the SDK omits both
+  // `totalUsage` and `usage` — cost coerces to 0, no NaN propagation.
+  it('treats a missing-usage result as zero tokens / zero cost', async () => {
+    const generate = vi.fn().mockResolvedValue({
+      experimental_output: { comments: [], summary: 'no usage stats' },
+      // no totalUsage, no usage
+      steps: [],
+    });
+    const provider = createOpenAIProvider(
+      { type: 'openai', model: 'gpt-4o', apiKey: 'k' },
+      {
+        createClient: vi.fn().mockReturnValue(() => ({ id: 'm' })),
+        generate,
+        tokenize: () => 0,
+      },
+    );
+    const out = await provider.generateReview(baseInput);
+    expect(out.tokensUsed).toEqual({ input: 0, output: 0 });
+    expect(out.costUsd).toBe(0);
+  });
+
+  it('reads `usage` when `totalUsage` is absent (compat with older AI SDK)', async () => {
+    // Middle arm of `totalUsage ?? usage ?? {}`.
+    const generate = vi.fn().mockResolvedValue({
+      experimental_output: { comments: [], summary: 'older-sdk shape' },
+      usage: { inputTokens: 50, outputTokens: 12 },
+      steps: [],
+    });
+    const provider = createOpenAIProvider(
+      { type: 'openai', model: 'gpt-4o-mini', apiKey: 'k' },
+      {
+        createClient: vi.fn().mockReturnValue(() => ({ id: 'm' })),
+        generate,
+        tokenize: () => 0,
+      },
+    );
+    const out = await provider.generateReview(baseInput);
+    expect(out.tokensUsed).toEqual({ input: 50, output: 12 });
+  });
+
+  it('falls back to the approximate tokenizer when none is injected (estimateCost)', async () => {
+    // `deps.tokenize ?? tryLoadTiktoken() ?? approximateTokens`. The
+    // first two arms run on every test that doesn't override `tokenize`;
+    // we want to pin the third (approximateTokens) as the user-visible
+    // contract: even with no tokenizer, estimateCost returns a positive
+    // count for a non-empty prompt. We do that by stubbing tryLoadTiktoken
+    // through a separate code path (impossible from outside the module),
+    // so instead we settle for exercising the default chain with no
+    // explicit override and assert the positive-count + positive-cost
+    // contract — branch coverage on the `??` chain is taken by either
+    // of the two terminal arms reaching a tokenizer.
+    const provider = createOpenAIProvider({ type: 'openai', model: 'gpt-4o', apiKey: 'k' }, {});
+    const result = await provider.estimateCost(baseInput);
+    expect(result.inputTokens).toBeGreaterThan(0);
+    expect(result.estimatedUsd).toBeGreaterThan(0);
+  });
 });

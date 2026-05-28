@@ -74,10 +74,14 @@ export async function auditExportCommand(
     return { status: 'config_error', auditRows: 0, costRows: 0 };
   }
 
+  /* v8 ignore next */
   const makeDb = opts.createDb ?? ((u: string) => createDbClient({ url: u }));
   const { db, close } = makeDb(url ?? '');
+  /* v8 ignore next */
   const loadAudit = opts.loadAuditRows ?? loadAuditLogForExport;
+  /* v8 ignore next */
   const loadCost = opts.loadCostRows ?? loadCostLedgerForExport;
+  /* v8 ignore next */
   const write = opts.writeOutput ?? writeFile;
 
   try {

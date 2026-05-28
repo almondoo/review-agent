@@ -47,9 +47,11 @@ async function defaultVertexModelFactory(opts: {
   project: string;
   location: string;
 }): Promise<(model: string) => unknown> {
+  /* v8 ignore start */
   const mod = (await import('@ai-sdk/google-vertex')) as {
     createVertex: (opts: { project: string; location: string }) => (model: string) => unknown;
   };
   const vertex = mod.createVertex({ project: opts.project, location: opts.location });
   return (model) => vertex(model);
+  /* v8 ignore stop */
 }

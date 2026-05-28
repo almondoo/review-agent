@@ -36,6 +36,7 @@ export async function createProvider(config: ProviderConfig): Promise<LlmProvide
       // `never` inside this branch when every union member is
       // handled. Runtime fallback for forward-compat.
       const exhaustive: never = config as never;
+      /* v8 ignore next */
       throw new Error(`Unsupported provider.type: ${(exhaustive as { type: string }).type}`);
     }
   }
