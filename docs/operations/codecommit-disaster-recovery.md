@@ -258,14 +258,36 @@ DATABASE_URL=... review-agent recover feedback-history \
 #     CodeCommit SDK (v1.2 #110). Walks every PR (open + closed),
 #     paginates the comment list, resolves each /feedback reply to
 #     its parent Bot comment via inReplyTo and #96's fingerprint
-#     marker. Unresolved /feedback (no inReplyTo, or parent has no
-#     marker — typically pre-#96 comments) are skipped and counted.
+#     marker. Unresolved /feedback (no inReplyTo, parent authored
+#     by a non-Bot principal, or parent has no marker — typically
+#     pre-#96 comments) are skipped and counted.
 #     IAM: requires codecommit:ListPullRequests in addition to the
 #     standard worker permissions.
+#
+#     SECURITY (#110 hardening):
+#       --bot-arn is REQUIRED. The recovery walk only lifts the
+#       fingerprint from parents whose authorArn matches this value,
+#       so a reviewer cannot launder arbitrary text into
+#       review_history by self-replying /feedback to a hand-crafted
+#       parent comment. Use the IAM role / user ARN that posts Bot
+#       comments through PostCommentForPullRequest.
+#
+#       --repo accepts `<name>` or `<owner>/<name>`. Regardless of
+#       the operator-supplied owner prefix, the DB key is always
+#       normalized to `${installation-id}/${name}` (matches the new
+#       runtime convention; see migration 0004). A mismatched owner
+#       prefix is reported to stderr but does not abort the run.
+#
+#       --rate rejects non-finite / non-positive values; Infinity /
+#       NaN / `<= 0` fall back to the 500ms default with a warning.
+#
+#       --pr is parsed strictly; `--pr 100abc` is rejected up-front
+#       rather than silently coerced to 100.
 AWS_REGION=... DATABASE_URL=... review-agent recover feedback-history \
   --installation-id <id> \
   --repo <repository-name> \
   --platform codecommit \
+  --bot-arn arn:aws:iam::<account>:role/<bot-role> \
   [--since 2026-05-01] \
   [--pr <n>] \
   [--rate 2] \
@@ -291,9 +313,25 @@ checks `fact_text` equality (full string match, which the
 - **Recovery source for `review_history` (CodeCommit)** — direct
   re-scrape via `ListPullRequests` + `GetCommentsForPullRequest` SDK
   walk (v1.2 #110). Each `/feedback` reply's parent Bot comment must
-  carry the `<!-- fingerprint:<fp> -->` marker (#96) for resolution
-  to succeed; unmarked legacy comments are skipped and reported in
-  the run summary's `unresolved` counter.
+  carry the `<!-- fingerprint:<fp> -->` marker (#96) AND be authored
+  by the IAM principal passed via `--bot-arn`. Unresolved replies
+  (no `inReplyTo`, parent missing the marker, or parent authored by
+  a non-Bot principal) are skipped and reported in the run summary's
+  `unresolved` counter.
+
+**`review_history.repo` normalization (migration 0004)**
+
+CodeCommit PRs have no owner segment, so prior to v1.2 #110 hardening
+the runtime wrote `review_history.repo = '/foo'`. Multi-tenant
+deployments that shared a repo name across AWS accounts ended up with
+identical `(repo)` strings even though RLS isolated reads by
+`installation_id`. Migration `0004_lonely_zinc_aristocrat.sql`
+rewrites every legacy `'/foo'` row to `'${installation_id}/foo'` so
+the runtime, recovery CLI, and reader all converge on the same key.
+
+The migration runs automatically the next time the worker starts (or
+when `pnpm --filter @review-agent/db db:migrate` runs against the
+restored DB). It is a single `UPDATE` and is safe to re-apply.
 
 ### Step 5 — Resume normal operation
 

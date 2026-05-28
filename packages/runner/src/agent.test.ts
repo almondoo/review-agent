@@ -1402,3 +1402,47 @@ describe('runReview — learned_facts injection + feedback-aware dedup (#93 / sp
     expect(onHistoryReaderError).toHaveBeenCalledWith(boom);
   });
 });
+
+describe('runReview — CodeCommit review_history repo normalization (#110)', () => {
+  // CodeCommit PRs carry `prRepo.owner === ''` by adapter convention.
+  // Left unchanged, the historyReader / evalRecorder would receive
+  // `repo: '/foo'`, indistinguishable across installations that share
+  // the same repo name. The runner substitutes `installationId` as the
+  // owner so each tenant gets a unique DB key.
+  const codecommitJob: ReviewJob = {
+    ...baseJob,
+    prRepo: { host: 'codecommit', owner: '', repo: 'demo-repo' },
+  };
+
+  it('substitutes installationId for the empty CodeCommit owner when calling historyReader', async () => {
+    const provider = makeProvider();
+    const historyReader = vi.fn(async () => []);
+    await runReview(codecommitJob, provider, {
+      historyReader,
+      evalContext: { installationId: 123n, prNumber: 1, headSha: 'h' },
+    });
+    expect(historyReader).toHaveBeenCalledTimes(1);
+    expect(historyReader.mock.calls[0]?.[0]?.repo).toBe('123/demo-repo');
+  });
+
+  it('substitutes installationId for the empty CodeCommit owner when calling evalRecorder', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => undefined);
+    await runReview(codecommitJob, provider, {
+      evalRecorder,
+      evalContext: { installationId: 456n, prNumber: 1, headSha: 'h' },
+    });
+    expect(evalRecorder).toHaveBeenCalledTimes(1);
+    expect(evalRecorder.mock.calls[0]?.[0]?.repo).toBe('456/demo-repo');
+  });
+
+  it('preserves the owner/repo shape on GitHub jobs (regression guard)', async () => {
+    const provider = makeProvider();
+    const evalRecorder = vi.fn(async () => undefined);
+    await runReview(baseJob, provider, {
+      evalRecorder,
+      evalContext: { installationId: 9n, prNumber: 1, headSha: 'h' },
+    });
+    expect(evalRecorder.mock.calls[0]?.[0]?.repo).toBe('test-owner/test-repo');
+  });
+});

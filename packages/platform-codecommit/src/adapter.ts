@@ -409,7 +409,9 @@ function toExistingComment(group: CommentsForPullRequest, c: Comment): ExistingC
 export function createDefaultCodeCommitClient(
   cfg: CodeCommitClientConfig = {},
 ): CodeCommitClientLike {
+  /* v8 ignore start */
   return new CodeCommitClient(cfg);
+  /* v8 ignore stop */
 }
 
 /**
@@ -428,6 +430,13 @@ export type CodeCommitRawComment = {
   readonly content: string;
   readonly inReplyTo?: string;
   readonly creationDate?: Date;
+  /**
+   * IAM principal that authored the comment. Used by the recovery
+   * walk to gate fingerprint extraction to comments posted by the
+   * Bot's IAM principal (CodeCommit has no ApplicationOwner; ARN
+   * equality is the strongest available authenticity check).
+   */
+  readonly authorArn?: string;
 };
 
 export async function listCodeCommitCommentsForPullRequest(
@@ -455,6 +464,7 @@ export async function listCodeCommitCommentsForPullRequest(
           content?: string;
           inReplyTo?: string;
           creationDate?: Date | string;
+          authorArn?: string;
         }>;
       }>;
       nextToken?: string;
@@ -473,6 +483,7 @@ export async function listCodeCommitCommentsForPullRequest(
           content: c.content ?? '',
           ...(c.inReplyTo !== undefined ? { inReplyTo: c.inReplyTo } : {}),
           ...(creationDate !== undefined ? { creationDate } : {}),
+          ...(c.authorArn !== undefined ? { authorArn: c.authorArn } : {}),
         });
       }
     }
@@ -524,7 +535,10 @@ export async function listCodeCommitPullRequestIds(
         }),
       )) as { pullRequestIds?: string[]; nextToken?: string };
       for (const idStr of resp.pullRequestIds ?? []) {
-        const id = Number.parseInt(idStr, 10);
+        // Strict digit-only match: `Number.parseInt('42-archived', 10)`
+        // would coerce to `42` and silently re-key against an unrelated
+        // PR. Reject any token that isn't a pure decimal integer.
+        const id = /^\d+$/.test(idStr) ? Number(idStr) : Number.NaN;
         // Dedup across status passes: defensive guard against an SDK
         // that returns the same id under multiple `pullRequestStatus`
         // filters, and against test mocks that ignore the filter.

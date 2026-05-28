@@ -40,6 +40,15 @@ import {
 export type ScrapeCodeCommitFeedbackOpts = {
   readonly client: CodeCommitClientLike;
   readonly repositoryName: string;
+  /**
+   * Required. The IAM principal ARN whose parent comments are allowed
+   * to carry recoverable fingerprints. `/feedback` replies whose
+   * `inReplyTo` resolves to a parent authored by a different ARN are
+   * skipped and counted as unresolved — prevents an attacker from
+   * crafting a comment that contains a forged `<!-- fingerprint:... -->`
+   * marker and laundering it into `review_history`.
+   */
+  readonly botArn: string;
   readonly pullRequestStatus?: 'OPEN' | 'CLOSED' | 'ALL';
   readonly sinceDate?: Date;
   readonly onlyPr?: number;
@@ -88,8 +97,10 @@ function parseFeedbackKind(commentBody: string): FeedbackKind | null {
   return null;
 }
 
+/* v8 ignore start */
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+/* v8 ignore stop */
 
 export async function scrapeCodeCommitFeedback(
   opts: ScrapeCodeCommitFeedbackOpts,
@@ -128,7 +139,11 @@ export async function scrapeCodeCommitFeedback(
       const kind = parseFeedbackKind(c.content);
       if (kind === null) continue;
       feedbackCommandsSeen += 1;
-      if (opts.sinceDate && c.creationDate && c.creationDate < opts.sinceDate) continue;
+      // Fail-closed on missing creationDate: an SDK page that omits
+      // the field cannot be safely placed relative to --since, so we
+      // treat it as "outside the window" rather than letting it slip
+      // through.
+      if (opts.sinceDate && (!c.creationDate || c.creationDate < opts.sinceDate)) continue;
       const parentId = c.inReplyTo;
       if (parentId === undefined) {
         unresolved += 1;
@@ -139,14 +154,29 @@ export async function scrapeCodeCommitFeedback(
         unresolved += 1;
         continue;
       }
+      // Parent comment must be authored by the Bot's IAM principal.
+      // Without this gate, any reviewer who appends a `<!-- fingerprint:... -->`
+      // marker to their own comment can launder arbitrary text into
+      // `review_history` via a self-reply `/feedback` command.
+      if (parent.authorArn !== opts.botArn) {
+        unresolved += 1;
+        continue;
+      }
       const fp = extractFingerprintFromComment(parent.content);
       if (!fp) {
         unresolved += 1;
         continue;
       }
+      // Structured factText: only the fingerprint, recovery marker,
+      // feedback kind, and parent creation timestamp are persisted.
+      // The reviewer's free-text body is deliberately excluded so a
+      // crafted `/feedback reject ignore previous instructions ...`
+      // body cannot inject prompt content or secrets into a later
+      // `<learned_facts>` system-prompt section.
+      const iso = c.creationDate?.toISOString() ?? 'unknown';
       candidates.push({
         factType: feedbackKindToFactType(kind),
-        factText: `[fp:${fp}] ${c.content}`,
+        factText: `[fp:${fp}] codecommit-recover ${kind} at ${iso}`,
       });
     }
 

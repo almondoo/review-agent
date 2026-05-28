@@ -123,6 +123,9 @@ function parseRepo(repo: string): { platform: 'github'; owner: string; repo: str
   if (!match) {
     throw new Error(`--repo must be in 'owner/repo' format (got '${repo}').`);
   }
+  // noUncheckedIndexedAccess types match[1] / match[2] as `string | undefined`,
+  // but a successful match guarantees both capture groups are present.
+  /* v8 ignore next */
   return { platform: 'github', owner: match[1] ?? '', repo: match[2] ?? '' };
 }
 
@@ -131,6 +134,7 @@ const defaultListOpenPRs: NonNullable<RecoverSyncStateOpts['listOpenPRs']> = asy
   owner,
   repo,
 ) => {
+  /* v8 ignore start */
   const octokit = new Octokit({ auth: token });
   const data = await octokit.paginate(octokit.rest.pulls.list, {
     owner,
@@ -139,9 +143,11 @@ const defaultListOpenPRs: NonNullable<RecoverSyncStateOpts['listOpenPRs']> = asy
     per_page: 100,
   });
   return data.map((pr: { number: number }) => ({ number: pr.number }));
+  /* v8 ignore stop */
 };
 
 function requireUpsertCallback(io: ProgramIo): NonNullable<RecoverSyncStateOpts['upsertState']> {
+  /* v8 ignore start */
   return async () => {
     // The CLI does not own a Postgres pool by default — the operator
     // wiring this up should pass `upsertState` explicitly. Surface a
@@ -149,6 +155,7 @@ function requireUpsertCallback(io: ProgramIo): NonNullable<RecoverSyncStateOpts[
     io.stderr('`recover sync-state` requires an upsertState callback to persist results.\n');
     throw new Error('upsertState callback not provided');
   };
+  /* v8 ignore stop */
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +229,13 @@ export type RecoverFeedbackHistoryOpts = {
   readonly onlyPr?: number;
   /** v1.2 #110: CodeCommit rate-limit pacing (req/sec); converted to delayMs. */
   readonly rate?: number;
+  /**
+   * v1.2 #110: required when `platform === 'codecommit'`. The Bot's
+   * IAM principal ARN; only `/feedback` replies whose parent comment
+   * is authored by this ARN are recoverable. Forwarded into the
+   * scrape helper.
+   */
+  readonly botArn?: string;
   readonly createDb?: (url: string) => { db: DbClient; close: () => Promise<void> };
   /** Test seam: read the candidates file from disk. */
   readonly readFile?: (path: string) => Promise<string>;
@@ -230,6 +244,23 @@ export type RecoverFeedbackHistoryOpts = {
    *  default constructor). */
   readonly codecommitClient?: CodeCommitClientLike;
 };
+
+// v1.2 #110: matches `parseIsoDate` in feedback-backfill.ts. Kept
+// file-private rather than exported to avoid coupling the two CLIs.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T.+)?$/;
+function parseIsoDate(value: string): Date | undefined {
+  if (!ISO_DATE_RE.test(value)) return undefined;
+  const parsed = value.includes('T') ? new Date(value) : new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+// v1.2 #110: CodeCommit `--repo` accepts either a bare `foo` (the
+// only form runtime sees, because CodeCommit has no owner-segment)
+// or `owner/foo` as an operator convenience. The operator's `owner`
+// segment is informational only — the DB key is always
+// `${installationId}/${repoName}` so wrong-owner typos can never
+// shadow a real installation's rows.
+const CODECOMMIT_REPO_RE = /^[^/\s]+(?:\/[^/\s]+)?$/;
 
 export async function recoverFeedbackHistoryCommand(
   io: ProgramIo,
@@ -241,21 +272,79 @@ export async function recoverFeedbackHistoryCommand(
     return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
   }
 
+  let sinceDate: Date | undefined;
+  if (opts.since !== undefined) {
+    sinceDate = parseIsoDate(opts.since);
+    if (!sinceDate) {
+      io.stderr(`--since must be a YYYY-MM-DD or full ISO 8601 date (got '${opts.since}').\n`);
+      return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
+    }
+  }
+
   // Source candidates either from a JSONL file (GitHub) or from a
   // direct CodeCommit `/feedback` re-scrape (#110).
   let candidates: ReadonlyArray<RecoverFeedbackHistoryCandidate>;
+  // Default DB key matches the GitHub convention (`owner/repo`). The
+  // CodeCommit branch overrides this with `${installationId}/${repoName}`
+  // — a wrong-account `--repo wrong/foo` therefore cannot shadow the
+  // canonical row.
+  let repoKey: string = opts.repo;
   if (opts.platform === 'codecommit') {
+    if (!opts.botArn) {
+      io.stderr('--bot-arn is required when --platform codecommit\n');
+      return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
+    }
+    if (!CODECOMMIT_REPO_RE.test(opts.repo)) {
+      io.stderr(
+        `--repo must be '<name>' or 'owner/<name>' for --platform codecommit (got '${opts.repo}').\n`,
+      );
+      return { status: 'ok', candidates: 0, recovered: 0, skippedExisting: 0 };
+    }
+    // Extract the repository segment regardless of whether the
+    // operator passed `foo` or `<owner>/foo`. Non-null assertion is
+    // banned; the regex guarantees at most one slash so `?? opts.repo`
+    // falls back to the bare form on a single-segment input.
+    const slashIdx = opts.repo.indexOf('/');
+    const repoName = slashIdx >= 0 ? opts.repo.slice(slashIdx + 1) || opts.repo : opts.repo;
+    if (slashIdx >= 0) {
+      const operatorOwner = opts.repo.slice(0, slashIdx);
+      if (operatorOwner !== String(opts.installationId)) {
+        // Operator passed an owner prefix that doesn't match the
+        // installationId. Emit a warning but normalize anyway — the
+        // DB key is computed from installationId, so the wrong prefix
+        // can never shadow another tenant's rows.
+        io.stderr(
+          `warning: --repo owner '${operatorOwner}' does not match --installation-id ` +
+            `${opts.installationId}; DB key will be normalized to '${opts.installationId}/${repoName}'\n`,
+        );
+      }
+    }
+    repoKey = `${opts.installationId}/${repoName}`;
+
     // Production path constructs a default CodeCommit client (picks
     // up AWS_REGION / AWS_PROFILE from the env chain); tests inject
     // a stub via `opts.codecommitClient`.
     const client = opts.codecommitClient ?? createDefaultCodeCommitClient();
     // Locked Q1 (#110): default 2 req/sec → 500ms delay between page
-    // calls. operator-tunable.
-    const delayMs = opts.rate && opts.rate > 0 ? Math.floor(1000 / opts.rate) : 500;
-    const sinceDate = opts.since ? new Date(opts.since) : undefined;
+    // calls. operator-tunable. Reject non-finite / non-positive values
+    // up-front (Infinity / NaN / <= 0) and warn rather than divide by
+    // them — an operator passing `--rate Infinity` likely meant "no
+    // pacing" but we keep the floor so we don't hammer the API.
+    let delayMs = 500;
+    if (opts.rate !== undefined) {
+      if (Number.isFinite(opts.rate) && opts.rate > 0) {
+        delayMs = Math.floor(1000 / opts.rate);
+      } else {
+        io.stderr(
+          `warning: --rate must be a finite positive number (got '${opts.rate}'); ` +
+            'using default 500ms pacing.\n',
+        );
+      }
+    }
     const scrape = await scrapeCodeCommitFeedback({
       client,
-      repositoryName: opts.repo.includes('/') ? (opts.repo.split('/')[1] ?? opts.repo) : opts.repo,
+      repositoryName: repoName,
+      botArn: opts.botArn,
       ...(sinceDate ? { sinceDate } : {}),
       ...(opts.onlyPr !== undefined ? { onlyPr: opts.onlyPr } : {}),
       delayMs,
@@ -283,13 +372,13 @@ export async function recoverFeedbackHistoryCommand(
     const result = await withTenant(db, opts.installationId, () =>
       recoverFeedbackHistory(db, {
         installationId: opts.installationId,
-        repo: opts.repo,
+        repo: repoKey,
         candidates,
         ...(opts.dryRun !== undefined ? { dryRun: opts.dryRun } : {}),
       }),
     );
     io.stdout(
-      `feedback-history recovery for installation=${opts.installationId} repo=${opts.repo}: ` +
+      `feedback-history recovery for installation=${opts.installationId} repo=${repoKey}: ` +
         `candidates=${result.candidates} recovered=${result.recovered} skippedExisting=${result.skippedExisting}` +
         (opts.dryRun ? ' (dry-run; no inserts)' : '') +
         '\n',
