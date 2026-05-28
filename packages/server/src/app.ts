@@ -2,6 +2,7 @@ import type { QueueClient } from '@review-agent/core';
 import type { DbClient } from '@review-agent/db';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { type ApiDeps, createApi } from './api/index.js';
 import { handleCodecommitWebhook } from './handlers/codecommit-webhook.js';
 import { handleWebhook } from './handlers/webhook.js';
 import { idempotency } from './middleware/idempotency.js';
@@ -18,6 +19,13 @@ export type AppDeps = {
   readonly queue: QueueClient;
   readonly webhookSecret: string;
   readonly now?: () => Date;
+  /**
+   * Dependencies forwarded to the `/api` REST namespace. When unset the
+   * namespace reads `process.env` directly for integration status checks.
+   * Tests and Lambda entrypoints should pass an explicit snapshot to
+   * keep the handler hermetic.
+   */
+  readonly api?: Omit<ApiDeps, 'db' | 'now' | 'env'>;
   /**
    * SNS signature verification options. Tests inject `verifySignature`
    * + `fetchCert` to keep the receiver offline. Production should
@@ -107,6 +115,46 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
   }
 
   app.get('/healthz', (c) => c.json({ ok: true }));
+
+  // REST API namespace — dashboard, repos CRUD, integrations, reviews
+  // Env is always read from process.env at app-creation time so the
+  // snapshot stays consistent for the lifetime of the server process.
+  // exactOptionalPropertyTypes: omit keys whose values are undefined so
+  // the object literal is assignable to the optional-property interface.
+  const apiEnv: ApiDeps['env'] = Object.fromEntries(
+    Object.entries({
+      GITHUB_APP_ID: process.env.GITHUB_APP_ID,
+      AWS_REGION: process.env.AWS_REGION,
+      REVIEW_AGENT_SNS_TOPIC_ARNS: process.env.REVIEW_AGENT_SNS_TOPIC_ARNS,
+      REVIEW_AGENT_FEEDBACK_ALLOWLIST: process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST,
+      ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+      REVIEW_AGENT_PROVIDER: process.env.REVIEW_AGENT_PROVIDER,
+      REVIEW_AGENT_MODEL: process.env.REVIEW_AGENT_MODEL,
+      ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
+      REVIEW_AGENT_DASHBOARD_CORS: process.env.REVIEW_AGENT_DASHBOARD_CORS,
+      // REVIEW_AGENT_DASHBOARD_TOKEN is intentionally excluded from apiEnv
+      // (the integrations response must never leak the token value).
+    }).filter(([, v]) => v !== undefined),
+  ) as ApiDeps['env'];
+  app.route(
+    '/api',
+    createApi({
+      db: deps.db,
+      env: apiEnv,
+      ...(deps.now ? { now: deps.now } : {}),
+      ...(deps.api?.generateId ? { generateId: deps.api.generateId } : {}),
+      ...(deps.api?.awsRegion ? { awsRegion: deps.api.awsRegion } : {}),
+      // Auth: caller may override via deps.api; otherwise fall back to env.
+      // exactOptionalPropertyTypes: use conditional spread so undefined is
+      // never assigned to a required-when-present optional property.
+      ...(() => {
+        const t = deps.api?.dashboardToken ?? process.env.REVIEW_AGENT_DASHBOARD_TOKEN;
+        return t !== undefined ? { dashboardToken: t } : {};
+      })(),
+      requireDashboardAuth: deps.api?.requireDashboardAuth ?? process.env.NODE_ENV === 'production',
+    }),
+  );
 
   app.post(
     '/webhook',
