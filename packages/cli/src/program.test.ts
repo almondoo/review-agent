@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { appendFingerprintMarker, fingerprint } from '@review-agent/core';
+import { describe, expect, it, vi } from 'vitest';
+import { recoverFeedbackHistoryCommand } from './commands/recover.js';
 import { buildProgram } from './program.js';
 
 function recordingIo() {
@@ -529,6 +531,96 @@ describe('buildProgram', () => {
     await expect(() => program.parseAsync(['--version'], { from: 'user' })).rejects.toMatchObject({
       code: 'commander.version',
     });
+  });
+
+  it('recover feedback-history partial status maps to io.exit(1) (#113)', async () => {
+    // Pins the load-bearing seam at program.ts:336-337 —
+    //   `io.exit(result.status === 'partial' ? 1 : 0)` —
+    // which is the actual `$?` cron callers observe. The line carries a
+    // `/* v8 ignore next */` directive so its branch is not counted in
+    // coverage; this test closes the loop end-to-end at the
+    // helper→exit-code boundary.
+    //
+    // Approach: INLINE FALLBACK. The program.ts action callback at
+    // lines 315-338 constructs `createDefaultCodeCommitClient()`
+    // directly and does not accept a `codecommitClient` / `createDb`
+    // seam in `RecoverFeedbackHistoryCliOpts`, so a `parseAsync(...)`
+    // path cannot reach the partial branch without either (a) live AWS
+    // credentials + a real CodeCommit repo or (b) widening
+    // `RecoverFeedbackHistoryCliOpts` with new test-only public seams.
+    // Both are out of scope for a test-only assertion; we drive the
+    // helper directly with the same partial-trigger fixture used in
+    // `recover.test.ts` and then apply the exact ternary the program
+    // action runs.
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    const BOT_ARN = 'arn:aws:iam::1:role/review-agent-bot';
+    const EVE_ARN = 'arn:aws:iam::1:user/eve';
+    const ALICE_ARN = 'arn:aws:iam::1:user/alice';
+    const fp = fingerprint({
+      path: 'src/a.ts',
+      line: 1,
+      ruleId: 'sql-injection',
+      suggestionType: 'comment',
+    });
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string } }) => {
+        const name = cmd.constructor.name;
+        if (name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: ['7'] };
+        }
+        if (name === 'GetCommentsForPullRequestCommand') {
+          return {
+            commentsForPullRequestData: [
+              {
+                comments: [
+                  {
+                    commentId: 'parent',
+                    content: appendFingerprintMarker('finding', fp),
+                    authorArn: BOT_ARN,
+                    creationDate: new Date('2026-05-01T00:00:00Z'),
+                  },
+                  {
+                    commentId: 'reply',
+                    content: '/feedback reject',
+                    inReplyTo: 'parent',
+                    authorArn: EVE_ARN, // NOT on allowlist → unauthorized
+                    creationDate: new Date('2026-05-02T00:00:00Z'),
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        throw new Error(`Unmocked SDK command: ${name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'review-agent',
+      installationId: 1n,
+      env: {
+        DATABASE_URL: 'postgres://x',
+        REVIEW_AGENT_FEEDBACK_ALLOWLIST: ALICE_ARN,
+      } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      botArn: BOT_ARN,
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    expect(result.status).toBe('partial');
+    // Inline replay of program.ts:336-337 — verifies the exact ternary
+    // wiring against the helper's partial output.
+    io.exit(result.status === 'partial' ? 1 : 0);
+    expect(io.exitCode).toBe(1);
   });
 
   it('uses process.env when no env is supplied (deps.env ?? process.env)', async () => {

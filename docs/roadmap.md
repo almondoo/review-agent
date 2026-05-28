@@ -372,6 +372,7 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 | [#96](https://github.com/almondoo/review-agent/issues/96) | fingerprint embedding in posted PR comments (#95 marker 経路の前提) | — |
 | [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
 | [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
+| [#113](https://github.com/almondoo/review-agent/issues/113) | CodeCommit `/feedback` recovery: allowlist gate on reply author (#110 hardening) | ✅ |
 
 ### Docs
 

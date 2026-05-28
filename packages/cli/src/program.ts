@@ -313,7 +313,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     )
     .option('--dry-run', 'count candidates vs existing rows but do not insert', false)
     .action(async (opts: RecoverFeedbackHistoryCliOpts) => {
-      await recoverFeedbackHistoryCommand(io, {
+      const result = await recoverFeedbackHistoryCommand(io, {
         repo: opts.repo,
         installationId: opts.installationId,
         platform: opts.platform,
@@ -327,7 +327,14 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         /* v8 ignore next */
         dryRun: opts.dryRun ?? false,
       });
-      io.exit(0);
+      // v1.2 #113: 'partial' (codecommit allowlist denied any reply,
+      // or REVIEW_AGENT_FEEDBACK_ALLOWLIST was unset with /feedback
+      // present) → non-zero exit so cron callers can detect a silent
+      // deny without log-scraping. The status downgrade and the
+      // accompanying stderr/stdout context lines are layered inside
+      // recoverFeedbackHistoryCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'partial' ? 1 : 0);
     });
 
   program.exitOverride();

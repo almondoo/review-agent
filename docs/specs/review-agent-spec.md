@@ -1278,6 +1278,15 @@ const octokit = new Octokit({ auth: token });
   numeric AWS account id for the empty owner segment so each tenant's
   rows are uniquely keyed even when multiple installations share a
   repo name across accounts.
+- `REVIEW_AGENT_FEEDBACK_ALLOWLIST` gates both the live `/feedback`
+  webhook (codecommit-webhook.ts) AND the disaster-recovery CLI
+  (`review-agent recover feedback-history --platform codecommit`,
+  v1.2 #110). Recovery uses the same fail-closed semantics: an
+  unset / empty allowlist counts every reply as `unauthorized` and
+  none is promoted into `review_history`. This closes the gap
+  surfaced by v1.2 #113 where the recovery walk previously checked
+  only the parent comment's author, not the `/feedback` reply
+  author. See `docs/security/feedback-command-authz.md`.
 
 ### 8.5 BYOK (Anthropic API key)
 
