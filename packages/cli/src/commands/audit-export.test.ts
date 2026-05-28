@@ -242,4 +242,26 @@ describe('auditExportCommand', () => {
     });
     expect(result.status).toBe('ok');
   });
+
+  // Stage C: pin parseIsoDate's NaN branch + the audit-row prevHash
+  // fallback when the first row's prevHash is non-null.
+
+  it('rejects a YYYY-MM-DD shape whose Date.parse yields NaN (--since)', async () => {
+    // `Number.isNaN(parsed.getTime())` truthy branch on the parseIsoDate
+    // helper. A syntactically-valid YYYY-MM-DD with an out-of-range
+    // month passes the regex but Date.parse returns NaN.
+    const io = recordingIo();
+    const result = await auditExportCommand(io, {
+      installationId: 1n,
+      since: '2026-13-99',
+      output: 'tmp/out.jsonl.gz',
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      createDb: fakeCreateDb,
+      loadAuditRows: fakeAudit([]),
+      loadCostRows: fakeCost([]),
+      writeOutput: async () => undefined,
+    });
+    expect(result.status).toBe('invalid_args');
+    expect(io.err.join('')).toContain('--since');
+  });
 });

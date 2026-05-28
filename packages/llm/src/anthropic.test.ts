@@ -217,3 +217,78 @@ describe('error classification integrates with provider.classifyError', () => {
     expect(provider.classifyError({ status: 429 })).toEqual({ kind: 'rate_limit' });
   });
 });
+
+// Stage C: branch coverage hardening for `readHeader` + `generateReview` usage
+// fallback. These pin paths only reachable on lower-cased header names and on
+// SDK responses that omit the standard `totalUsage` / `usage` keys.
+
+describe('classifyAnthropicError — header coalesce branches', () => {
+  it('reads `Retry-After` via the lower-cased header bag entry', () => {
+    // The `(bag)[name] ?? (bag)[name.toLowerCase()]` coalesce: the first
+    // lookup misses (header key only present in the lowercased form),
+    // forcing the helper to fall through to the second arm.
+    const result = classifyAnthropicError({
+      status: 429,
+      headers: { 'Retry-After': undefined, 'retry-after': '7' },
+    });
+    expect(result).toEqual({ kind: 'rate_limit', retryAfterMs: 7_000 });
+  });
+
+  it('reads a numeric `retry-after` header value (number branch)', () => {
+    // The `typeof value === 'number' ? String(value) : ...` branch — a
+    // few SDKs surface retry-after as a number rather than a stringified
+    // header. The helper coerces to string before the parseFloat in
+    // classifyHttpStyleError; here we pin the same fallback inside
+    // classifyAnthropicError's reader.
+    const result = classifyAnthropicError({
+      status: 429,
+      headers: { 'retry-after': 3 },
+    });
+    expect(result).toEqual({ kind: 'rate_limit', retryAfterMs: 3_000 });
+  });
+
+  it('falls through `responseHeaders` when `headers` is absent', () => {
+    // `for (const bag of [candidate.headers, candidate.responseHeaders])`
+    // — second iteration. Many fetch-style errors put the header bag on
+    // `responseHeaders` instead of `headers`.
+    const result = classifyAnthropicError({
+      status: 429,
+      responseHeaders: { 'retry-after': '5' },
+    });
+    expect(result).toEqual({ kind: 'rate_limit', retryAfterMs: 5_000 });
+  });
+});
+
+describe('createAnthropicProvider — generateReview defensive defaults', () => {
+  it('treats a result with no usage / totalUsage as zero tokens (cost = 0)', async () => {
+    // The `totalUsage ?? usage ?? {}` chain reaches the tail arm when
+    // neither key is present. inputTokens / outputTokens then fall
+    // through to 0 and the cost becomes 0.
+    const deps = makeDeps({
+      generate: vi.fn(async () => ({
+        experimental_output: reviewObject,
+        // no totalUsage, no usage
+        steps: [],
+      })) as never,
+    });
+    const provider = createAnthropicProvider(baseConfig, deps);
+    const result = await provider.generateReview(reviewInput);
+    expect(result.tokensUsed).toEqual({ input: 0, output: 0 });
+    expect(result.costUsd).toBe(0);
+  });
+
+  it('reads `usage` when `totalUsage` is absent (fallback chain middle arm)', async () => {
+    // First-arm miss, middle-arm hit on `?? usage ?? {}`. Older AI SDK
+    // versions emitted `usage` instead of `totalUsage`; pin compat.
+    const deps = makeDeps({
+      generate: vi.fn(async () => ({
+        experimental_output: reviewObject,
+        usage: { inputTokens: 250, outputTokens: 90 },
+        steps: [],
+      })) as never,
+    });
+    const provider = createAnthropicProvider(baseConfig, deps);
+    const result = await provider.generateReview(reviewInput);
+    expect(result.tokensUsed).toEqual({ input: 250, output: 90 });
+  });
+});

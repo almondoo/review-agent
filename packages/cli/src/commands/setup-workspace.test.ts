@@ -206,4 +206,43 @@ describe('setupWorkspaceCommand — --api mode', () => {
     expect(io.out.join('')).not.toContain(adminKey);
     expect(io.err.join('')).not.toContain(adminKey);
   });
+
+  it('coerces a non-Error rejection from the workspace create call to String(err)', async () => {
+    // The `err instanceof Error ? err.message : String(err)` ternary's
+    // falsy arm. Throwing a non-Error (string) from fetch is unusual but
+    // possible if the network layer rejects with a primitive; pin the
+    // String(err) fallback so a future refactor cannot drop it.
+    const io = recordingIo();
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      // biome-ignore lint/suspicious/noExplicitAny: simulating a non-Error rejection
+      .mockRejectedValueOnce('plain string rejection' as any);
+    const result = await setupWorkspaceCommand(io, {
+      api: true,
+      env: { ANTHROPIC_ADMIN_KEY: 'sk-admin-test' } as NodeJS.ProcessEnv,
+      fetchFn,
+    });
+    expect(result.status).toBe('api_failed');
+    expect(result.errorMessage).toBe('plain string rejection');
+    expect(io.err.join('')).toContain('plain string rejection');
+  });
+
+  it('coerces a non-Error rejection from the spend-cap call to String(err)', async () => {
+    // Same `String(err)` fallback for the second fetch path (spend-cap).
+    const io = recordingIo();
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({ id: 'ws_str' }))
+      // biome-ignore lint/suspicious/noExplicitAny: simulating a non-Error rejection
+      .mockRejectedValueOnce({ kind: 'opaque' } as any);
+    const result = await setupWorkspaceCommand(io, {
+      api: true,
+      env: { ANTHROPIC_ADMIN_KEY: 'sk-admin-test' } as NodeJS.ProcessEnv,
+      fetchFn,
+    });
+    expect(result.status).toBe('api_failed');
+    expect(result.workspaceId).toBe('ws_str');
+    // String({}) → '[object Object]'.
+    expect(result.errorMessage).toBe('[object Object]');
+  });
 });

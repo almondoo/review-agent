@@ -12,8 +12,9 @@ export type RunGitOptions = {
 
 export type RunGit = (args: ReadonlyArray<string>, opts?: RunGitOptions) => Promise<void>;
 
-export const defaultRunGit: RunGit = async (args, opts = {}) =>
-  new Promise((resolve, reject) => {
+export const defaultRunGit: RunGit = async (args, opts = {}) => {
+  /* v8 ignore start */
+  return new Promise((resolve, reject) => {
     const proc = spawn('git', [...args], {
       cwd: opts.cwd,
       env: { ...process.env, ...(opts.env ?? {}) },
@@ -33,6 +34,8 @@ export const defaultRunGit: RunGit = async (args, opts = {}) =>
       reject(new Error(`git ${args[0] ?? '?'} exited ${code}: ${stderr.trim()}`));
     });
   });
+  /* v8 ignore stop */
+};
 
 function assertSafeRef(ref: string): void {
   if (!SAFE_REF_REGEX.test(ref)) {

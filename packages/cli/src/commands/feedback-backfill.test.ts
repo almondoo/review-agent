@@ -451,6 +451,41 @@ describe('feedbackBackfillCommand', () => {
     }
   });
 
+  it('accepts a full ISO 8601 --since with explicit time component', async () => {
+    // parseIsoDate's `value.includes('T') ? new Date(value) : new Date(`${value}T00:00:00Z`)`
+    // — the truthy `includes('T')` arm. The other --since tests pass
+    // bare YYYY-MM-DD; this pins the explicit-time path.
+    const io = recordingIo();
+    const result = await feedbackBackfillCommand(io, {
+      installationId: 1n,
+      repo: 'o/r',
+      since: '2026-01-15T12:00:00Z',
+      env: baseEnv,
+      rate: 1000,
+      createOctokit: () => makeOctokit({}),
+      createDb: fakeCreateDb,
+      buildWriter: () => vi.fn(async () => undefined),
+      sleep: async () => undefined,
+    });
+    expect(result.status).toBe('ok');
+    expect(io.err.join('')).not.toContain('--since');
+  });
+
+  it('rejects a --since that matches the YYYY-MM-DD shape but encodes an unparseable date', async () => {
+    // parseIsoDate's `Number.isNaN(parsed.getTime()) ? null : parsed`
+    // — the truthy `isNaN` arm. `'2026-13-45'` passes the regex (digits)
+    // but `new Date(...)` produces Invalid Date.
+    const io = recordingIo();
+    const result = await feedbackBackfillCommand(io, {
+      installationId: 1n,
+      repo: 'o/r',
+      since: '2026-13-45',
+      env: baseEnv,
+    });
+    expect(result.status).toBe('invalid_args');
+    expect(io.err.join('')).toContain('--since');
+  });
+
   it("rolls --since into PR pagination — stops once a PR's updated_at predates the cutoff", async () => {
     const io = recordingIo();
     const octokit = makeOctokit({
@@ -571,6 +606,94 @@ describe('feedbackBackfillCommand', () => {
     // Only comment 10 matches the pinned bot-login; the other two
     // are filtered out before reactions are fetched.
     expect(result.processed).toBe(1);
+  });
+
+  it('paginates reactions when the first page returns a full REACTION_PAGE_SIZE batch', async () => {
+    // The reaction-loop's pagination is otherwise dead because every
+    // existing test has <100 reactions per comment. We feed exactly
+    // REACTION_PAGE_SIZE (100) +1 reactions on a single comment and
+    // confirm the CLI issues a second reactions page request.
+    const io = recordingIo();
+    const page1: BackfillReaction[] = [];
+    for (let i = 1; i <= 100; i += 1) {
+      page1.push(reaction({ id: i, content: '+1' }));
+    }
+    const page2: BackfillReaction[] = [reaction({ id: 200, content: '+1' })];
+    const octokit = makeOctokit({
+      prs: [{ number: 1 }],
+      commentsByPr: { 1: [botComment({ id: 10 })] },
+      reactionsByCommentByPage: { 10: [page1, page2, []] },
+    });
+    const result = await feedbackBackfillCommand(io, {
+      installationId: 1n,
+      repo: 'o/r',
+      env: baseEnv,
+      rate: 1000,
+      createOctokit: () => octokit,
+      createDb: fakeCreateDb,
+      buildWriter: () => vi.fn(async () => undefined),
+      sleep: async () => undefined,
+    });
+    expect(result.status).toBe('ok');
+    // 101 +1 reactions processed across two pages.
+    expect(result.processed).toBe(101);
+    expect(octokit.calls.reactions).toBeGreaterThanOrEqual(2);
+  });
+
+  it('skips comments that were already processed in a prior run (id < startCommentId)', async () => {
+    // The `if (comment.id < startCommentId) continue;` resume invariant
+    // — drive it by handing a state file whose `pr#1.lastCommentId` is
+    // larger than the first listed comment so the iteration must skip it.
+    const io = recordingIo();
+    const prior: BackfillStateFile = {
+      version: 1,
+      repo: 'o/r',
+      installationId: '1',
+      prs: {
+        'pr#1': {
+          lastCommentId: 50,
+          lastReactionId: 0,
+          processed: 1,
+          recorded: 1,
+          unresolved: 0,
+          skipped: 0,
+          completed: false,
+        },
+      },
+    };
+    const octokit = makeOctokit({
+      prs: [{ number: 1 }],
+      commentsByPr: {
+        1: [
+          // id 10 < startCommentId=50 → skipped without fetching reactions.
+          botComment({ id: 10 }),
+          // id 60 > startCommentId → processed normally.
+          botComment({ id: 60, path: 'src/new.ts', line: 5 }),
+        ],
+      },
+      reactionsByComment: {
+        // Only the high-id comment's reactions should be fetched.
+        60: [reaction({ id: 600, content: '+1' })],
+      },
+    });
+    const result = await feedbackBackfillCommand(io, {
+      installationId: 1n,
+      repo: 'o/r',
+      stateFile: 'tmp/resume.json',
+      env: baseEnv,
+      rate: 1000,
+      createOctokit: () => octokit,
+      createDb: fakeCreateDb,
+      buildWriter: () => vi.fn(async () => undefined),
+      readState: async () => JSON.stringify(prior),
+      writeState: async () => undefined,
+      sleep: async () => undefined,
+    });
+    expect(result.status).toBe('ok');
+    // Prior 1 + this run's 1 (new comment) = 2 processed.
+    expect(result.processed).toBe(2);
+    // Reactions fetched only for the post-resume comment.
+    expect(octokit.calls.reactions).toBe(1);
   });
 
   it('closes the DB connection even when ingestion throws', async () => {

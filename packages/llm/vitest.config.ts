@@ -18,7 +18,7 @@ export default defineConfig({
         // endpoint, not by unit tests.
         lines: 75,
         functions: 70,
-        branches: 70,
+        branches: 90,
         statements: 75,
       },
     },

@@ -640,4 +640,330 @@ describe('getExistingComments', () => {
     expect(got[0]?.author).toBe('bot');
     expect(got[0]?.line).toBe(5);
   });
+
+  // File-level vs line-level dispatch:
+  //   File-level summary comments (no inline line anchor) carry a
+  //   `path` but neither `line` nor `original_line`. The adapter must
+  //   surface them with `line: null` so coordination logic can
+  //   distinguish them from inline review comments.
+  it('falls back to original_line when current line is null (drifted hunk)', async () => {
+    // GitHub nulls out `line` when the comment's anchor drifted off
+    // a force-pushed file; `original_line` is still meaningful.
+    const paginate = vi.fn(async () => [
+      {
+        id: 2,
+        path: 'b.ts',
+        line: null,
+        original_line: 12,
+        side: 'RIGHT',
+        body: 'still-relevant',
+        user: { login: 'human' },
+        created_at: 'then',
+      },
+    ]);
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, pulls: { listReviewComments: vi.fn() } }),
+    });
+    const got = await vcs.getExistingComments(ref);
+    expect(got[0]?.line).toBe(12);
+  });
+
+  it('returns line: null when both line and original_line are absent (file-level / orphaned)', async () => {
+    // Both fields elided: file-level summary OR fully orphaned
+    // anchor. The mapper must surface `null` not throw.
+    const paginate = vi.fn(async () => [
+      {
+        id: 3,
+        path: 'c.ts',
+        side: 'RIGHT',
+        body: 'general note on this file',
+        user: { login: 'reviewer' },
+        created_at: 'now',
+      },
+    ]);
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, pulls: { listReviewComments: vi.fn() } }),
+    });
+    const got = await vcs.getExistingComments(ref);
+    expect(got).toHaveLength(1);
+    expect(got[0]?.line).toBeNull();
+    expect(got[0]?.path).toBe('c.ts');
+  });
+
+  it('falls back to author "unknown" when user is absent on a comment', async () => {
+    // GitHub strips `user` for users who deleted their account; the
+    // mapper must surface "unknown" rather than crash.
+    const paginate = vi.fn(async () => [
+      {
+        id: 4,
+        path: 'd.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'orphan',
+        user: null,
+        created_at: 'now',
+      },
+    ]);
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, pulls: { listReviewComments: vi.fn() } }),
+    });
+    const got = await vcs.getExistingComments(ref);
+    expect(got[0]?.author).toBe('unknown');
+  });
+
+  it('falls back to path: null and body: "" when both are absent', async () => {
+    // Defensive: every nullable field on the upstream type must have
+    // a deterministic fallback so coordination logic can rely on
+    // `path != null` checks.
+    const paginate = vi.fn(async () => [
+      {
+        id: 5,
+        line: 1,
+        side: 'RIGHT',
+        user: { login: 'x' },
+        created_at: 'now',
+      },
+    ]);
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ paginate, pulls: { listReviewComments: vi.fn() } }),
+    });
+    const got = await vcs.getExistingComments(ref);
+    expect(got[0]?.path).toBeNull();
+    expect(got[0]?.body).toBe('');
+  });
+});
+
+describe('mapStatus (via getDiff)', () => {
+  it('maps an unrecognized GitHub file status to "modified" (default fallback)', async () => {
+    // `STATUS_MAP` covers the GitHub-documented statuses; a future
+    // novel value (e.g. `'unmerged'`) must fall through to the safe
+    // default rather than crash the diff pipeline.
+    const compare = vi.fn(async () => ({
+      data: {
+        merge_base_commit: { sha: 'mb' },
+        commits: [{ sha: 'c1' }],
+        files: [
+          {
+            filename: 'novel.ts',
+            status: 'STRANGE_STATE',
+            additions: 0,
+            deletions: 0,
+            patch: '@@',
+          },
+        ],
+      },
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        repos: { compareCommitsWithBasehead: compare },
+      }),
+    });
+    const diff = await vcs.getDiff(ref, { sinceSha: 'older' });
+    expect(diff.files[0]?.status).toBe('modified');
+  });
+
+  it('maps an absent / undefined GitHub file status to "modified"', async () => {
+    // Octokit's openapi-types declares `status` as required, but
+    // third-party API proxies / fixtures sometimes elide it. The
+    // adapter must surface 'modified' rather than crash.
+    const compare = vi.fn(async () => ({
+      data: {
+        merge_base_commit: { sha: 'mb' },
+        commits: [{ sha: 'c1' }],
+        files: [{ filename: 'no-status.ts', additions: 1, deletions: 0, patch: '@@' }],
+      },
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        repos: { compareCommitsWithBasehead: compare },
+      }),
+    });
+    const diff = await vcs.getDiff(ref, { sinceSha: 'older' });
+    expect(diff.files[0]?.status).toBe('modified');
+  });
+});
+
+describe('getDiff null-fallback branches', () => {
+  it('surfaces patch: null when GitHub elides the patch field (binary / large file)', async () => {
+    // GitHub omits `patch` for files over its diff cutoff (~3 MB)
+    // and for binary files. The adapter must surface `null` so the
+    // runner can decide whether to skip those entries.
+    const compare = vi.fn(async () => ({
+      data: {
+        merge_base_commit: { sha: 'mb' },
+        commits: [{ sha: 'c1' }],
+        files: [
+          { filename: 'big.bin', status: 'modified', additions: 0, deletions: 0 }, // no `patch`
+        ],
+      },
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        repos: { compareCommitsWithBasehead: compare },
+      }),
+    });
+    const diff = await vcs.getDiff(ref, { sinceSha: 'older' });
+    expect(diff.files[0]?.patch).toBeNull();
+  });
+
+  it('falls back to sinceSha when compare returns an empty commits array', async () => {
+    // The headSha resolution is `commits[length-1]?.sha ?? sinceSha`.
+    // GitHub returns `commits: []` when sinceSha === HEAD (no new
+    // commits since the last reviewed sha). The adapter must
+    // surface a deterministic headSha rather than `undefined`.
+    const compare = vi.fn(async () => ({
+      data: {
+        merge_base_commit: { sha: 'mb' },
+        commits: [],
+        files: [],
+      },
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        repos: { compareCommitsWithBasehead: compare },
+      }),
+    });
+    const diff = await vcs.getDiff(ref, { sinceSha: 'older' });
+    expect(diff.headSha).toBe('older');
+  });
+
+  it('surfaces patch: null on the non-sinceSha (listFiles) path when patch is absent', async () => {
+    // Same null-patch contract as the sinceSha path, but exercised
+    // through `paginate(listFiles, …)`.
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'B', ref: 'main' },
+        head: { sha: 'H', ref: 'f' },
+        draft: false,
+        labels: [],
+        commits: 0,
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    const listCommits = vi.fn(async () => ({ data: [] }));
+    const listFiles = vi.fn();
+    const paginate = vi.fn(async () => [
+      {
+        filename: 'asset.png',
+        previous_filename: null,
+        status: 'modified',
+        additions: 0,
+        deletions: 0,
+        // `patch` deliberately elided.
+      },
+    ]);
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get, listCommits, listFiles },
+        paginate,
+      }),
+    });
+    const diff = await vcs.getDiff(ref);
+    expect(diff.files[0]?.patch).toBeNull();
+  });
+});
+
+describe('getPR null-fallback branches', () => {
+  it('surfaces an empty string commit message when GitHub elides it (covers `?? ""` fallback)', async () => {
+    // The truncate helper receives `c.commit.message ?? ''`. A
+    // commit with a literally-empty message (or one missing the
+    // field) must not crash the listCommits mapping; we just
+    // surface ''.
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'b', ref: 'main' },
+        head: { sha: 'h', ref: 'f' },
+        draft: false,
+        labels: [],
+        commits: 1,
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    const listCommits = vi.fn(async () => ({
+      data: [{ sha: 'sha0', commit: {} }], // message intentionally absent
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get, listCommits },
+      }),
+    });
+    const pr = await vcs.getPR(ref);
+    expect(pr.commitMessages).toHaveLength(1);
+    expect(pr.commitMessages[0]?.message).toBe('');
+  });
+
+  it('falls back to "" when a label object has no name field', async () => {
+    // `data.labels.map((l) => typeof l === 'string' ? l : (l.name ?? ''))` —
+    // GitHub returns label objects; a malformed / partial label
+    // payload (no `name`) should not crash the mapping.
+    const get = vi.fn(async () => ({
+      data: {
+        title: 'T',
+        body: '',
+        user: { login: 'a' },
+        base: { sha: 'b', ref: 'main' },
+        head: { sha: 'h', ref: 'f' },
+        draft: false,
+        // One bare-string label, one object with no `name`.
+        labels: ['priority', {}],
+        commits: 0,
+        created_at: '',
+        updated_at: '',
+      },
+    }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({
+        pulls: { get },
+      }),
+    });
+    const pr = await vcs.getPR(ref);
+    expect(pr.labels).toEqual(['priority', '']);
+  });
+});
+
+describe('defaultCloneUrl guard', () => {
+  it('refuses to build a clone URL for a github ref with empty repo (no token in error)', async () => {
+    // Companion to the existing empty-owner guard. `cloneUrl` runs
+    // before getPR, so we never reach the listCommits / pulls.get
+    // call path — the URL builder throws synchronously and we
+    // verify the token is not leaked into the error message.
+    const token = 'ghs_token_must_not_leak';
+    const runGit = vi.fn();
+    const vcs = createGithubVCS({
+      token,
+      octokit: createMockOctokit({}),
+      runGit,
+    });
+    const badRef = { platform: 'github', owner: 'o', repo: '', number: 9 } as const;
+    let caught: unknown;
+    try {
+      await vcs.cloneRepo(badRef, './tmp/x', { depth: 1 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toMatch(/empty repo/);
+    expect(message).not.toContain(token);
+    expect(runGit).not.toHaveBeenCalled();
+  });
 });

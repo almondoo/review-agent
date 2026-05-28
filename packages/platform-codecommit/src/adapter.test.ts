@@ -2,12 +2,18 @@ import {
   GetCommentsForPullRequestCommand,
   GetFileCommand,
   GetPullRequestCommand,
+  ListPullRequestsCommand,
   PostCommentForPullRequestCommand,
   type UpdatePullRequestApprovalStateCommand,
 } from '@aws-sdk/client-codecommit';
 import type { PRRef, ReviewEvent, ReviewPayload, ReviewState } from '@review-agent/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCodecommitVCS } from './adapter.js';
+import {
+  createCodecommitVCS,
+  createDefaultCodeCommitClient,
+  listCodeCommitCommentsForPullRequest,
+  listCodeCommitPullRequestIds,
+} from './adapter.js';
 
 const REF: PRRef = { platform: 'codecommit', owner: 'me', repo: 'demo-repo', number: 7 };
 
@@ -570,6 +576,94 @@ describe('createCodecommitVCS — cloneRepo', () => {
   });
 });
 
+describe('listCodeCommitPullRequestIds (#110 hardening)', () => {
+  it('rejects PR id strings containing non-digit suffixes (strict regex)', async () => {
+    // `Number.parseInt('42-archived', 10)` would coerce to `42` and
+    // silently re-key against an unrelated PR. The strict `/^\d+$/`
+    // guard rejects these.
+    const client = fakeClient({
+      ListPullRequestsCommand: () => ({
+        pullRequestIds: ['10', '42-archived', '11', 'oops', '12'],
+      }),
+    });
+    const ids = await listCodeCommitPullRequestIds(client, {
+      repositoryName: 'demo-repo',
+      pullRequestStatus: 'OPEN',
+    });
+    expect(ids).toEqual([10, 11, 12]);
+    expect(client.send).toHaveBeenCalledWith(expect.any(ListPullRequestsCommand));
+  });
+});
+
+describe('listCodeCommitCommentsForPullRequest (#110 hardening)', () => {
+  it('preserves the authorArn from the SDK Comment shape', async () => {
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            comments: [
+              {
+                commentId: 'k1',
+                content: 'bot-output',
+                authorArn: 'arn:aws:iam::123:role/review-agent-bot',
+                creationDate: new Date('2026-05-10T00:00:00Z'),
+              },
+              {
+                commentId: 'k2',
+                content: '/feedback reject',
+                inReplyTo: 'k1',
+                authorArn: 'arn:aws:iam::123:user/alice',
+                creationDate: new Date('2026-05-11T00:00:00Z'),
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '7' });
+    expect(out).toHaveLength(2);
+    expect(out[0]?.authorArn).toBe('arn:aws:iam::123:role/review-agent-bot');
+    expect(out[1]?.authorArn).toBe('arn:aws:iam::123:user/alice');
+    expect(out[1]?.inReplyTo).toBe('k1');
+  });
+});
+
+describe('createDefaultCodeCommitClient (#110)', () => {
+  it('returns an object with a send method when called with no config', () => {
+    const client = createDefaultCodeCommitClient();
+    expect(typeof client.send).toBe('function');
+  });
+
+  it('returns an object with a send method when called with a config override', () => {
+    const client = createDefaultCodeCommitClient({ region: 'us-east-1' });
+    expect(typeof client.send).toBe('function');
+  });
+});
+
+describe('listCodeCommitCommentsForPullRequest — creationDate string branch (#110)', () => {
+  it('converts a string creationDate to a Date instance', async () => {
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            comments: [
+              {
+                commentId: 'str-date-1',
+                content: 'raw',
+                creationDate: '2026-05-01T00:00:00Z',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '9' });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.creationDate).toBeInstanceOf(Date);
+    expect(out[0]?.creationDate?.toISOString()).toBe('2026-05-01T00:00:00.000Z');
+  });
+});
+
 describe('createCodecommitVCS — exposed metadata', () => {
   it('reports the platform string', () => {
     const vcs = createCodecommitVCS({ client: fakeClient({}) });
@@ -584,5 +678,502 @@ describe('createCodecommitVCS — exposed metadata', () => {
       approvalEvent: 'codecommit',
       commitMessages: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage C: branch-coverage hardening.
+// The following groups exercise paths that exist in the helpers but are only
+// reached on pagination tokens / unknown enum values / fallback defaults.
+// ---------------------------------------------------------------------------
+
+describe('listCodeCommitCommentsForPullRequest — pagination', () => {
+  it('concatenates results across nextToken pages', async () => {
+    // Page 1 returns one comment + a nextToken; page 2 returns the second
+    // comment with no token, terminating the loop. The flattened result
+    // must preserve insertion order across the page boundary.
+    let page = 0;
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => {
+        page += 1;
+        if (page === 1) {
+          return {
+            commentsForPullRequestData: [
+              {
+                comments: [
+                  {
+                    commentId: 'p1-c1',
+                    content: 'first page',
+                    creationDate: new Date('2026-05-15T00:00:00Z'),
+                  },
+                ],
+              },
+            ],
+            nextToken: 'tok2',
+          };
+        }
+        return {
+          commentsForPullRequestData: [
+            {
+              comments: [
+                {
+                  commentId: 'p2-c1',
+                  content: 'second page',
+                  creationDate: new Date('2026-05-16T00:00:00Z'),
+                },
+              ],
+            },
+          ],
+        };
+      },
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '7' });
+    expect(out.map((c) => c.commentId)).toEqual(['p1-c1', 'p2-c1']);
+    expect(client.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors the injected sleep between paged calls when delayMs > 0', async () => {
+    // The `sleep` test seam is invoked only when (nextToken && delayMs > 0).
+    // We pass a delayMs and a stub sleep to pin that branch.
+    let page = 0;
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => {
+        page += 1;
+        if (page === 1) {
+          return {
+            commentsForPullRequestData: [{ comments: [{ commentId: 'a', content: '' }] }],
+            nextToken: 'next',
+          };
+        }
+        return {
+          commentsForPullRequestData: [{ comments: [{ commentId: 'b', content: '' }] }],
+        };
+      },
+    });
+    const sleep = vi.fn(async () => undefined);
+    const out = await listCodeCommitCommentsForPullRequest(client, {
+      pullRequestId: '9',
+      delayMs: 25,
+      sleep,
+    });
+    expect(out).toHaveLength(2);
+    // Sleep is invoked once: after page 1's response yielded a nextToken, but
+    // not after page 2 (no token). Pin the call count + the forwarded delay.
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(25);
+  });
+
+  it('skips raw comments missing a commentId (defensive against malformed SDK rows)', async () => {
+    // The helper's `if (!c.commentId) continue` guard is otherwise dead in the
+    // happy path because every test fixture supplies an id. A real SDK error
+    // body / malformed mock could feed in `commentId: undefined` and we'd
+    // otherwise materialize a zero-id row.
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            comments: [
+              { commentId: undefined, content: 'will be skipped' },
+              { commentId: 'kept', content: 'will be kept' },
+            ],
+          },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '5' });
+    expect(out.map((c) => c.commentId)).toEqual(['kept']);
+  });
+});
+
+describe('listCodeCommitPullRequestIds — pagination + edge cases', () => {
+  it('concatenates ids across nextToken pages within a single status pass', async () => {
+    // Page 1 returns two ids + a nextToken; page 2 returns the third id and
+    // terminates. Status defaults to 'ALL' so the helper would also walk
+    // CLOSED — we pin the call path by checking the union.
+    let openPage = 0;
+    let closedPage = 0;
+    const client = fakeClient({
+      ListPullRequestsCommand: (input) => {
+        const status = (input as { pullRequestStatus: string }).pullRequestStatus;
+        if (status === 'OPEN') {
+          openPage += 1;
+          if (openPage === 1) {
+            return { pullRequestIds: ['10', '11'], nextToken: 'open-tok2' };
+          }
+          return { pullRequestIds: ['12'] };
+        }
+        closedPage += 1;
+        return { pullRequestIds: ['20'] };
+      },
+    });
+    const ids = await listCodeCommitPullRequestIds(client, {
+      repositoryName: 'demo-repo',
+      // explicit OPEN to keep this focused on pagination within one status
+      pullRequestStatus: 'OPEN',
+    });
+    expect(ids).toEqual([10, 11, 12]);
+    expect(client.send).toHaveBeenCalledTimes(2);
+    expect(closedPage).toBe(0); // We did not opt into ALL.
+  });
+
+  it('returns an empty array when the API yields no ids at all', async () => {
+    // Empty `pullRequestIds: []` from a fresh repo must short-circuit to
+    // `[]` rather than throwing or returning an undefined-shaped value.
+    const client = fakeClient({
+      ListPullRequestsCommand: () => ({ pullRequestIds: [] }),
+    });
+    const ids = await listCodeCommitPullRequestIds(client, {
+      repositoryName: 'empty-repo',
+      pullRequestStatus: 'OPEN',
+    });
+    expect(ids).toEqual([]);
+  });
+
+  it("dedupes ids that appear under both 'OPEN' and 'CLOSED' on the default 'ALL' walk", async () => {
+    // Defensive guard against a stub or buggy SDK that returns the same id
+    // under multiple status filters; the helper's `seen` Set must collapse.
+    const client = fakeClient({
+      ListPullRequestsCommand: (input) => {
+        const status = (input as { pullRequestStatus: string }).pullRequestStatus;
+        if (status === 'OPEN') return { pullRequestIds: ['1', '2'] };
+        return { pullRequestIds: ['2', '3'] };
+      },
+    });
+    const ids = await listCodeCommitPullRequestIds(client, {
+      repositoryName: 'demo-repo',
+      // default ('ALL') — walks both passes
+    });
+    expect(ids).toEqual([1, 2, 3]);
+  });
+});
+
+describe('createCodecommitVCS — getDiff unknown changeType fallback', () => {
+  it("maps any unrecognized changeType to 'modified' (forward-compat default)", async () => {
+    // The CodeCommit GetDifferences API only documents A/M/D, but a future
+    // change-type letter or a renamed file (which CodeCommit does NOT report
+    // distinctly today) would otherwise crash the type guard. Pin the
+    // default-to-modified branch in `mapDiffStatus`.
+    const client = fakeClient({
+      GetPullRequestCommand: () => ({
+        pullRequest: {
+          pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+        },
+      }),
+      GetDifferencesCommand: () => ({
+        differences: [
+          { afterBlob: { path: 'unknown.ts' }, changeType: 'STRANGE' },
+          // Also exercise the `!changeType` shortcut explicitly: a row
+          // missing `changeType` entirely.
+          { afterBlob: { path: 'no-type.ts' } },
+        ],
+      }),
+    });
+    const vcs = createCodecommitVCS({ client });
+    const diff = await vcs.getDiff(REF);
+    expect(diff.files.map((f) => `${f.path}:${f.status}`)).toEqual([
+      'unknown.ts:modified',
+      'no-type.ts:modified',
+    ]);
+  });
+});
+
+describe('createCodecommitVCS — postReview empty comments', () => {
+  it('posts only the summary when the review has zero inline findings', async () => {
+    // The for-loop body never executes; we exercise the empty-iteration
+    // branch and pin that we issue exactly one PostCommentForPullRequest
+    // call (the summary) and no inline comments.
+    const seen: string[] = [];
+    const client = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input: unknown }) => {
+        seen.push(cmd.constructor.name);
+        if (cmd.constructor.name === 'GetPullRequestCommand') {
+          return {
+            pullRequest: {
+              pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+            },
+          };
+        }
+        return { comment: { commentId: 'cid' } };
+      }),
+    };
+    const vcs = createCodecommitVCS({ client });
+    await vcs.postReview(REF, {
+      summary: 'looks good — no inline comments',
+      comments: [],
+      state: {
+        schemaVersion: 1,
+        lastReviewedSha: 'h1',
+        baseSha: 'b1',
+        reviewedAt: '2026-05-22T00:00:00Z',
+        modelUsed: 'm',
+        totalTokens: 0,
+        totalCostUsd: 0,
+        commentFingerprints: [],
+      },
+    });
+    const posts = seen.filter((n) => n === 'PostCommentForPullRequestCommand');
+    expect(posts).toHaveLength(1); // summary only, no inline calls
+  });
+
+  it('skips the summary call when summary is the empty string', async () => {
+    // `if (review.summary)` falsy on '' — no summary post is made, and the
+    // empty comments array also means no inline calls. End state: no
+    // PostCommentForPullRequestCommand calls at all.
+    const seen: string[] = [];
+    const client = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input: unknown }) => {
+        seen.push(cmd.constructor.name);
+        if (cmd.constructor.name === 'GetPullRequestCommand') {
+          return {
+            pullRequest: {
+              pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+            },
+          };
+        }
+        return { comment: { commentId: 'cid' } };
+      }),
+    };
+    const vcs = createCodecommitVCS({ client });
+    await vcs.postReview(REF, {
+      summary: '',
+      comments: [],
+      state: {
+        schemaVersion: 1,
+        lastReviewedSha: 'h1',
+        baseSha: 'b1',
+        reviewedAt: '2026-05-22T00:00:00Z',
+        modelUsed: 'm',
+        totalTokens: 0,
+        totalCostUsd: 0,
+        commentFingerprints: [],
+      },
+    });
+    expect(seen.filter((n) => n === 'PostCommentForPullRequestCommand')).toHaveLength(0);
+  });
+});
+
+describe('createCodecommitVCS — getPR fallbacks for missing PullRequest fields', () => {
+  it('substitutes safe defaults when title/description/author/dates are absent', async () => {
+    // Every `?? ''` / `?? 'unknown'` / `?? new Date(0).toISOString()` fallback
+    // in toPR has a paired covered branch; this case forces the un-covered
+    // sides of those coalesces.
+    const client = fakeClient({
+      GetPullRequestCommand: () => ({
+        pullRequest: {
+          pullRequestId: '7',
+          // title, description, authorArn, creationDate, lastActivityDate
+          // all intentionally omitted to drive the `?? <default>` branches.
+          pullRequestTargets: [
+            {
+              repositoryName: 'demo-repo',
+              // also omit sourceCommit/destinationCommit/reference fields
+              // so the `target?.X ?? ''` fallbacks are exercised.
+            },
+          ],
+        },
+      }),
+    });
+    const vcs = createCodecommitVCS({ client });
+    const pr = await vcs.getPR(REF);
+    expect(pr.title).toBe('');
+    expect(pr.body).toBe('');
+    expect(pr.author).toBe('unknown'); // parseAuthor undefined → 'unknown'
+    expect(pr.baseSha).toBe('');
+    expect(pr.headSha).toBe('');
+    expect(pr.baseRef).toBe('');
+    expect(pr.headRef).toBe('');
+    expect(pr.createdAt).toBe(new Date(0).toISOString());
+    expect(pr.updatedAt).toBe(new Date(0).toISOString());
+  });
+
+  it('handles a PullRequest with no pullRequestTargets array (target?. fallback)', async () => {
+    // `pr.pullRequestTargets?.[0]` is `undefined` when the array is missing
+    // entirely; every `target?.X ?? ''` falls through to the default. This
+    // pins the optional-chaining branch separately from the inner `??`.
+    const client = fakeClient({
+      GetPullRequestCommand: () => ({
+        pullRequest: {
+          pullRequestId: '7',
+          // pullRequestTargets intentionally omitted
+        },
+      }),
+    });
+    const vcs = createCodecommitVCS({ client });
+    const pr = await vcs.getPR(REF);
+    expect(pr.baseSha).toBe('');
+    expect(pr.headSha).toBe('');
+  });
+});
+
+describe('createCodecommitVCS — getExistingComments empty result', () => {
+  it('returns [] when the SDK yields no commentsForPullRequestData', async () => {
+    // The `?? []` defaults on the response itself and on the inner
+    // `group.comments` array are only one nested-coalesce away from the
+    // top-level happy path; pin them with an empty fixture.
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({}),
+    });
+    const vcs = createCodecommitVCS({ client });
+    const out = await vcs.getExistingComments(REF);
+    expect(out).toEqual([]);
+  });
+});
+
+describe('listCodeCommitCommentsForPullRequest — defensive field defaults', () => {
+  it('substitutes empty string when comment content is absent', async () => {
+    // `c.content ?? ''` branch. A real SDK response with a deleted comment
+    // may have `content: undefined`; we materialize the empty string rather
+    // than `undefined`.
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            comments: [
+              {
+                commentId: 'no-content',
+                // content omitted
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '1' });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.content).toBe('');
+  });
+
+  it('emits no creationDate when the SDK row has neither Date nor string', async () => {
+    // The `else: undefined` branch of the creationDate normalize. The
+    // resulting CodeCommitRawComment must omit `creationDate` entirely
+    // (the spread `...(creationDate !== undefined ? {} : {})` is false).
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            comments: [
+              {
+                commentId: 'no-date',
+                content: 'x',
+                // creationDate intentionally missing
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '2' });
+    expect(out).toHaveLength(1);
+    expect(out[0]?.creationDate).toBeUndefined();
+    expect('creationDate' in (out[0] ?? {})).toBe(false);
+  });
+});
+
+describe('listCodeCommitPullRequestIds — missing pullRequestIds field', () => {
+  it('treats a response with no pullRequestIds key as zero ids', async () => {
+    // `resp.pullRequestIds ?? []` — the `??` defaults to the empty array
+    // when the SDK response carries no key at all (vs an explicit `[]`).
+    const client = fakeClient({
+      ListPullRequestsCommand: () => ({}),
+    });
+    const ids = await listCodeCommitPullRequestIds(client, {
+      repositoryName: 'repo',
+      pullRequestStatus: 'OPEN',
+    });
+    expect(ids).toEqual([]);
+  });
+});
+
+describe('listCodeCommitCommentsForPullRequest — empty/missing groups', () => {
+  it('returns [] when commentsForPullRequestData is omitted entirely', async () => {
+    // The outer `?? []` on `resp.commentsForPullRequestData` — distinct
+    // branch from the inner per-group `group.comments ?? []` default.
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({}),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '0' });
+    expect(out).toEqual([]);
+  });
+
+  it('skips a group whose `comments` field is missing', async () => {
+    // The inner `?? []` on `group.comments`. A group with `location` but
+    // no `comments` is valid per the SDK shape (e.g. a stub or an empty
+    // discussion thread root).
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          { location: { filePath: 'a.ts' } /* comments omitted */ },
+          { comments: [{ commentId: 'still-emitted', content: 'x' }] },
+        ],
+      }),
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, { pullRequestId: '0' });
+    expect(out.map((c) => c.commentId)).toEqual(['still-emitted']);
+  });
+});
+
+describe('createCodecommitVCS — getExistingComments preserves inReplyTo and date fallback', () => {
+  it("emits inReplyTo when set and falls back to epoch on missing creationDate (toExistingComment's coalesces)", async () => {
+    // Branches in toExistingComment we have not yet hit from getExistingComments():
+    //   - `inReplyTo !== undefined ? { inReplyTo } : {}` truthy side.
+    //   - `c.creationDate?.toISOString() ?? new Date(0).toISOString()` fallback side.
+    //   - `c.content ?? ''` undefined side.
+    // One fixture exercises all three; the second comment exercises the
+    // opposite (no inReplyTo + a real creationDate) so the union is hit.
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => ({
+        commentsForPullRequestData: [
+          {
+            location: { filePath: 'x.ts', filePosition: 1, relativeFileVersion: 'AFTER' },
+            comments: [
+              {
+                commentId: 'reply-1',
+                // content omitted → body should be ''
+                // creationDate omitted → createdAt should fall back to epoch
+                inReplyTo: 'parent-1',
+                authorArn: 'arn:aws:iam::1:user/replier',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    const vcs = createCodecommitVCS({ client });
+    const out = await vcs.getExistingComments(REF);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.inReplyTo).toBe('parent-1');
+    expect(out[0]?.body).toBe('');
+    expect(out[0]?.createdAt).toBe(new Date(0).toISOString());
+  });
+});
+
+describe('listCodeCommitCommentsForPullRequest — default sleep wiring', () => {
+  it('completes a multi-page walk with delayMs > 0 and the default real-timer sleep', async () => {
+    // The `opts.sleep ?? (default)` branch — when the caller passes delayMs
+    // but no sleep stub, the helper builds a real setTimeout-backed sleep.
+    // We pin that the helper completes (and yields the concatenated rows)
+    // with the production sleep impl on a very small delay so the test
+    // still finishes within Vitest's default timeout.
+    let page = 0;
+    const client = fakeClient({
+      GetCommentsForPullRequestCommand: () => {
+        page += 1;
+        if (page === 1) {
+          return {
+            commentsForPullRequestData: [{ comments: [{ commentId: 'pg1', content: '' }] }],
+            nextToken: 'next',
+          };
+        }
+        return {
+          commentsForPullRequestData: [{ comments: [{ commentId: 'pg2', content: '' }] }],
+        };
+      },
+    });
+    const out = await listCodeCommitCommentsForPullRequest(client, {
+      pullRequestId: '11',
+      delayMs: 1,
+      // sleep intentionally omitted → exercises the default `?? setTimeout` arm
+    });
+    expect(out.map((c) => c.commentId)).toEqual(['pg1', 'pg2']);
   });
 });

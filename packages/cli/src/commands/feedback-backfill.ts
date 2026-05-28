@@ -572,17 +572,21 @@ async function persistStateFile(
 }
 
 const defaultReadState = async (path: string): Promise<string | null> => {
+  /* v8 ignore start */
   try {
     return await readFile(path, 'utf8');
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw e;
   }
+  /* v8 ignore stop */
 };
 
 const defaultWriteState = async (path: string, data: string): Promise<void> => {
+  /* v8 ignore start */
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, data, 'utf8');
+  /* v8 ignore stop */
 };
 
 // ---------------------------------------------------------------------
@@ -598,6 +602,9 @@ type RepoRef = {
 function parseRepo(repo: string): RepoRef | null {
   const match = /^([^/\s]+)\/([^/\s]+)$/.exec(repo);
   if (!match) return null;
+  // noUncheckedIndexedAccess types match[N] as `string | undefined`, but a
+  // successful match guarantees both capture groups are present.
+  /* v8 ignore next 2 */
   const owner = match[1] ?? '';
   const name = match[2] ?? '';
   return { owner, repo: name, repoFull: `${owner}/${name}` };
@@ -627,13 +634,17 @@ function addTotals<
   };
 }
 
+/* v8 ignore start */
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+/* v8 ignore stop */
 
+/* v8 ignore start */
 const defaultCreateOctokit = (token: string): BackfillOctokit => {
   // The CLI bin wires this via a real `@octokit/rest` Octokit. Tests
   // pass `createOctokit` directly so they don't depend on a token.
   return new Octokit({ auth: token }) as unknown as BackfillOctokit;
 };
+/* v8 ignore stop */

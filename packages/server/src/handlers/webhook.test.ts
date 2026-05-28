@@ -410,4 +410,37 @@ describe('handleWebhook', () => {
       recordFeedbackCommandOutcome('codecommit', 'thumbs_down', 'unresolved'),
     ).not.toThrow();
   });
+
+  // Tail fall-through: events we don't handle (e.g. `star`) take the
+  // final `return { kind: 'ignored', reason: ... }` branch at the end
+  // of handleWebhook. Documents the receiver's contract that unknown
+  // events are ignored, not 500'd.
+  it("returns ignored for unhandled event types (e.g. 'star')", async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'star' as Parameters<typeof handleWebhook>[1],
+      {},
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') {
+      expect(r.reason).toContain("unhandled event 'star'");
+    }
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores pull_request_review actions other than dismissed (e.g. submitted, edited) without enqueueing', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request_review',
+      { action: 'submitted', review: { id: 1, state: 'approved' } },
+      { queue },
+    );
+    // Falls through to the comment-command parser, which sees no
+    // `comment.body` and treats it as 'ignored'.
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
 });

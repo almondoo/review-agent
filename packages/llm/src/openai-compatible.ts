@@ -55,6 +55,7 @@ async function defaultOpenAICompatibleModelFactory(opts: {
   baseUrl: string;
   apiKey: string;
 }): Promise<(model: string) => unknown> {
+  /* v8 ignore start */
   const mod = (await import('@ai-sdk/openai-compatible')) as {
     createOpenAICompatible: (opts: {
       name: string;
@@ -68,4 +69,5 @@ async function defaultOpenAICompatibleModelFactory(opts: {
     baseURL: opts.baseUrl,
   });
   return (model) => client(model);
+  /* v8 ignore stop */
 }

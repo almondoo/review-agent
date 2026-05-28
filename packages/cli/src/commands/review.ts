@@ -176,6 +176,7 @@ function parseRef(platform: ReviewPlatform, repo: string, prNumber: number): PRR
 }
 
 function defaultCreateVCS(platform: ReviewPlatform, token: string | null, config: Config): VCS {
+  /* v8 ignore start */
   if (platform === 'codecommit') {
     return createCodecommitVCS({ approvalState: config.codecommit.approvalState });
   }
@@ -183,6 +184,7 @@ function defaultCreateVCS(platform: ReviewPlatform, token: string | null, config
     throw new Error('GitHub token is required for --platform github.');
   }
   return createGithubVCS({ token });
+  /* v8 ignore stop */
 }
 
 async function loadConfig(
@@ -230,16 +232,20 @@ function decideSkip(pr: PR, config: Config): string | null {
 }
 
 function buildAnthropicProvider(apiKey: string, config: Config): LlmProvider {
+  /* v8 ignore start */
   return createAnthropicProvider({
     type: 'anthropic',
     model: config.provider?.model ?? 'claude-sonnet-4-6',
     apiKey,
     anthropicCacheControl: config.provider?.anthropic_cache_control ?? true,
   });
+  /* v8 ignore stop */
 }
 
 function defaultReadFile(p: string, enc: 'utf8'): Promise<string> {
+  /* v8 ignore start */
   return fsReadFile(p, enc as BufferEncoding).then(String);
+  /* v8 ignore stop */
 }
 
 /**

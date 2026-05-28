@@ -1263,8 +1263,21 @@ const octokit = new Octokit({ auth: token });
   codecommit:PostCommentForPullRequest
   codecommit:PostCommentReply
   codecommit:UpdatePullRequestApprovalState  # only if approval is configured
+  codecommit:ListPullRequests                # only if `recover feedback-history` is used (#110)
   ```
 - No long-lived AWS access keys in code or env. STS only.
+- **`recover feedback-history --platform codecommit`** requires
+  `--bot-arn <arn>` (#110 hardening). The recovery walk only lifts a
+  fingerprint from a parent comment whose `authorArn` equals this
+  principal; without the gate, a reviewer could plant a hand-crafted
+  comment carrying a fake fingerprint marker and launder arbitrary
+  text into `review_history` via a self-reply `/feedback` command.
+  Pass the worker's IAM role / user ARN.
+- **`review_history.repo` is keyed as `${installationId}/${repoName}`**
+  on CodeCommit (#110, migration 0004). The runtime substitutes the
+  numeric AWS account id for the empty owner segment so each tenant's
+  rows are uniquely keyed even when multiple installations share a
+  repo name across accounts.
 
 ### 8.5 BYOK (Anthropic API key)
 

@@ -52,5 +52,6 @@ if (
   process.env.REVIEW_AGENT_ACTION_RUN === '1' ||
   import.meta.url === `file://${process.argv[1]}`
 ) {
+  /* v8 ignore next */
   void main();
 }

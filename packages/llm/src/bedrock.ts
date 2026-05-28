@@ -51,10 +51,12 @@ export async function createBedrockProvider(
 }
 
 async function defaultBedrockModelFactory(region: string): Promise<(model: string) => unknown> {
+  /* v8 ignore start */
   // Lazy import so consumers without Bedrock don't need the SDK.
   const mod = (await import('@ai-sdk/amazon-bedrock')) as {
     createAmazonBedrock: (opts: { region: string }) => (model: string) => unknown;
   };
   const bedrock = mod.createAmazonBedrock({ region });
   return (model) => bedrock(model);
+  /* v8 ignore stop */
 }

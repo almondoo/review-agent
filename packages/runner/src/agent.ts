@@ -181,7 +181,7 @@ async function runReviewInner(
     try {
       rows = await deps.historyReader({
         installationId: deps.evalContext.installationId,
-        repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+        repo: normalizeRepoKey(job.prRepo, deps.evalContext.installationId),
         limit: MAX_LEARNED_FACTS,
       });
     } catch (err) {
@@ -516,7 +516,7 @@ export async function runReview(
       context: {
         installationId: deps.evalContext.installationId,
         jobId: job.jobId,
-        repo: `${job.prRepo.owner}/${job.prRepo.repo}`,
+        repo: normalizeRepoKey(job.prRepo, deps.evalContext.installationId),
         prNumber: deps.evalContext.prNumber,
         headSha: deps.evalContext.headSha,
       },
@@ -525,6 +525,27 @@ export async function runReview(
     await recordEvalEvent(recorderOpts, result, latencyMs);
   }
   return result;
+}
+
+/**
+ * v1.2 #110: produce the `(installation_id, repo)` key used to look
+ * up / write `review_history` and `review_eval_event` rows.
+ *
+ * GitHub PRs carry both `owner` and `repo`, so the key collapses to
+ * `${owner}/${repo}`. CodeCommit PRs have no owner-segment (`owner`
+ * is the empty string by adapter convention) — left unchanged that
+ * produces `/repo`, which is indistinguishable across installations
+ * sharing a repo name. Substituting the `installationId` (a numeric
+ * AWS account id for CodeCommit) gives the same shape as the GitHub
+ * form and isolates each tenant's rows from same-named repos in
+ * other accounts.
+ */
+function normalizeRepoKey(
+  prRepo: { readonly owner: string; readonly repo: string },
+  installationId: bigint,
+): string {
+  const owner = prRepo.owner === '' ? String(installationId) : prRepo.owner;
+  return `${owner}/${prRepo.repo}`;
 }
 
 function extractFingerprint(factText: string): string | null {

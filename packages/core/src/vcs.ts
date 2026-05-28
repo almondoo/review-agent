@@ -62,6 +62,15 @@ export type ExistingComment = {
   readonly body: string;
   readonly author: string;
   readonly createdAt: string;
+  /**
+   * v1.2 #110: parent comment id if the comment is a reply.
+   * CodeCommit threads `/feedback` replies via `inReplyTo`; GitHub
+   * exposes the same on `pull_request_review_comment.in_reply_to_id`.
+   * Optional because not every comment is a reply. CodeCommit
+   * recovery walks a `/feedback` reply back to its parent Bot
+   * comment (carrying the fingerprint marker — #96) via this field.
+   */
+  readonly inReplyTo?: string;
 };
 
 export type GetDiffOpts = {

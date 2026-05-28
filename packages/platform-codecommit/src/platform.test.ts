@@ -44,6 +44,16 @@ describe('codecommitPlatform — parseRef', () => {
   it('rejects refs with an empty repo segment', () => {
     expect(() => codecommitPlatform.parseRef('#42')).toThrow(/expected '<repo>#<number>'/);
   });
+
+  it('rejects an ARN ref whose trailing repo segment is empty', () => {
+    // `arn:aws:codecommit:us-east-1:123:` has a trailing colon → `split(':')`
+    // ends with an empty token, so the empty-repo guard fires. This is a
+    // different code path from the bare `#42` reject (which falls out of
+    // the `idx < 1` check earlier).
+    expect(() => codecommitPlatform.parseRef('arn:aws:codecommit:us-east-1:123:#5')).toThrow(
+      /Invalid CodeCommit repository name/,
+    );
+  });
 });
 
 describe('codecommitPlatform — registry registration', () => {
@@ -64,5 +74,15 @@ describe('codecommitPlatform — registry registration', () => {
     expect(vcs.platform).toBe('codecommit');
     expect(vcs.capabilities.clone).toBe(false);
     expect(vcs.capabilities.stateComment).toBe('postgres-only');
+  });
+
+  it('create(undefined) coalesces to the default options bag', () => {
+    // The `config ?? {}` fallback exists for callers that don't carry a
+    // CodeCommit-specific config block (e.g. operators experimenting
+    // with the platform registry before wiring options). Pin that the
+    // fallback yields the same default capabilities as `create({})`.
+    const vcs = codecommitPlatform.create(undefined);
+    expect(vcs.platform).toBe('codecommit');
+    expect(vcs.capabilities.approvalEvent).toBe('codecommit');
   });
 });

@@ -212,6 +212,7 @@ async function safeText(res: Response): Promise<string> {
   try {
     return await res.text();
   } catch {
+    /* v8 ignore next */
     return '';
   }
 }

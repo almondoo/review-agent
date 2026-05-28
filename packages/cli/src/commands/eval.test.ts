@@ -40,4 +40,19 @@ describe('runEvalCommand', () => {
     expect(result.exitCode).toBe(7);
     expect(io.err.join('')).toContain("'golden' exited with code 7");
   });
+
+  it('falls back to process.cwd() when no cwd option is provided', async () => {
+    // Drives the `opts.cwd ?? process.cwd()` default arm so a refactor that
+    // drops the fallback (e.g. requires `cwd` as a non-optional field) is
+    // caught by coverage instead of slipping through the type checker.
+    const io = recordingIo();
+    const runner = vi.fn(async (suite: string, opts: { cwd: string }) => {
+      expect(suite).toBe('golden');
+      expect(opts.cwd).toBe(process.cwd());
+      return 0;
+    });
+    const result = await runEvalCommand(io, { suite: 'golden', runner });
+    expect(result.exitCode).toBe(0);
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
 });

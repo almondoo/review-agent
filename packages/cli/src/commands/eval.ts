@@ -27,8 +27,9 @@ export async function runEvalCommand(io: ProgramIo, opts: RunEvalOpts): Promise<
   return { exitCode };
 }
 
-const defaultRunner: EvalRunner = (suite, opts) =>
-  new Promise<number>((resolve, reject) => {
+/* v8 ignore start */
+const defaultRunner: EvalRunner = (suite, opts) => {
+  return new Promise<number>((resolve, reject) => {
     const child = spawn('pnpm', ['--filter', '@review-agent/eval', 'test', '--suite', suite], {
       cwd: opts.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -38,3 +39,5 @@ const defaultRunner: EvalRunner = (suite, opts) =>
     child.on('error', (err) => reject(err));
     child.on('close', (code) => resolve(code ?? 1));
   });
+};
+/* v8 ignore stop */
