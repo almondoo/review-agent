@@ -284,6 +284,12 @@ export async function recoverFeedbackHistoryCommand(
   // Source candidates either from a JSONL file (GitHub) or from a
   // direct CodeCommit `/feedback` re-scrape (#110).
   let candidates: ReadonlyArray<RecoverFeedbackHistoryCandidate>;
+  // v1.2 #113: the codecommit branch may surface denied / silently
+  // skipped replies — when it does we downgrade the returned status
+  // to `'partial'` so operators running from cron and checking only
+  // `$?` get a distinct signal from a clean "no feedback" run.
+  // The GitHub branch leaves this `false` (no allowlist gate runs).
+  let downgradeToPartial = false;
   // Default DB key matches the GitHub convention (`owner/repo`). The
   // CodeCommit branch overrides this with `${installationId}/${repoName}`
   // — a wrong-account `--repo wrong/foo` therefore cannot shadow the
@@ -341,10 +347,24 @@ export async function recoverFeedbackHistoryCommand(
         );
       }
     }
+    const feedbackAllowlistRaw = opts.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST ?? '';
+    const feedbackAllowlist = feedbackAllowlistRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (feedbackAllowlist.length === 0) {
+      io.stderr(
+        'warning: REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset; every recovered ' +
+          '/feedback reply will be counted as unauthorized (fail-closed). ' +
+          'Set the env to the same CSV used by the live webhook to recover ' +
+          'authorized replies.\n',
+      );
+    }
     const scrape = await scrapeCodeCommitFeedback({
       client,
       repositoryName: repoName,
       botArn: opts.botArn,
+      feedbackAllowlist,
       ...(sinceDate ? { sinceDate } : {}),
       ...(opts.onlyPr !== undefined ? { onlyPr: opts.onlyPr } : {}),
       delayMs,
@@ -354,8 +374,37 @@ export async function recoverFeedbackHistoryCommand(
       `codecommit re-scrape: walked ${scrape.stats.prsWalked} PR(s), ` +
         `${scrape.stats.commentsSeen} comments, ` +
         `${scrape.stats.feedbackCommandsSeen} /feedback commands found, ` +
-        `${scrape.stats.resolved} resolved, ${scrape.stats.unresolved} unresolved (skipped).\n`,
+        `${scrape.stats.resolved} resolved, ${scrape.stats.unresolved} unresolved (skipped), ` +
+        `${scrape.stats.unauthorized} unauthorized (denied by allowlist).\n`,
     );
+    // v1.2 #113: surface `'partial'` for two distinct conditions so cron
+    // callers checking `$?` get a non-zero exit:
+    //   (1) `unauthorized > 0` — the allowlist rejected at least one
+    //       reply that actually reached the authz gate. This is the
+    //       direct security signal: replies that would have landed in
+    //       review_history under #110's old behaviour did not.
+    //   (2) `feedbackAllowlist.length === 0 && feedbackCommandsSeen > 0`
+    //       — `REVIEW_AGENT_FEEDBACK_ALLOWLIST` is unset and the scrape
+    //       observed at least one `/feedback` command. Even when every
+    //       command exited via an earlier gate (and `unauthorized` is 0),
+    //       the run is treated as `'partial'` because the operator's
+    //       cron-time configuration is incomplete and a future re-run
+    //       with the env set could recover authorized replies. The two
+    //       arms are independent; (2) is NOT a superset of (1).
+    if (scrape.stats.unauthorized > 0) {
+      downgradeToPartial = true;
+      io.stdout(
+        `note: ${scrape.stats.unauthorized} reply/replies were denied by ` +
+          `REVIEW_AGENT_FEEDBACK_ALLOWLIST; run status reported as 'partial'.\n`,
+      );
+    } else if (feedbackAllowlist.length === 0 && scrape.stats.feedbackCommandsSeen > 0) {
+      downgradeToPartial = true;
+      io.stdout(
+        `note: REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset and ` +
+          `${scrape.stats.feedbackCommandsSeen} /feedback command(s) were seen; ` +
+          `run status reported as 'partial' (set the env to recover authorized replies).\n`,
+      );
+    }
   } else {
     if (!opts.candidatesFile) {
       io.stderr('recover feedback-history --platform github requires --candidates-file <path>.\n');
@@ -383,7 +432,11 @@ export async function recoverFeedbackHistoryCommand(
         (opts.dryRun ? ' (dry-run; no inserts)' : '') +
         '\n',
     );
-    return result;
+    // v1.2 #113: see `downgradeToPartial` rationale upstream. The
+    // helper itself only ever returns 'ok'; we layer the partial
+    // status here so operators get a non-zero exit signal when the
+    // codecommit branch denied any reply.
+    return downgradeToPartial ? { ...result, status: 'partial' } : result;
   } finally {
     await close();
   }

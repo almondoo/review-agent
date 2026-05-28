@@ -7,6 +7,7 @@ import type { RecoverFeedbackHistoryCandidate } from '@review-agent/db';
 import {
   type CodeCommitClientLike,
   type CodeCommitRawComment,
+  checkCodeCommitFeedbackAuthz,
   listCodeCommitCommentsForPullRequest,
   listCodeCommitPullRequestIds,
 } from '@review-agent/platform-codecommit';
@@ -49,6 +50,18 @@ export type ScrapeCodeCommitFeedbackOpts = {
    * marker and laundering it into `review_history`.
    */
   readonly botArn: string;
+  /**
+   * v1.2 #113: operator-managed allowlist of IAM principal ARNs whose
+   * `/feedback` replies are recoverable. Mirrors the runtime webhook
+   * gate (`packages/server/src/handlers/codecommit-webhook.ts:347-365`)
+   * so that recovery cannot silently re-promote replies that the live
+   * authz check would have denied.
+   *
+   * Fail-closed: an empty array denies every reply (treated as
+   * `unauthorized`). The CLI layer is responsible for parsing
+   * `REVIEW_AGENT_FEEDBACK_ALLOWLIST` (CSV) into this array.
+   */
+  readonly feedbackAllowlist: ReadonlyArray<string>;
   readonly pullRequestStatus?: 'OPEN' | 'CLOSED' | 'ALL';
   readonly sinceDate?: Date;
   readonly onlyPr?: number;
@@ -63,6 +76,14 @@ export type ScrapeCodeCommitFeedbackResult = {
     readonly commentsSeen: number;
     readonly feedbackCommandsSeen: number;
     readonly unresolved: number;
+    /**
+     * v1.2 #113: `/feedback` replies whose author ARN is not on
+     * `feedbackAllowlist` (or whose `authorArn` is undefined — also
+     * fail-closed). Tracked separately from `unresolved` so the
+     * operator can distinguish missing/malformed data from
+     * security-denied attempts.
+     */
+    readonly unauthorized: number;
     readonly resolved: number;
   };
 };
@@ -121,6 +142,7 @@ export async function scrapeCodeCommitFeedback(
   let commentsSeen = 0;
   let feedbackCommandsSeen = 0;
   let unresolved = 0;
+  let unauthorized = 0;
   const candidates: RecoverFeedbackHistoryCandidate[] = [];
 
   for (const prId of prIds) {
@@ -162,6 +184,20 @@ export async function scrapeCodeCommitFeedback(
         unresolved += 1;
         continue;
       }
+      // v1.2 #113: gate the reply author against the same allowlist
+      // the live webhook (codecommit-webhook.ts:347-351) consults.
+      // Without this, an attacker whose webhook /feedback replies
+      // were denied at runtime can still get them silently promoted
+      // into review_history when the operator runs the recovery CLI.
+      // Fail-closed on missing authorArn (treat as unauthorized).
+      const authz = checkCodeCommitFeedbackAuthz({
+        principalId: c.authorArn ?? '',
+        allowlistEnv: opts.feedbackAllowlist.join(','),
+      });
+      if (!authz.allowed) {
+        unauthorized += 1;
+        continue;
+      }
       const fp = extractFingerprintFromComment(parent.content);
       if (!fp) {
         unresolved += 1;
@@ -192,6 +228,7 @@ export async function scrapeCodeCommitFeedback(
       commentsSeen,
       feedbackCommandsSeen,
       unresolved,
+      unauthorized,
       resolved: candidates.length,
     },
   };

@@ -478,6 +478,9 @@ importers:
       '@review-agent/db':
         specifier: workspace:*
         version: link:../db
+      '@review-agent/platform-codecommit':
+        specifier: workspace:*
+        version: link:../platform-codecommit
       drizzle-orm:
         specifier: '>=0.45.2'
         version: 0.45.2(@libsql/client-wasm@0.17.3)(@opentelemetry/api@1.9.0)(better-sqlite3@11.10.0)(postgres@3.4.5)

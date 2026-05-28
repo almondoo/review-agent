@@ -77,6 +77,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(1);
@@ -116,6 +117,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     // feedbackKindToFactType collapses thumbs_down + dismissed into
@@ -138,6 +140,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(0);
@@ -163,6 +166,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(0);
@@ -207,6 +211,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sinceDate: new Date('2026-05-10T00:00:00Z'),
       sleep: async () => undefined,
     });
@@ -235,6 +240,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       onlyPr: 101,
       sleep: async () => undefined,
     });
@@ -259,6 +265,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     // parseFeedbackKind returns null → the command is not counted as
@@ -278,6 +285,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       pullRequestStatus: 'OPEN',
       sleep: async () => undefined,
     });
@@ -298,6 +306,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep,
       delayMs: 250,
     });
@@ -342,6 +351,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(0);
@@ -382,6 +392,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sinceDate: new Date('2026-05-10T00:00:00Z'),
       sleep: async () => undefined,
     });
@@ -413,6 +424,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(0);
@@ -450,6 +462,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(0);
@@ -484,6 +497,7 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
       client,
       repositoryName: 'demo',
       botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
       sleep: async () => undefined,
     });
     expect(result.candidates).toHaveLength(1);
@@ -492,5 +506,116 @@ describe('scrapeCodeCommitFeedback (#110)', () => {
     expect(factText).toBe(`[fp:${fp}] codecommit-recover dismissed at ${ts.toISOString()}`);
     expect(factText.includes('ignore previous instructions')).toBe(false);
     expect(factText.includes('AKIA')).toBe(false);
+  });
+});
+
+describe('scrapeCodeCommitFeedback (#113 allowlist gate)', () => {
+  const buildResolvableSeed = () => {
+    const fp = fingerprint({
+      path: 'src/h.ts',
+      line: 1,
+      ruleId: 'sql-injection',
+      suggestionType: 'comment',
+    });
+    return {
+      fp,
+      seed: {
+        prIds: ['51'],
+        commentsByPr: {
+          '51': [
+            {
+              commentId: 'p',
+              content: appendFingerprintMarker('finding', fp),
+              authorArn: BOT_ARN,
+              creationDate: new Date('2026-05-01T00:00:00Z'),
+            },
+            {
+              commentId: 'fb',
+              content: '/feedback reject',
+              inReplyTo: 'p',
+              authorArn: OTHER_ARN,
+              creationDate: new Date('2026-05-02T00:00:00Z'),
+            },
+          ],
+        },
+      },
+    };
+  };
+
+  it('records the reply when the author is on the allowlist', async () => {
+    const { seed } = buildResolvableSeed();
+    const client = makeClient(seed);
+    const result = await scrapeCodeCommitFeedback({
+      client,
+      repositoryName: 'demo',
+      botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN],
+      sleep: async () => undefined,
+    });
+    expect(result.candidates).toHaveLength(1);
+    expect(result.stats.unauthorized).toBe(0);
+  });
+
+  it('counts the reply as unauthorized (not recorded) when the author is not on the allowlist', async () => {
+    const { seed } = buildResolvableSeed();
+    const client = makeClient(seed);
+    const result = await scrapeCodeCommitFeedback({
+      client,
+      repositoryName: 'demo',
+      botArn: BOT_ARN,
+      feedbackAllowlist: ['arn:aws:iam::123456789012:user/eve'],
+      sleep: async () => undefined,
+    });
+    expect(result.candidates).toHaveLength(0);
+    expect(result.stats.unauthorized).toBe(1);
+    expect(result.stats.unresolved).toBe(0);
+    expect(result.stats.feedbackCommandsSeen).toBe(1);
+  });
+
+  it('counts the reply as unauthorized when authorArn is missing (fail-closed)', async () => {
+    const fp = fingerprint({
+      path: 'src/i.ts',
+      line: 1,
+      ruleId: 'sql-injection',
+      suggestionType: 'comment',
+    });
+    const client = makeClient({
+      prIds: ['53'],
+      commentsByPr: {
+        '53': [
+          {
+            commentId: 'p',
+            content: appendFingerprintMarker('finding', fp),
+            authorArn: BOT_ARN,
+          },
+          // Reply omits authorArn entirely. Fail-closed: treat as
+          // unauthorized rather than as a valid /feedback signal.
+          { commentId: 'fb', content: '/feedback reject', inReplyTo: 'p' },
+        ],
+      },
+    });
+    const result = await scrapeCodeCommitFeedback({
+      client,
+      repositoryName: 'demo',
+      botArn: BOT_ARN,
+      feedbackAllowlist: [OTHER_ARN], // would allow OTHER_ARN, but reply has no authorArn
+      sleep: async () => undefined,
+    });
+    expect(result.candidates).toHaveLength(0);
+    expect(result.stats.unauthorized).toBe(1);
+  });
+
+  it('fails closed when the allowlist is empty (every reply counted as unauthorized)', async () => {
+    const { seed } = buildResolvableSeed();
+    const client = makeClient(seed);
+    const result = await scrapeCodeCommitFeedback({
+      client,
+      repositoryName: 'demo',
+      botArn: BOT_ARN,
+      feedbackAllowlist: [], // unset env path
+      sleep: async () => undefined,
+    });
+    expect(result.candidates).toHaveLength(0);
+    expect(result.stats.unauthorized).toBe(1);
   });
 });

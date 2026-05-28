@@ -260,7 +260,9 @@ DATABASE_URL=... review-agent recover feedback-history \
 #     its parent Bot comment via inReplyTo and #96's fingerprint
 #     marker. Unresolved /feedback (no inReplyTo, parent authored
 #     by a non-Bot principal, or parent has no marker — typically
-#     pre-#96 comments) are skipped and counted.
+#     pre-#96 comments) are skipped and counted. Allowlist-denied
+#     replies are counted separately under `unauthorized` (see the
+#     SECURITY block below).
 #     IAM: requires codecommit:ListPullRequests in addition to the
 #     standard worker permissions.
 #
@@ -271,6 +273,17 @@ DATABASE_URL=... review-agent recover feedback-history \
 #       review_history by self-replying /feedback to a hand-crafted
 #       parent comment. Use the IAM role / user ARN that posts Bot
 #       comments through PostCommentForPullRequest.
+#
+#       --feedback-allowlist via env (NEW v1.2 #113):
+#        REVIEW_AGENT_FEEDBACK_ALLOWLIST must be set to the same CSV of
+#        IAM principal ARNs the live webhook consults
+#        (packages/server/src/handlers/codecommit-webhook.ts:347-351).
+#        Replies whose author ARN is not on the allowlist — or whose
+#        author ARN is missing — are counted under `unauthorized` in
+#        the run summary and NEVER promoted into review_history. This
+#        closes the gap where #110's recovery walk silently re-promoted
+#        replies that the live webhook would have denied. Fail-closed:
+#        an unset / empty env counts every reply as unauthorized.
 #
 #       --repo accepts `<name>` or `<owner>/<name>`. Regardless of
 #       the operator-supplied owner prefix, the DB key is always
@@ -283,6 +296,7 @@ DATABASE_URL=... review-agent recover feedback-history \
 #
 #       --pr is parsed strictly; `--pr 100abc` is rejected up-front
 #       rather than silently coerced to 100.
+REVIEW_AGENT_FEEDBACK_ALLOWLIST='arn1,arn2' \
 AWS_REGION=... DATABASE_URL=... review-agent recover feedback-history \
   --installation-id <id> \
   --repo <repository-name> \

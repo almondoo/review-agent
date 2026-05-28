@@ -1,9 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  type CollaboratorPermissionGetter,
-  checkCodeCommitFeedbackAuthz,
-  checkGithubFeedbackAuthz,
-} from './feedback-authz.js';
+import { describe, expect, it, vi } from 'vitest';
+import { type CollaboratorPermissionGetter, checkGithubFeedbackAuthz } from './feedback-authz.js';
 
 function makeOctokit(getter: CollaboratorPermissionGetter) {
   return {
@@ -109,72 +105,5 @@ describe('checkGithubFeedbackAuthz', () => {
   });
 });
 
-describe('checkCodeCommitFeedbackAuthz', () => {
-  const ORIGINAL_ENV = process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST;
-
-  beforeEach(() => {
-    delete process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST;
-  });
-
-  afterEach(() => {
-    if (ORIGINAL_ENV === undefined) {
-      delete process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST;
-    } else {
-      process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST = ORIGINAL_ENV;
-    }
-  });
-
-  it('denies when allowlistEnv is unset (fail-closed)', () => {
-    const r = checkCodeCommitFeedbackAuthz({ principalId: 'AIDAEXAMPLE' });
-    expect(r.allowed).toBe(false);
-    expect(r.reason).toMatch(/fail-closed/);
-  });
-
-  it('denies when allowlistEnv is empty string (fail-closed)', () => {
-    const r = checkCodeCommitFeedbackAuthz({
-      principalId: 'AIDAEXAMPLE',
-      allowlistEnv: '',
-    });
-    expect(r.allowed).toBe(false);
-  });
-
-  it('allows when the principal is on the allowlist (single entry)', () => {
-    const r = checkCodeCommitFeedbackAuthz({
-      principalId: 'AIDAEXAMPLE',
-      allowlistEnv: 'AIDAEXAMPLE',
-    });
-    expect(r).toEqual({ allowed: true });
-  });
-
-  it('allows when the principal is on the allowlist (CSV with spaces)', () => {
-    const r = checkCodeCommitFeedbackAuthz({
-      principalId: 'AIDABOB',
-      allowlistEnv: 'AIDAALICE, AIDABOB ,AIDACAROL',
-    });
-    expect(r.allowed).toBe(true);
-  });
-
-  it('denies when the principal is not on the allowlist', () => {
-    const r = checkCodeCommitFeedbackAuthz({
-      principalId: 'AIDAEVE',
-      allowlistEnv: 'AIDAALICE,AIDABOB',
-    });
-    expect(r.allowed).toBe(false);
-    expect(r.reason).toMatch(/not on/);
-  });
-
-  it('denies when the principalId is empty (defensive)', () => {
-    const r = checkCodeCommitFeedbackAuthz({
-      principalId: '',
-      allowlistEnv: 'AIDAALICE',
-    });
-    expect(r.allowed).toBe(false);
-    expect(r.reason).toMatch(/missing principalId/);
-  });
-
-  it('reads from process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST when allowlistEnv is unset', () => {
-    process.env.REVIEW_AGENT_FEEDBACK_ALLOWLIST = 'AIDAALICE,AIDABOB';
-    const r = checkCodeCommitFeedbackAuthz({ principalId: 'AIDABOB' });
-    expect(r.allowed).toBe(true);
-  });
-});
+// `checkCodeCommitFeedbackAuthz` lives in `@review-agent/platform-codecommit`
+// (v1.2 #113); its unit tests are in `packages/platform-codecommit/src/authz.test.ts`.

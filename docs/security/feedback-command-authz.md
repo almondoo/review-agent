@@ -31,7 +31,7 @@ asymmetry.
 | Platform | Check |
 |---|---|
 | **GitHub** | `octokit.rest.repos.getCollaboratorPermissionLevel({owner, repo, username})` → `permission ∈ {'admin', 'maintain', 'write'}`. `read` and `triage` are denied. |
-| **CodeCommit** | CSV allowlist in `REVIEW_AGENT_FEEDBACK_ALLOWLIST` env, matched against the SNS event's `userIdentity.principalId`. |
+| **CodeCommit** | CSV allowlist in `REVIEW_AGENT_FEEDBACK_ALLOWLIST` env, matched against the SNS event's `userIdentity.principalId`. Same allowlist gates `review-agent recover feedback-history --platform codecommit` (v1.2 #113); recovery cannot re-promote replies that the live webhook would have denied. |
 
 `'admin'`, `'maintain'`, `'write'` are GitHub's three "push-equivalent"
 permission tiers — they correspond to `repos.pushedToBranch`

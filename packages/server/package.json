@@ -45,6 +45,7 @@
     "@opentelemetry/semantic-conventions": "1.28.0",
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",
+    "@review-agent/platform-codecommit": "workspace:*",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.16",
     "zod": "3.25.76"

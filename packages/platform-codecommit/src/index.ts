@@ -9,6 +9,11 @@ export {
   listCodeCommitPullRequestIds,
 } from './adapter.js';
 export {
+  type CodeCommitAuthzInput,
+  checkCodeCommitFeedbackAuthz,
+  type FeedbackAuthzResult,
+} from './authz.js';
+export {
   CODECOMMIT_PLATFORM_ID,
   codecommitPlatform,
 } from './platform.js';

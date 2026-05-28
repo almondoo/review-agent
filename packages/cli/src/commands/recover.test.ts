@@ -1,4 +1,9 @@
-import type { ReviewState, VCS } from '@review-agent/core';
+import {
+  appendFingerprintMarker,
+  fingerprint,
+  type ReviewState,
+  type VCS,
+} from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   recoverFeedbackHistoryCommand,
@@ -436,6 +441,231 @@ describe('recoverFeedbackHistoryCommand (#105)', () => {
     expect(result.candidates).toBe(0);
     expect(io.err.join('')).toContain('--since must be');
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it('--platform codecommit warns when REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset (#113 fail-closed)', async () => {
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string } }) => {
+        if (cmd.constructor.name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: [] };
+        }
+        throw new Error(`Unmocked SDK command: ${cmd.constructor.name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'review-agent',
+      installationId: 1n,
+      // No REVIEW_AGENT_FEEDBACK_ALLOWLIST in env → fail-closed warning path.
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      botArn: 'arn:aws:iam::1:role/review-agent-bot',
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    expect(result.status).toBe('ok');
+    expect(io.err.join('')).toContain('REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset');
+    // Run summary now carries the new `unauthorized` counter.
+    expect(io.out.join('')).toContain('0 unauthorized (denied by allowlist)');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('--platform codecommit does NOT warn when REVIEW_AGENT_FEEDBACK_ALLOWLIST is set (#113)', async () => {
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string } }) => {
+        if (cmd.constructor.name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: [] };
+        }
+        throw new Error(`Unmocked SDK command: ${cmd.constructor.name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'review-agent',
+      installationId: 1n,
+      env: {
+        DATABASE_URL: 'postgres://x',
+        REVIEW_AGENT_FEEDBACK_ALLOWLIST: 'arn:aws:iam::1:user/alice',
+      } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      botArn: 'arn:aws:iam::1:role/review-agent-bot',
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    expect(result.status).toBe('ok');
+    expect(io.err.join('')).not.toContain('REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('--platform codecommit downgrades status to partial when allowlist denies a reply (#113)', async () => {
+    // Seed a /feedback reply whose parent has a valid marker + Bot ARN,
+    // but the reply's authorArn is NOT on REVIEW_AGENT_FEEDBACK_ALLOWLIST.
+    // The scrape should count it under `unauthorized`, surface the
+    // 'partial' status to operators (so cron callers branching on `$?`
+    // detect the silent deny), and emit the new note line on stdout.
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    const BOT_ARN = 'arn:aws:iam::1:role/review-agent-bot';
+    const EVE_ARN = 'arn:aws:iam::1:user/eve';
+    const ALICE_ARN = 'arn:aws:iam::1:user/alice';
+    const fp = fingerprint({
+      path: 'src/a.ts',
+      line: 1,
+      ruleId: 'sql-injection',
+      suggestionType: 'comment',
+    });
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input?: unknown }) => {
+        const name = cmd.constructor.name;
+        if (name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: ['7'] };
+        }
+        if (name === 'GetCommentsForPullRequestCommand') {
+          return {
+            commentsForPullRequestData: [
+              {
+                comments: [
+                  {
+                    commentId: 'parent',
+                    content: appendFingerprintMarker('finding', fp),
+                    authorArn: BOT_ARN,
+                    creationDate: new Date('2026-05-01T00:00:00Z'),
+                  },
+                  {
+                    commentId: 'reply',
+                    content: '/feedback reject',
+                    inReplyTo: 'parent',
+                    authorArn: EVE_ARN, // NOT on allowlist
+                    creationDate: new Date('2026-05-02T00:00:00Z'),
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        throw new Error(`Unmocked SDK command: ${name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'review-agent',
+      installationId: 1n,
+      env: {
+        DATABASE_URL: 'postgres://x',
+        REVIEW_AGENT_FEEDBACK_ALLOWLIST: ALICE_ARN,
+      } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      botArn: BOT_ARN,
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    // The scrape stats reach stdout in the summary line.
+    expect(io.out.join('')).toContain('1 unauthorized (denied by allowlist)');
+    // The new note line is appended after the summary.
+    expect(io.out.join('')).toContain(
+      "REVIEW_AGENT_FEEDBACK_ALLOWLIST; run status reported as 'partial'",
+    );
+    // Status downgraded so `program.ts` can exit non-zero.
+    expect(result.status).toBe('partial');
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('--platform codecommit downgrades to partial when allowlist is unset and /feedback commands were seen but unauthorized=0 (#113 second-arm)', async () => {
+    // Drives the second `else if` arm of the partial-downgrade trigger
+    // (allowlist unset + feedbackCommandsSeen > 0) with `unauthorized === 0`.
+    // The reply bumps `feedbackCommandsSeen++` at the top of the loop in
+    // `scrapeCodeCommitFeedback` and then exits via the `parentId === undefined`
+    // gate, so it never reaches the authz check — `unauthorized` stays at 0.
+    // The new branch-specific note line must mention the unset-env condition
+    // and NOT the misleading "0 reply/replies were denied" wording.
+    const io = recordingIo();
+    const close = vi.fn(async () => undefined);
+    const BOT_ARN = 'arn:aws:iam::1:role/review-agent-bot';
+    const codecommitClient = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input?: unknown }) => {
+        const name = cmd.constructor.name;
+        if (name === 'ListPullRequestsCommand') {
+          return { pullRequestIds: ['9'] };
+        }
+        if (name === 'GetCommentsForPullRequestCommand') {
+          return {
+            commentsForPullRequestData: [
+              {
+                comments: [
+                  {
+                    commentId: 'orphan',
+                    content: '/feedback reject',
+                    // No `inReplyTo` → exits early via the `parentId === undefined`
+                    // gate, after the `feedbackCommandsSeen++` increment.
+                    authorArn: 'arn:aws:iam::1:user/anyone',
+                    creationDate: new Date('2026-05-02T00:00:00Z'),
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        throw new Error(`Unmocked SDK command: ${name}`);
+      }),
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed SDK client
+    } as any;
+    const fakeDb = {
+      transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(fakeDb),
+      execute: vi.fn(async () => []),
+      select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      insert: () => ({ values: vi.fn(async () => undefined) }),
+    };
+    const result = await recoverFeedbackHistoryCommand(io, {
+      repo: 'review-agent',
+      installationId: 1n,
+      // REVIEW_AGENT_FEEDBACK_ALLOWLIST intentionally unset.
+      env: { DATABASE_URL: 'postgres://x' } as NodeJS.ProcessEnv,
+      platform: 'codecommit',
+      botArn: BOT_ARN,
+      dryRun: true,
+      codecommitClient,
+      // biome-ignore lint/suspicious/noExplicitAny: stubbed DB client
+      createDb: () => ({ db: fakeDb as any, close }),
+    });
+    // Stats: command was seen but never reached the authz gate.
+    expect(io.out.join('')).toContain('1 /feedback commands found');
+    expect(io.out.join('')).toContain('0 unauthorized (denied by allowlist)');
+    // New branch-specific note: must mention the unset-env condition AND the
+    // observed feedback-command count, NOT the misleading "denied by allowlist"
+    // wording that the first arm uses.
+    expect(io.out.join('')).toContain('REVIEW_AGENT_FEEDBACK_ALLOWLIST is unset');
+    expect(io.out.join('')).toContain('1 /feedback command(s) were seen');
+    expect(io.out.join('')).not.toContain('0 reply/replies were denied');
+    expect(result.status).toBe('partial');
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('--rate Infinity warns and falls back to the 500ms default (codecommit)', async () => {

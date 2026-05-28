@@ -41,7 +41,25 @@ export type RecoverFeedbackHistoryOpts = {
 };
 
 export type RecoverFeedbackHistoryResult = {
-  readonly status: 'ok';
+  /**
+   * `'ok'`: clean run — every observed `/feedback` reply either resolved
+   * to a candidate or was skipped for a benign reason (unresolved /
+   * orphaned / pre-marker).
+   *
+   * `'partial'` (v1.2 #113): the CLI downgrades to `'partial'` when the
+   * CodeCommit branch surfaces a non-clean recovery — either
+   * `scrape.stats.unauthorized > 0` (the allowlist denied at least one
+   * reply that reached the authz gate), or the operator forgot to set
+   * `REVIEW_AGENT_FEEDBACK_ALLOWLIST` while at least one `/feedback`
+   * command was observed (incomplete cron-time configuration; a future
+   * re-run with the env set could recover authorized replies). The two
+   * arms are independent — the second can fire with `unauthorized === 0`
+   * when every command exited via an earlier gate. Lets cron callers
+   * checking `$?` distinguish "no feedback" from "feedback present but
+   * silently denied or unrecoverable". The helper itself only ever
+   * returns `'ok'`; the downgrade is layered on by the CLI.
+   */
+  readonly status: 'ok' | 'partial';
   readonly candidates: number;
   readonly recovered: number;
   readonly skippedExisting: number;
