@@ -1,8 +1,11 @@
 packages:
   - "packages/*"
 
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  esbuild: true
+  "@playwright/browser-chromium": false
+  better-sqlite3: false
+  protobufjs: false
 
 overrides:
   drizzle-orm: ">=0.45.2"
