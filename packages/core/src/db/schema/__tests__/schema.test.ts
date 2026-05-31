@@ -4,6 +4,8 @@ import { auditLog } from '../audit-log.js';
 import { installationSecrets } from '../byok-store.js';
 import { costLedger, installationCostDaily } from '../cost-ledger.js';
 import { installationTokens } from '../installation-tokens.js';
+import { repos } from '../repos.js';
+import { reviewEvalEvent } from '../review-eval-event.js';
 import { reviewHistory } from '../review-history.js';
 import { reviewState } from '../review-state.js';
 import { webhookDeliveries } from '../webhook-deliveries.js';
@@ -92,6 +94,59 @@ describe('db schema shape', () => {
   // §16.1 — every tenant-scoped table must enable RLS and install the
   // tenant_isolation policy keyed on review_agent_app + the
   // app.current_tenant GUC.
+  it('repos covers required columns and has no RLS (no installation_id)', () => {
+    const cfg = getTableConfig(repos);
+    expect(cfg.name).toBe('repos');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'id',
+      'platform',
+      'name',
+      'enabled',
+      'system_prompt',
+      'system_prompt_updated_at',
+      'created_at',
+      'updated_at',
+      'deleted_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+    const pk = cfg.columns.find((c) => c.name === 'id');
+    expect(pk?.primary).toBe(true);
+    expect(cfg.enableRLS).toBe(false);
+    expect(cfg.policies).toEqual([]);
+  });
+
+  it('review_eval_event covers required columns', () => {
+    const cfg = getTableConfig(reviewEvalEvent);
+    expect(cfg.name).toBe('review_eval_event');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'id',
+      'installation_id',
+      'job_id',
+      'repo',
+      'pr_number',
+      'head_sha',
+      'provider',
+      'model',
+      'comment_count',
+      'severity_dist',
+      'confidence_dist',
+      'dropped_duplicates',
+      'dropped_by_feedback',
+      'tool_calls',
+      'latency_ms',
+      'cost_usd',
+      'tokens_input',
+      'tokens_output',
+      'abort_reason',
+      'created_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+  });
+
   const tenantScoped = [
     ['review_state', reviewState],
     ['review_history', reviewHistory],
@@ -100,6 +155,7 @@ describe('db schema shape', () => {
     ['installation_tokens', installationTokens],
     ['audit_log', auditLog],
     ['installation_secrets', installationSecrets],
+    ['review_eval_event', reviewEvalEvent],
   ] as const;
 
   for (const [name, table] of tenantScoped) {
