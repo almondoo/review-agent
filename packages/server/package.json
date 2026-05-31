@@ -29,7 +29,7 @@
   ],
   "scripts": {
     "build": "tsup",
-    "dev": "tsx --env-file=.env.local watch src/dev.ts",
+    "dev": "tsx watch --env-file=.env.local src/dev.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
