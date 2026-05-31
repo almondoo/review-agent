@@ -54,7 +54,7 @@ When the spec and an issue disagree, the spec wins. When the spec is silent,
 - **Language**: TypeScript 5.6.3, ESM-only, strict + `noUncheckedIndexedAccess`
   + `exactOptionalPropertyTypes` + `verbatimModuleSyntax` + NodeNext.
 - **Runtime**: Node.js 24.14.x LTS.
-- **Package manager**: pnpm 10.33.0 workspace monorepo. Lockfile committed.
+- **Package manager**: pnpm 11.5.0 workspace monorepo. Lockfile committed.
 - **Lint + format**: Biome 2.x (single tool, no ESLint, no Prettier).
 - **Test**: Vitest 3.x + v8 coverage. Branches threshold: 90% per package. Lines/functions/statements per-package thresholds vary — see each package's `vitest.config.ts`.
 - **Build**: tsup 8.x — ESM + CJS dual output with `.d.ts` per package.

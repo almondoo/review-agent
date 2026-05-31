@@ -1,2 +1,20 @@
 packages:
   - "packages/*"
+
+allowBuilds:
+  esbuild: true
+  "@playwright/browser-chromium": false
+  better-sqlite3: false
+  protobufjs: false
+
+overrides:
+  drizzle-orm: ">=0.45.2"
+  "@tootallnate/once": ">=3.0.1"
+  tmp: ">=0.2.4"
+  fast-xml-parser: ">=5.7.0"
+  esbuild: ">=0.25.0"
+  mathjs: ">=15.2.0"
+  undici: ">=6.24.0"
+  uuid: ">=14.0.0"
+  jsondiffpatch: ">=0.7.2"
+  vite: ">=7.3.2 <8"

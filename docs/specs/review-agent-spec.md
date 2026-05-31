@@ -56,7 +56,7 @@ Build a self-hostable, OSS, AI code review agent that:
 |---|---|---|
 | Language | TypeScript 5.6+ | Strict mode, ESM only. |
 | Runtime | Node.js 24.15.0 LTS | Supported through 2028-04. Don't add Bun support yet. |
-| Package manager | pnpm 10.x | Workspaces. `packageManager` field pinned. |
+| Package manager | pnpm 11.x | Workspaces. `packageManager` field pinned. |
 | Repo structure | pnpm workspaces monorepo | Single repo, multiple packages. No Turborepo. |
 | Lint + Format | Biome 2.x | Single tool. No ESLint/Prettier. |
 | Test runner | Vitest 2.x | Both unit and integration. |
@@ -388,7 +388,7 @@ services:
       POSTGRES_USER: review
       POSTGRES_PASSWORD: review
       POSTGRES_DB: review_agent
-    ports: ["5432:5432"]
+    ports: ["5435:5432"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/dev-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -452,7 +452,7 @@ ANTHROPIC_API_KEY=sk-ant-...           # or OPENAI_API_KEY, GOOGLE_GENERATIVE_AI
 REVIEW_AGENT_LANGUAGE=en-US
 
 # --- Backing services -----------------------------------------------------
-DATABASE_URL=postgres://review:review@localhost:5432/review_agent
+DATABASE_URL=postgres://review:review@localhost:5435/review_agent
 QUEUE_URL=http://localhost:9324/000000000000/jobs
 
 # --- GitHub auth ---------------------------------------------------------
@@ -509,7 +509,7 @@ pnpm dev                               # all packages in watch mode
 **Native deps required on host:**
 
 - Node.js 24 LTS (we recommend `fnm` or `volta` for version management).
-- pnpm 10.x (`corepack enable`).
+- pnpm 11.x (`corepack enable`).
 - `git` 2.40+ (for sparse-checkout / partial clone).
 - `gitleaks` 8.x — required if running secret-scan code paths locally.
   CONTRIBUTING.md links to install instructions per OS. CI uses the

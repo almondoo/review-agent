@@ -1,4 +1,8 @@
-CREATE ROLE "review_agent_app";--> statement-breakpoint
+DO $$ BEGIN
+	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'review_agent_app') THEN
+		CREATE ROLE "review_agent_app";
+	END IF;
+END $$;--> statement-breakpoint
 CREATE TABLE "audit_log" (
 	"id" bigserial PRIMARY KEY NOT NULL,
 	"ts" timestamp with time zone DEFAULT now() NOT NULL,

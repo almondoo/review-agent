@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 .PHONY: help setup install dev dev-mock dev-web dev-server build typecheck lint test test-coverage clean \
-        db-up db-down db-logs db-migrate dev-stack
+        db-up db-down db-logs db-migrate dev-stack dev-full
 
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -44,7 +44,7 @@ db-up: ## Start Postgres + ElasticMQ via docker-compose.dev.yml
 	docker compose -f docker-compose.dev.yml up -d
 	@echo "[dev] waiting for Postgres to be healthy..."
 	@until docker compose -f docker-compose.dev.yml ps postgres | grep -q 'healthy'; do sleep 1; done
-	@echo "[dev] Postgres ready at postgresql://review:review@localhost:5432/review_agent"
+	@echo "[dev] Postgres ready at postgresql://review:review@localhost:5435/review_agent"
 
 db-down: ## Stop Postgres + ElasticMQ (keeps data volume)
 	docker compose -f docker-compose.dev.yml down
@@ -53,9 +53,14 @@ db-logs: ## Tail dev Postgres logs
 	docker compose -f docker-compose.dev.yml logs -f postgres
 
 db-migrate: ## Run Drizzle migrations against the dev Postgres
-	DATABASE_URL=postgresql://review:review@localhost:5432/review_agent \
+	DATABASE_URL=postgresql://review:review@localhost:5435/review_agent \
 	  pnpm --filter @review-agent/db db:migrate
 
 dev-stack: ## db-up + dev (web + server) in one shot
 	$(MAKE) db-up
+	$(MAKE) dev
+
+dev-full: ## db-up + db-migrate + dev (web + server) in one shot
+	$(MAKE) db-up
+	$(MAKE) db-migrate
 	$(MAKE) dev
