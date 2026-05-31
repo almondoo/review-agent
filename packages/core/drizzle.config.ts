@@ -8,7 +8,7 @@ export default defineConfig({
   schema: './dist/db/schema/index.js',
   out: './src/db/migrations',
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? 'postgres://review:review@localhost:5432/review_agent',
+    url: process.env.DATABASE_URL ?? 'postgres://review:review@localhost:5435/review_agent',
   },
   verbose: true,
   strict: true,

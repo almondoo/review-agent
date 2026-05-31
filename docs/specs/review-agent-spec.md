@@ -388,7 +388,7 @@ services:
       POSTGRES_USER: review
       POSTGRES_PASSWORD: review
       POSTGRES_DB: review_agent
-    ports: ["5432:5432"]
+    ports: ["5435:5432"]
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/dev-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
@@ -452,7 +452,7 @@ ANTHROPIC_API_KEY=sk-ant-...           # or OPENAI_API_KEY, GOOGLE_GENERATIVE_AI
 REVIEW_AGENT_LANGUAGE=en-US
 
 # --- Backing services -----------------------------------------------------
-DATABASE_URL=postgres://review:review@localhost:5432/review_agent
+DATABASE_URL=postgres://review:review@localhost:5435/review_agent
 QUEUE_URL=http://localhost:9324/000000000000/jobs
 
 # --- GitHub auth ---------------------------------------------------------

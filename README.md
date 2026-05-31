@@ -179,7 +179,7 @@ For server dev, copy `packages/server/.env.example` to
 so no edits are required to get started:
 
 ```
-DATABASE_URL=postgresql://review:review@localhost:5432/review_agent
+DATABASE_URL=postgresql://review:review@localhost:5435/review_agent
 REVIEW_AGENT_WEBHOOK_SECRET=local-dev-secret
 ```
 

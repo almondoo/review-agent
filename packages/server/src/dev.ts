@@ -22,7 +22,7 @@ const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) {
   process.stderr.write(
     'review-agent [dev]: DATABASE_URL is required for dev. Set it in .env.local or your shell.\n' +
-      '  Example: DATABASE_URL=postgres://review@localhost:5432/review_agent_dev\n',
+      '  Example: DATABASE_URL=postgres://review@localhost:5435/review_agent_dev\n',
   );
   process.exit(1);
 }
