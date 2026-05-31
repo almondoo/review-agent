@@ -373,6 +373,7 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 | [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
 | [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
 | [#113](https://github.com/almondoo/review-agent/issues/113) | CodeCommit `/feedback` recovery: allowlist gate on reply author (#110 hardening) | ✅ |
+| _(unfiled)_ | CodeCommit web embedded auto-setup + server worker JobHandler — spec: [`codecommit-web-embedded-auto-setup.md`](./specs/codecommit-web-embedded-auto-setup.md) / handoff: [`session-handoff-2026-05-29-dashboard.md`](./specs/session-handoff-2026-05-29-dashboard.md) — 13–14 person-days (B0 blocker = JobHandler) | — |
 
 ### Docs
 

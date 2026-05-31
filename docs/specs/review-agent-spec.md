@@ -1287,6 +1287,17 @@ const octokit = new Octokit({ auth: token });
   surfaced by v1.2 #113 where the recovery walk previously checked
   only the parent comment's author, not the `/feedback` reply
   author. See `docs/security/feedback-command-authz.md`.
+- **Web embedded auto-setup is specified separately** in
+  [`docs/specs/codecommit-web-embedded-auto-setup.md`](./codecommit-web-embedded-auto-setup.md).
+  That spec adds server-driven SNS topic + EventBridge rule
+  provisioning under the runtime IAM role, a `repos` table schema
+  bump (`aws_region` / `sns_topic_arn` / `eventbridge_rule_arn` /
+  `setup_status` / `setup_error`), and migrates the webhook
+  allowlist from `REVIEW_AGENT_SNS_TOPIC_ARNS` env CSV to a DB
+  lookup over `repos.sns_topic_arn` (env CSV retained as a v1.x
+  transition shim, removed in v2). The IAM minimum-set above
+  remains the worker-side baseline; the web-embedded spec layers
+  `sns:*` and `events:*` provisioning actions on top.
 
 ### 8.5 BYOK (Anthropic API key)
 

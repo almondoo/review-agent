@@ -65,6 +65,72 @@ describe('createApp', () => {
     expect(await res.json()).toEqual({ ok: true });
   });
 
+  describe('dashboardToken auth wiring', () => {
+    it('passes /api requests through when token is passed via deps.api', async () => {
+      const app = createApp({
+        // biome-ignore lint/suspicious/noExplicitAny: mock
+        db: makeDb() as any,
+        queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+        webhookSecret: SECRET,
+        allowedSnsTopicArns: [TOPIC],
+        api: { dashboardToken: 'test-token', requireDashboardAuth: false },
+      });
+      const authed = await app.request('/api/integrations', {
+        headers: { Authorization: 'Bearer test-token' },
+      });
+      expect(authed.status).toBe(200);
+      const unauthed = await app.request('/api/integrations');
+      expect(unauthed.status).toBe(401);
+    });
+
+    it('reads REVIEW_AGENT_DASHBOARD_TOKEN from env when deps.api.dashboardToken not set', async () => {
+      const prev = process.env.REVIEW_AGENT_DASHBOARD_TOKEN;
+      process.env.REVIEW_AGENT_DASHBOARD_TOKEN = 'env-token';
+      try {
+        const app = createApp({
+          // biome-ignore lint/suspicious/noExplicitAny: mock
+          db: makeDb() as any,
+          queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+          webhookSecret: SECRET,
+          allowedSnsTopicArns: [TOPIC],
+        });
+        const res = await app.request('/api/integrations', {
+          headers: { Authorization: 'Bearer env-token' },
+        });
+        expect(res.status).toBe(200);
+      } finally {
+        if (prev === undefined) delete process.env.REVIEW_AGENT_DASHBOARD_TOKEN;
+        else process.env.REVIEW_AGENT_DASHBOARD_TOKEN = prev;
+      }
+    });
+  });
+
+  it('apiEnv: REVIEW_AGENT_MODEL flows through to GET /api/integrations llm.model', async () => {
+    const prev = process.env.REVIEW_AGENT_MODEL;
+    process.env.REVIEW_AGENT_MODEL = 'custom-model-for-test';
+    // Also set ANTHROPIC_API_KEY so the LLM integration shows configured=true
+    const prevKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    try {
+      const app = createApp({
+        // biome-ignore lint/suspicious/noExplicitAny: mock
+        db: makeDb() as any,
+        queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+        webhookSecret: SECRET,
+        allowedSnsTopicArns: [TOPIC],
+      });
+      const res = await app.request('/api/integrations');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.llm.model).toBe('custom-model-for-test');
+    } finally {
+      if (prev === undefined) delete process.env.REVIEW_AGENT_MODEL;
+      else process.env.REVIEW_AGENT_MODEL = prev;
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prevKey;
+    }
+  });
+
   it('end-to-end: signed pull_request.opened enqueues a job', async () => {
     const enqueue = vi.fn().mockResolvedValue({ messageId: 'm-7' });
     const app = createApp({

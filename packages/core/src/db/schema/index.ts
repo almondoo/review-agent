@@ -2,6 +2,7 @@ export * from './audit-log.js';
 export * from './byok-store.js';
 export * from './cost-ledger.js';
 export * from './installation-tokens.js';
+export * from './repos.js';
 export * from './review-eval-event.js';
 export * from './review-history.js';
 export * from './review-state.js';

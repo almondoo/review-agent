@@ -1,0 +1,114 @@
+import { useEffect, useState } from 'react';
+import { Hairline } from './hairline.js';
+
+type Theme = 'light' | 'dark' | 'system';
+
+function getEffectiveTheme(theme: Theme): 'light' | 'dark' {
+  if (theme === 'system') {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  return theme;
+}
+
+function formatTimestamp(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}.${m}.${d}`;
+}
+
+export function Header() {
+  const [theme, setTheme] = useState<Theme>('system');
+  const [timestamp] = useState(formatTimestamp);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('ra-theme') as Theme | null;
+    if (saved) setTheme(saved);
+  }, []);
+
+  useEffect(() => {
+    const effective = getEffectiveTheme(theme);
+    document.documentElement.dataset.theme = effective;
+    if (theme !== 'system') {
+      localStorage.setItem('ra-theme', theme);
+    } else {
+      localStorage.removeItem('ra-theme');
+    }
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme((prev) => {
+      if (prev === 'system' || prev === 'light') return 'dark';
+      return 'light';
+    });
+  }
+
+  const effectiveTheme = getEffectiveTheme(theme);
+
+  return (
+    <header
+      style={{
+        height: 'var(--header-height)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 1.5rem',
+        position: 'sticky',
+        top: 0,
+        zIndex: 100,
+        backgroundColor: 'var(--bg)',
+        borderBottom: '1px solid var(--hairline)',
+      }}
+    >
+      {/* Logo */}
+      <div
+        style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: '1.125rem',
+          fontWeight: 800,
+          letterSpacing: '-0.04em',
+          fontVariationSettings: "'opsz' 144, 'SOFT' 40",
+        }}
+      >
+        review-agent
+      </div>
+
+      {/* Right: timestamp + theme toggle */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+        {/* Timestamp stamp */}
+        <span
+          role="img"
+          className="label-mono"
+          style={{ color: 'var(--graphite)' }}
+          aria-label="Current date"
+        >
+          [{timestamp} — WAVE 17]
+        </span>
+
+        <Hairline vertical style={{ height: '20px' }} />
+
+        {/* Dark mode toggle */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} mode`}
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.625rem',
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--graphite)',
+            padding: '0.25rem 0.5rem',
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--radius)',
+            transition: 'color var(--transition-fast), border-color var(--transition-fast)',
+          }}
+        >
+          {effectiveTheme === 'dark' ? '[LIGHT]' : '[DARK]'}
+        </button>
+      </div>
+    </header>
+  );
+}

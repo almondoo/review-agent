@@ -157,6 +157,46 @@ What each block does:
 
 In **Server mode** (Hono webhook → SQS → worker) the same runner is invoked from `packages/server/src/worker.ts`. The worker provisions a per-job ephemeral workspace via `provisionWorkspace` (strategy: `contents-api` for Lambda, `sparse-clone` when `git` is available); everything downstream of "Workspace" in the diagram is identical.
 
+## Local development
+
+This repo uses pnpm workspaces. Convenience targets live in the `Makefile`.
+
+```
+make setup           # pnpm install
+make dev-mock        # Web in mock mode (no DB or server required)
+make db-up           # Start Postgres + ElasticMQ (docker-compose.dev.yml)
+make db-migrate      # Run Drizzle migrations against the dev Postgres
+make dev             # Web + server concurrently (requires DATABASE_URL)
+make dev-stack       # db-up + dev in one command
+make db-down         # Stop dev Postgres + ElasticMQ (keeps data volume)
+make test            # Run all package tests
+make build           # Build all packages
+make help            # List all targets
+```
+
+For server dev, copy `packages/server/.env.example` to
+`packages/server/.env.local`. The defaults match `docker-compose.dev.yml`
+so no edits are required to get started:
+
+```
+DATABASE_URL=postgresql://review:review@localhost:5432/review_agent
+REVIEW_AGENT_WEBHOOK_SECRET=local-dev-secret
+```
+
+Full workflow:
+
+```
+make setup           # once: install deps
+make db-up           # start Postgres + ElasticMQ in Docker
+make db-migrate      # apply Drizzle migrations
+cp packages/server/.env.example packages/server/.env.local
+make dev             # web + server hot-reload
+```
+
+See `packages/server/.env.example` for all configurable variables.
+The `docker-compose.dev.yml` stack is for local development only; it is
+**not** used by `docker-compose.yml` (the GitHub Action smoke test).
+
 ## Supported VCS platforms
 
 | Platform | Modes | Status | Notes |
