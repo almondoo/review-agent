@@ -11,7 +11,7 @@ RUN apk add --no-cache --virtual .build-deps curl tar \
  && apk del .build-deps
 
 FROM base AS builder
-RUN npm install -g pnpm@10.33.0
+RUN npm install -g pnpm@11.5.0
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json biome.json ./
 COPY packages ./packages
 RUN pnpm install --frozen-lockfile \

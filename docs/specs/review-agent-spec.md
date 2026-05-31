@@ -56,7 +56,7 @@ Build a self-hostable, OSS, AI code review agent that:
 |---|---|---|
 | Language | TypeScript 5.6+ | Strict mode, ESM only. |
 | Runtime | Node.js 24.15.0 LTS | Supported through 2028-04. Don't add Bun support yet. |
-| Package manager | pnpm 10.x | Workspaces. `packageManager` field pinned. |
+| Package manager | pnpm 11.x | Workspaces. `packageManager` field pinned. |
 | Repo structure | pnpm workspaces monorepo | Single repo, multiple packages. No Turborepo. |
 | Lint + Format | Biome 2.x | Single tool. No ESLint/Prettier. |
 | Test runner | Vitest 2.x | Both unit and integration. |
@@ -509,7 +509,7 @@ pnpm dev                               # all packages in watch mode
 **Native deps required on host:**
 
 - Node.js 24 LTS (we recommend `fnm` or `volta` for version management).
-- pnpm 10.x (`corepack enable`).
+- pnpm 11.x (`corepack enable`).
 - `git` 2.40+ (for sparse-checkout / partial clone).
 - `gitleaks` 8.x — required if running secret-scan code paths locally.
   CONTRIBUTING.md links to install instructions per OS. CI uses the
