@@ -375,6 +375,22 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 | [#113](https://github.com/almondoo/review-agent/issues/113) | CodeCommit `/feedback` recovery: allowlist gate on reply author (#110 hardening) | ✅ |
 | _(unfiled)_ | CodeCommit web embedded auto-setup + server worker JobHandler — spec: [`codecommit-web-embedded-auto-setup.md`](./specs/codecommit-web-embedded-auto-setup.md) / handoff: [`session-handoff-2026-05-29-dashboard.md`](./specs/session-handoff-2026-05-29-dashboard.md) — 13–14 person-days (B0 blocker = JobHandler) | — |
 
+### Dashboard / web UI (2026-06-01 追加)
+
+`packages/web` ダッシュボード SPA の UX / i18n / セキュリティ。要件は maintainer
+提示、spec は §2.2 (言語) / §8.5 (BYOK) / §16.1 (RLS) を参照。
+
+| # | タイトル | Refined |
+|---|---|---|
+| [#118](https://github.com/almondoo/review-agent/issues/118) | dashboard i18n (ja/en, 既定 ja) via react-i18next | — |
+| [#119](https://github.com/almondoo/review-agent/issues/119) | 未保存変更の離脱確認 (全 dirty フォーム, `useBlocker`) | — |
+| [#120](https://github.com/almondoo/review-agent/issues/120) | 削除確認の共通 ConfirmDialog 化 (土台) | — |
+| [#121](https://github.com/almondoo/review-agent/issues/121) | BYOK LLM API キー登録ページ + KMS 暗号化書込 API (`question`: 認可モデル未解決) | — |
+
+**実装順序**: `#120 (ConfirmDialog) ──► #119 / #121`、`#118` は独立並行。
+`#121` は本文の Open question (オペレータ単一トークン vs per-installation 認可) を
+解決後に着手。
+
 ### Docs
 
 | # | タイトル | Refined |
