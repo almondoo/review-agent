@@ -5,9 +5,7 @@ import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
  * review-agent monitors. Soft-deletes via `deleted_at`; rows with a
  * non-null `deleted_at` are treated as removed by every query.
  *
- * NOTE: the migration for this table has NOT been generated yet.
- * Run `drizzle-kit generate` after confirming the schema with the
- * maintainer, then apply the resulting SQL migration.
+ * Migration: `0005_repos_table.sql`.
  *
  * Columns added in the second schema revision (same migration batch):
  *   - `system_prompt`            text NULL  — per-repo system prompt override
