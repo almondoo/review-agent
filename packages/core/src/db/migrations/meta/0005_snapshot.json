@@ -101,9 +101,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"audit_log\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"audit_log\".\"installation_id\" IS NULL OR \"audit_log\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -253,9 +251,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"cost_ledger\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"cost_ledger\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -299,10 +295,7 @@
       "compositePrimaryKeys": {
         "installation_cost_daily_installation_id_date_pk": {
           "name": "installation_cost_daily_installation_id_date_pk",
-          "columns": [
-            "installation_id",
-            "date"
-          ]
+          "columns": ["installation_id", "date"]
         }
       },
       "uniqueConstraints": {},
@@ -311,9 +304,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"installation_cost_daily\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"installation_cost_daily\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -387,10 +378,7 @@
       "compositePrimaryKeys": {
         "installation_secrets_installation_id_provider_pk": {
           "name": "installation_secrets_installation_id_provider_pk",
-          "columns": [
-            "installation_id",
-            "provider"
-          ]
+          "columns": ["installation_id", "provider"]
         }
       },
       "uniqueConstraints": {},
@@ -399,9 +387,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"installation_secrets\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"installation_secrets\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -448,9 +434,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"installation_tokens\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"installation_tokens\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -731,9 +715,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"review_eval_event\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"review_eval_event\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -836,9 +818,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"review_history\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"review_history\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
@@ -919,9 +899,7 @@
           "name": "tenant_isolation",
           "as": "PERMISSIVE",
           "for": "ALL",
-          "to": [
-            "review_agent_app"
-          ],
+          "to": ["review_agent_app"],
           "using": "\"review_state\".\"installation_id\"::text = current_setting('app.current_tenant', true)",
           "withCheck": "\"review_state\".\"installation_id\"::text = current_setting('app.current_tenant', true)"
         }
