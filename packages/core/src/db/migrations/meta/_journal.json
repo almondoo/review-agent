@@ -36,6 +36,13 @@
       "when": 1780243200000,
       "tag": "0004_lonely_zinc_aristocrat",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1780243260000,
+      "tag": "0005_repos_table",
+      "breakpoints": true
     }
   ]
 }
