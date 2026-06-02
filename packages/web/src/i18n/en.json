@@ -3,10 +3,12 @@
     "overview": "OVERVIEW",
     "repos": "REPOS",
     "integrations": "INTEGRATIONS",
+    "byokKeys": "LLM API KEYS",
     "history": "HISTORY",
     "overviewShort": "OVW",
     "reposShort": "RPO",
     "integrationsShort": "INT",
+    "byokKeysShort": "KEY",
     "historyShort": "HIS",
     "primaryNavigation": "Primary navigation"
   },
@@ -215,6 +217,39 @@
       "heading": "Not here.",
       "description": "The page you requested does not exist or has been moved.",
       "returnLink": "[← Return to Overview]"
+    },
+    "byokKeys": {
+      "title": "LLM API Key Management",
+      "subtitle": "Configure per-installation provider keys (BYOK)",
+      "manageKeysLink": "[MANAGE API KEYS →]",
+      "labelInstallationId": "Installation ID",
+      "placeholderInstallationId": "Enter a positive integer",
+      "validationInstallationIdRequired": "Installation ID is required.",
+      "validationInstallationIdInvalid": "Enter a valid positive integer.",
+      "loadingError": "[ERROR] Failed to load keys.",
+      "headerProvider": "Provider",
+      "headerStatus": "Status",
+      "headerActions": "Actions",
+      "statusConfigured": "[CONFIGURED]",
+      "statusNotConfigured": "[NOT CONFIGURED]",
+      "actionRotate": "[ROTATE]",
+      "actionRemove": "[REMOVE]",
+      "addKeyTitle": "Add / Replace Key",
+      "labelProvider": "Provider",
+      "labelApiKey": "API Key",
+      "placeholderApiKey": "sk-...",
+      "showKey": "[SHOW]",
+      "hideKey": "[HIDE]",
+      "addKeySubmit": "[SAVE]",
+      "ariaToggleKeyVisibility": "Toggle API key visibility",
+      "providerAnthropicLabel": "Anthropic",
+      "providerOpenaiLabel": "OpenAI",
+      "providerAzureOpenaiLabel": "Azure OpenAI",
+      "providerGoogleLabel": "Google",
+      "providerVertexLabel": "Google Vertex AI",
+      "providerBedrockLabel": "AWS Bedrock",
+      "providerOpenaiCompatibleLabel": "OpenAI Compatible",
+      "noInstallationId": "Enter an installation ID to view and manage keys."
     }
   },
   "dialog": {
@@ -229,6 +264,18 @@
       "message": "Delete {{name}}? This cannot be undone.",
       "confirm": "[DELETE]",
       "cancel": "[CANCEL]"
+    },
+    "confirmRotate": {
+      "title": "Rotate key",
+      "message": "Rotate the key for {{provider}}? The current key will be invalidated.",
+      "confirm": "[ROTATE]",
+      "cancel": "[CANCEL]"
+    },
+    "confirmRemove": {
+      "title": "Remove key",
+      "message": "Remove the key for {{provider}}? This cannot be undone.",
+      "confirm": "[REMOVE]",
+      "cancel": "[CANCEL]"
     }
   },
   "platforms": {
@@ -242,6 +289,12 @@
   "toast": {
     "promptSaved": "[OK] Prompt saved successfully.",
     "promptFailed": "[FAIL] Failed to save prompt.",
-    "deleteFailed": "[FAIL] Failed to delete repository."
+    "deleteFailed": "[FAIL] Failed to delete repository.",
+    "llmKeySaved": "[OK] API key saved.",
+    "llmKeySaveFailed": "[FAIL] Failed to save API key.",
+    "llmKeyRotated": "[OK] Key rotated.",
+    "llmKeyRotateFailed": "[FAIL] Failed to rotate key.",
+    "llmKeyDeleted": "[OK] Key removed.",
+    "llmKeyDeleteFailed": "[FAIL] Failed to remove key."
   }
 }

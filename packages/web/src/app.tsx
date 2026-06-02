@@ -1,5 +1,6 @@
 import { createBrowserRouter } from 'react-router-dom';
 import { Layout } from './components/layout.js';
+import { ByokKeysPage } from './pages/byok-keys.js';
 import { HistoryPage } from './pages/history.js';
 import { HistoryDetailPage } from './pages/history-detail.js';
 import { IntegrationsPage } from './pages/integrations.js';
@@ -20,6 +21,7 @@ export const router = createBrowserRouter([
       { path: '/repos/:id', element: <RepoDetailPage /> },
       { path: '/repos/:id/prompt', element: <RepoPromptPage /> },
       { path: '/integrations', element: <IntegrationsPage /> },
+      { path: '/integrations/keys', element: <ByokKeysPage /> },
       { path: '/history', element: <HistoryPage /> },
       { path: '/history/:id', element: <HistoryDetailPage /> },
       { path: '*', element: <NotFoundPage /> },

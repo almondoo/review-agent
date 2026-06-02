@@ -12,6 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/', labelKey: 'nav.overview', shortKey: 'nav.overviewShort' },
   { path: '/repos', labelKey: 'nav.repos', shortKey: 'nav.reposShort' },
   { path: '/integrations', labelKey: 'nav.integrations', shortKey: 'nav.integrationsShort' },
+  { path: '/integrations/keys', labelKey: 'nav.byokKeys', shortKey: 'nav.byokKeysShort' },
   { path: '/history', labelKey: 'nav.history', shortKey: 'nav.historyShort' },
 ];
 

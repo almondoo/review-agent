@@ -3,10 +3,12 @@
     "overview": "概要",
     "repos": "リポジトリ",
     "integrations": "インテグレーション",
+    "byokKeys": "LLM APIキー",
     "history": "履歴",
     "overviewShort": "OVW",
     "reposShort": "RPO",
     "integrationsShort": "INT",
+    "byokKeysShort": "KEY",
     "historyShort": "HIS",
     "primaryNavigation": "メインナビゲーション"
   },
@@ -215,6 +217,39 @@
       "heading": "ここには何もありません。",
       "description": "お探しのページは存在しないか、移動されました。",
       "returnLink": "[← 概要に戻る]"
+    },
+    "byokKeys": {
+      "title": "LLM APIキー管理",
+      "subtitle": "インストール別プロバイダーキーの設定 (BYOK)",
+      "manageKeysLink": "[API キーを管理 →]",
+      "labelInstallationId": "インストール ID",
+      "placeholderInstallationId": "正の整数を入力",
+      "validationInstallationIdRequired": "インストール ID は必須です。",
+      "validationInstallationIdInvalid": "正の整数を入力してください。",
+      "loadingError": "[エラー] キーの読み込みに失敗しました。",
+      "headerProvider": "プロバイダー",
+      "headerStatus": "ステータス",
+      "headerActions": "アクション",
+      "statusConfigured": "[設定済]",
+      "statusNotConfigured": "[未設定]",
+      "actionRotate": "[再発行]",
+      "actionRemove": "[削除]",
+      "addKeyTitle": "キーを追加 / 更新",
+      "labelProvider": "プロバイダー",
+      "labelApiKey": "API キー",
+      "placeholderApiKey": "sk-...",
+      "showKey": "[表示]",
+      "hideKey": "[非表示]",
+      "addKeySubmit": "[保存]",
+      "ariaToggleKeyVisibility": "APIキーの表示を切り替え",
+      "providerAnthropicLabel": "Anthropic",
+      "providerOpenaiLabel": "OpenAI",
+      "providerAzureOpenaiLabel": "Azure OpenAI",
+      "providerGoogleLabel": "Google",
+      "providerVertexLabel": "Google Vertex AI",
+      "providerBedrockLabel": "AWS Bedrock",
+      "providerOpenaiCompatibleLabel": "OpenAI 互換",
+      "noInstallationId": "インストール ID を入力するとキー一覧が表示されます。"
     }
   },
   "dialog": {
@@ -227,6 +262,18 @@
     "confirmDelete": {
       "title": "リポジトリを削除",
       "message": "{{name}} を削除しますか？この操作は元に戻せません。",
+      "confirm": "[削除]",
+      "cancel": "[キャンセル]"
+    },
+    "confirmRotate": {
+      "title": "キーを再発行",
+      "message": "{{provider}} のキーを再発行しますか？現在のキーは無効になります。",
+      "confirm": "[再発行]",
+      "cancel": "[キャンセル]"
+    },
+    "confirmRemove": {
+      "title": "キーを削除",
+      "message": "{{provider}} のキーを削除しますか？この操作は元に戻せません。",
       "confirm": "[削除]",
       "cancel": "[キャンセル]"
     }
@@ -242,6 +289,12 @@
   "toast": {
     "promptSaved": "[OK] プロンプトを保存しました。",
     "promptFailed": "[失敗] プロンプトの保存に失敗しました。",
-    "deleteFailed": "[失敗] リポジトリの削除に失敗しました。"
+    "deleteFailed": "[失敗] リポジトリの削除に失敗しました。",
+    "llmKeySaved": "[OK] APIキーを保存しました。",
+    "llmKeySaveFailed": "[失敗] APIキーの保存に失敗しました。",
+    "llmKeyRotated": "[OK] キーを再発行しました。",
+    "llmKeyRotateFailed": "[失敗] キーの再発行に失敗しました。",
+    "llmKeyDeleted": "[OK] キーを削除しました。",
+    "llmKeyDeleteFailed": "[失敗] キーの削除に失敗しました。"
   }
 }

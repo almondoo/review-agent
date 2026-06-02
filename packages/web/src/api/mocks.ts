@@ -1,5 +1,8 @@
 import type {
+  BYOKProvider,
   IntegrationsStatus,
+  LlmKeyStatus,
+  LlmKeysResponse,
   OverviewMetrics,
   RepoDetail,
   RepoMetrics,
@@ -11,6 +14,7 @@ import type {
   ReviewsPage,
   ReviewsPageWithTotal,
 } from './types.js';
+import { BYOK_PROVIDERS } from './types.js';
 
 export const mockOverview: OverviewMetrics = {
   totalRepos: 12,
@@ -840,4 +844,46 @@ export const mockReviewEventDetails: Record<string, ReviewEventDetail> = {
 
 export function getMockReviewDetail(id: string): ReviewEventDetail | null {
   return mockReviewEventDetails[id] ?? null;
+}
+
+// --- BYOK LLM keys ---
+
+// Per-installationId in-memory store: Map<installationId, Map<provider, configured>>
+const llmKeyStore = new Map<number, Map<BYOKProvider, boolean>>();
+
+function getOrCreateInstallationStore(installationId: number): Map<BYOKProvider, boolean> {
+  let store = llmKeyStore.get(installationId);
+  if (!store) {
+    store = new Map<BYOKProvider, boolean>();
+    llmKeyStore.set(installationId, store);
+  }
+  return store;
+}
+
+export function getMockLlmKeys(installationId: number): LlmKeysResponse {
+  const store = getOrCreateInstallationStore(installationId);
+  const keys: LlmKeyStatus[] = BYOK_PROVIDERS.map((provider) => ({
+    provider,
+    configured: store.get(provider) ?? false,
+  }));
+  return { installationId, keys };
+}
+
+export function upsertMockLlmKey(installationId: number, provider: BYOKProvider): void {
+  const store = getOrCreateInstallationStore(installationId);
+  store.set(provider, true);
+}
+
+export function rotateMockLlmKey(installationId: number, provider: BYOKProvider): void {
+  // Rotate: key must already exist; re-wrap is a no-op in mock (stays configured).
+  const store = getOrCreateInstallationStore(installationId);
+  if (!store.get(provider)) {
+    throw new Error(`No key configured for provider ${provider} on installation ${installationId}`);
+  }
+  store.set(provider, true);
+}
+
+export function deleteMockLlmKey(installationId: number, provider: BYOKProvider): void {
+  const store = getOrCreateInstallationStore(installationId);
+  store.set(provider, false);
 }

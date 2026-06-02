@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addMockRepo,
+  deleteMockLlmKey,
   deleteMockRepo,
+  getMockLlmKeys,
   getMockRepoDetail,
   getMockRepoMetrics,
   getMockRepoPrompt,
@@ -12,10 +14,15 @@ import {
   mockOverview,
   patchMockRepo,
   putMockRepoPrompt,
+  rotateMockLlmKey,
+  upsertMockLlmKey,
 } from './mocks.js';
 import type {
   CreateRepoBody,
+  DeleteLlmKeyBody,
+  DeleteLlmKeyResponse,
   IntegrationsStatus,
+  LlmKeysResponse,
   OverviewMetrics,
   PatchRepoBody,
   PutPromptBody,
@@ -27,6 +34,10 @@ import type {
   ReviewsFilters,
   ReviewsPage,
   ReviewsPageWithTotal,
+  RotateLlmKeyBody,
+  RotateLlmKeyResponse,
+  UpsertLlmKeyBody,
+  UpsertLlmKeyResponse,
 } from './types.js';
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
@@ -235,5 +246,92 @@ export function useReviewDetail(id: string) {
   return useQuery({
     queryKey: ['review-detail', id],
     queryFn: () => fetchReviewDetail(id),
+  });
+}
+
+// --- BYOK LLM keys ---
+
+async function fetchLlmKeys(installationId: number): Promise<LlmKeysResponse> {
+  if (IS_MOCK) return Promise.resolve(getMockLlmKeys(installationId));
+  return apiFetch<LlmKeysResponse>(`/api/integrations/llm-keys?installationId=${installationId}`);
+}
+
+async function upsertLlmKey(body: UpsertLlmKeyBody): Promise<UpsertLlmKeyResponse> {
+  if (IS_MOCK) {
+    upsertMockLlmKey(body.installationId, body.provider);
+    return Promise.resolve({
+      installationId: body.installationId,
+      provider: body.provider,
+      configured: true,
+    });
+  }
+  return apiFetch<UpsertLlmKeyResponse>('/api/integrations/llm-keys', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+async function rotateLlmKey(body: RotateLlmKeyBody): Promise<RotateLlmKeyResponse> {
+  if (IS_MOCK) {
+    rotateMockLlmKey(body.installationId, body.provider);
+    return Promise.resolve({
+      installationId: body.installationId,
+      provider: body.provider,
+      configured: true,
+    });
+  }
+  return apiFetch<RotateLlmKeyResponse>('/api/integrations/llm-keys/rotate', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+async function deleteLlmKey(body: DeleteLlmKeyBody): Promise<DeleteLlmKeyResponse> {
+  if (IS_MOCK) {
+    deleteMockLlmKey(body.installationId, body.provider);
+    return Promise.resolve({
+      installationId: body.installationId,
+      provider: body.provider,
+      configured: false,
+    });
+  }
+  return apiFetch<DeleteLlmKeyResponse>('/api/integrations/llm-keys', {
+    method: 'DELETE',
+    body: JSON.stringify(body),
+  });
+}
+
+export function useLlmKeys(installationId: number | null) {
+  return useQuery({
+    queryKey: ['llm-keys', installationId],
+    queryFn: () => fetchLlmKeys(installationId as number),
+    enabled: installationId !== null,
+  });
+}
+
+export function useUpsertLlmKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: upsertLlmKey,
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: ['llm-keys', vars.installationId] }),
+  });
+}
+
+export function useRotateLlmKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: rotateLlmKey,
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: ['llm-keys', vars.installationId] }),
+  });
+}
+
+export function useDeleteLlmKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: deleteLlmKey,
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: ['llm-keys', vars.installationId] }),
   });
 }

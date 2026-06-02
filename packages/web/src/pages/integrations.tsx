@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { useIntegrations } from '../api/client.js';
 import type { CodeCommitIntegration, GithubIntegration, LlmIntegration } from '../api/types.js';
 import { Hairline } from '../components/hairline.js';
@@ -169,6 +170,25 @@ export function IntegrationsPage() {
           </div>
         </StaggerItem>
       )}
+
+      <StaggerItem>
+        <div style={{ marginTop: '1.5rem' }}>
+          <Link
+            to="/integrations/keys"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--fg)',
+              textDecoration: 'none',
+            }}
+          >
+            {t('pages.byokKeys.manageKeysLink')}
+          </Link>
+        </div>
+      </StaggerItem>
     </StaggerContainer>
   );
 }
