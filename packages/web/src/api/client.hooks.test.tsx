@@ -7,8 +7,10 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   useCreateRepo,
+  useDeleteLlmKey,
   useDeleteRepo,
   useIntegrations,
+  useLlmKeys,
   useOverview,
   usePatchRepo,
   usePutRepoPrompt,
@@ -19,6 +21,8 @@ import {
   useRepos,
   useReviewDetail,
   useReviews,
+  useRotateLlmKey,
+  useUpsertLlmKey,
 } from './client.js';
 
 function makeWrapper() {
@@ -219,5 +223,87 @@ describe('client hooks (mock mode)', () => {
       );
     });
     expect(result.current.isError).toBe(false);
+  });
+
+  it('useLlmKeys is disabled when installationId is null', () => {
+    const { result } = renderHook(() => useLlmKeys(null), { wrapper: makeWrapper() });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it('useLlmKeys returns keys for valid installationId', async () => {
+    const { result } = renderHook(() => useLlmKeys(1), { wrapper: makeWrapper() });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.installationId).toBe(1);
+    expect(Array.isArray(result.current.data?.keys)).toBe(true);
+    expect(result.current.data?.keys.length).toBe(7);
+  });
+
+  it('useUpsertLlmKey exposes a mutate function', () => {
+    const { result } = renderHook(() => useUpsertLlmKey(), { wrapper: makeWrapper() });
+    expect(typeof result.current.mutate).toBe('function');
+  });
+
+  it('useRotateLlmKey exposes a mutate function', () => {
+    const { result } = renderHook(() => useRotateLlmKey(), { wrapper: makeWrapper() });
+    expect(typeof result.current.mutate).toBe('function');
+  });
+
+  it('useDeleteLlmKey exposes a mutate function', () => {
+    const { result } = renderHook(() => useDeleteLlmKey(), { wrapper: makeWrapper() });
+    expect(typeof result.current.mutate).toBe('function');
+  });
+
+  it('useUpsertLlmKey mutate sets a key as configured', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useUpsertLlmKey(), { wrapper });
+    await new Promise<void>((resolve) => {
+      result.current.mutate(
+        { installationId: 99, provider: 'openai', apiKey: 'sk-test-key' },
+        { onSuccess: () => resolve(), onError: () => resolve() },
+      );
+    });
+    expect(result.current.isError).toBe(false);
+  });
+
+  it('useDeleteLlmKey mutate succeeds', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    // First upsert so there is a key to delete.
+    const upsertHook = renderHook(() => useUpsertLlmKey(), { wrapper });
+    await new Promise<void>((resolve) => {
+      upsertHook.result.current.mutate(
+        { installationId: 88, provider: 'anthropic', apiKey: 'sk-key' },
+        { onSuccess: () => resolve(), onError: () => resolve() },
+      );
+    });
+    const deleteHook = renderHook(() => useDeleteLlmKey(), { wrapper });
+    await new Promise<void>((resolve) => {
+      deleteHook.result.current.mutate(
+        { installationId: 88, provider: 'anthropic' },
+        { onSuccess: () => resolve(), onError: () => resolve() },
+      );
+    });
+    expect(deleteHook.result.current.isError).toBe(false);
+  });
+
+  it('useRotateLlmKey mutate errors when key does not exist', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useRotateLlmKey(), { wrapper });
+    await new Promise<void>((resolve) => {
+      result.current.mutate(
+        { installationId: 777, provider: 'vertex' },
+        { onSuccess: () => resolve(), onError: () => resolve() },
+      );
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
   });
 });

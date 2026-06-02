@@ -382,14 +382,36 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 
 | # | タイトル | Refined |
 |---|---|---|
-| [#118](https://github.com/almondoo/review-agent/issues/118) | dashboard i18n (ja/en, 既定 ja) via react-i18next | — |
-| [#119](https://github.com/almondoo/review-agent/issues/119) | 未保存変更の離脱確認 (全 dirty フォーム, `useBlocker`) | — |
-| [#120](https://github.com/almondoo/review-agent/issues/120) | 削除確認の共通 ConfirmDialog 化 (土台) | — |
-| [#121](https://github.com/almondoo/review-agent/issues/121) | BYOK LLM API キー登録ページ + KMS 暗号化書込 API (`question`: 認可モデル未解決) | — |
+| [#118](https://github.com/almondoo/review-agent/issues/118) | dashboard i18n (ja/en, 既定 ja) via react-i18next | ✅ landed (develop) |
+| [#119](https://github.com/almondoo/review-agent/issues/119) | 未保存変更の離脱確認 (全 dirty フォーム, `useBlocker`) | ✅ landed (develop) |
+| [#120](https://github.com/almondoo/review-agent/issues/120) | 削除確認の共通 ConfirmDialog 化 (土台) | ✅ landed (develop) |
+| [#121](https://github.com/almondoo/review-agent/issues/121) | BYOK LLM API キー登録ページ + KMS 暗号化書込 API | ✅ landed (develop, operator 単一テナント認可) |
 
 **実装順序**: `#120 (ConfirmDialog) ──► #119 / #121`、`#118` は独立並行。
-`#121` は本文の Open question (オペレータ単一トークン vs per-installation 認可) を
-解決後に着手。
+`#121` の Open question (認可モデル) は **operator 単一テナント前提**で解決 (spec §22) し landed。
+
+#### post-v1.2 wave B — dashboard UX、`develop` 上 (2026-06-02)
+
+#118 / #119 / #120 / #121 を多エージェント wave で landed（`develop`、未マージ）。
+#121 の認可 Open question は **operator 単一テナント前提**で解決 (spec §22)。
+
+| # | Title (short) | 主な変更 |
+|---|---|---|
+| 118 | dashboard i18n (ja 既定) | `react-i18next` + `i18n/{ja,en}.json` (ja default+fallback) + header 言語切替 + navigator/localStorage 検出 + `<html lang>` + 全 user-facing 文字列外部化 |
+| 119 | 未保存変更の離脱確認 | `createBrowserRouter` 移行 (`useBlocker` 有効化) + `useUnsavedChangesPrompt` hook (SPA navigation guard + `beforeunload` 二重ガード) + `repos-new` dirty 検知 |
+| 120 | 共通 ConfirmDialog | `confirm-dialog.tsx` (portal / focus trap / Esc / backdrop / ARIA)、`repos` / `repo-detail` の delete を集約、`UnsavedChangesDialog` で #119 と共用 |
+| 121 | BYOK APIキー登録 | `/api/integrations/llm-keys` (GET/POST/rotate/DELETE)、byok-store(KMS envelope) を per-request の `withTenant(tx)` にバインド (RLS)、`createAuditAppender`、operator 単一テナント認可、平文非返却・非ログ、Zod 検証/監査、web `/integrations/keys` ページ (password 入力・rotate/remove は ConfirmDialog・未保存ガード) |
+
+**Wave 検証**: typecheck / lint / build green、unit 2004 passed + 13 skipped
+(DB integration、`TEST_DATABASE_APP_URL` で unlock)。coverage 全閾値クリア
+(`packages/web` branches 82.58% ≥ 75%、`packages/server` 90.39% ≥ 90%)。
+`main` への送出は別 PR (`Closes #118 #119 #120 #121`)。
+
+**#121 レビュー修正**: 並列レビューで「`withTenant` の tx が無視され byok-store が
+プール接続で実行 → RLS 不発 (listProviders 空・remove 無効・upsert/rotate 500)」の
+Critical を検出。byok-store を per-request の tenant tx にバインドして修正、実 tx 経路の
+回帰テストを追加。**将来課題**: per-installation 認可 (所有権マッピング) は別 issue、
+`VITE_*` ダッシュボードトークンの bundle 露出は全 mutation 共通の既存事項 (要 deployment ガード)。
 
 ### Docs
 

@@ -17,6 +17,7 @@ export {
   pruneCostLedger,
 } from './audit-retention.js';
 export {
+  type ByokProviderStatus,
   type ByokRecord,
   type ByokStore,
   type ByokStoreDeps,

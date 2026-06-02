@@ -1,6 +1,9 @@
+import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 
 export function NotFoundPage() {
+  const { t } = useTranslation();
+
   return (
     <div
       style={{
@@ -13,13 +16,13 @@ export function NotFoundPage() {
       }}
     >
       <span className="label-mono" style={{ color: 'var(--graphite)' }}>
-        404 / not-found
+        {t('pages.notFound.label')}
       </span>
       <h1 className="display" style={{ color: 'var(--ink)', marginBottom: '0.5rem' }}>
-        Not here.
+        {t('pages.notFound.heading')}
       </h1>
       <p className="body-sm" style={{ color: 'var(--graphite)', maxWidth: '40ch' }}>
-        The page you requested does not exist or has been moved.
+        {t('pages.notFound.description')}
       </p>
       <Link
         to="/"
@@ -33,7 +36,7 @@ export function NotFoundPage() {
           textTransform: 'uppercase',
         }}
       >
-        [← Return to Overview]
+        {t('pages.notFound.returnLink')}
       </Link>
     </div>
   );

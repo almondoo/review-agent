@@ -1,20 +1,24 @@
+import { useTranslation } from 'react-i18next';
 import { NavLink } from 'react-router-dom';
 import { Hairline } from './hairline.js';
 
 type NavItem = {
   path: string;
-  label: string;
-  short: string;
+  labelKey: string;
+  shortKey: string;
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { path: '/', label: 'OVERVIEW', short: 'OVW' },
-  { path: '/repos', label: 'REPOS', short: 'RPO' },
-  { path: '/integrations', label: 'INTEGRATIONS', short: 'INT' },
-  { path: '/history', label: 'HISTORY', short: 'HIS' },
+  { path: '/', labelKey: 'nav.overview', shortKey: 'nav.overviewShort' },
+  { path: '/repos', labelKey: 'nav.repos', shortKey: 'nav.reposShort' },
+  { path: '/integrations', labelKey: 'nav.integrations', shortKey: 'nav.integrationsShort' },
+  { path: '/integrations/keys', labelKey: 'nav.byokKeys', shortKey: 'nav.byokKeysShort' },
+  { path: '/history', labelKey: 'nav.history', shortKey: 'nav.historyShort' },
 ];
 
 export function Sidebar() {
+  const { t } = useTranslation();
+
   return (
     <aside
       style={{
@@ -52,7 +56,7 @@ export function Sidebar() {
 
       <Hairline style={{ marginBottom: '1rem' }} />
 
-      <nav aria-label="Primary navigation">
+      <nav aria-label={t('nav.primaryNavigation')}>
         <ul style={{ listStyle: 'none', padding: 0 }}>
           {NAV_ITEMS.map((item) => (
             <li key={item.path}>
@@ -85,9 +89,9 @@ export function Sidebar() {
                     minWidth: '2rem',
                   }}
                 >
-                  {item.short}
+                  {t(item.shortKey)}
                 </span>
-                {item.label}
+                {t(item.labelKey)}
               </NavLink>
             </li>
           ))}

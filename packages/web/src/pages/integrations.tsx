@@ -1,3 +1,5 @@
+import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { useIntegrations } from '../api/client.js';
 import type { CodeCommitIntegration, GithubIntegration, LlmIntegration } from '../api/types.js';
 import { Hairline } from '../components/hairline.js';
@@ -89,48 +91,58 @@ function Field({ label, value }: FieldProps) {
 }
 
 function GithubCard({ data }: { data: GithubIntegration }) {
+  const { t } = useTranslation();
   return (
     <IntegrationCard title="GitHub App" tag="platform / github" configured={data.configured}>
-      <Field label="App ID" value={data.appId ?? '—'} />
-      <Field label="Installations" value={String(data.installationCount)} />
+      <Field label={t('pages.integrations.fieldAppId')} value={data.appId ?? '—'} />
+      <Field
+        label={t('pages.integrations.fieldInstallations')}
+        value={String(data.installationCount)}
+      />
     </IntegrationCard>
   );
 }
 
 function CodeCommitCard({ data }: { data: CodeCommitIntegration }) {
+  const { t } = useTranslation();
   return (
     <IntegrationCard
       title="AWS CodeCommit"
       tag="platform / codecommit"
       configured={data.configured}
     >
-      <Field label="Region" value={data.region ?? '—'} />
+      <Field label={t('pages.integrations.fieldRegion')} value={data.region ?? '—'} />
     </IntegrationCard>
   );
 }
 
 function LlmCard({ data }: { data: LlmIntegration }) {
+  const { t } = useTranslation();
   return (
     <IntegrationCard title="LLM Provider" tag="ai / model" configured={data.configured}>
-      <Field label="Provider" value={data.provider ?? '—'} />
-      <Field label="Model" value={data.model ?? '—'} />
+      <Field label={t('pages.integrations.fieldProvider')} value={data.provider ?? '—'} />
+      <Field label={t('pages.integrations.fieldModel')} value={data.model ?? '—'} />
     </IntegrationCard>
   );
 }
 
 export function IntegrationsPage() {
+  const { t } = useTranslation();
   const { data, isLoading, error } = useIntegrations();
 
   return (
     <StaggerContainer>
       <StaggerItem>
-        <SectionHeading title="Integrations" subtitle="Connected services and providers" />
+        <SectionHeading
+          title={t('pages.integrations.title')}
+          subtitle={t('pages.integrations.subtitle')}
+        />
       </StaggerItem>
 
       {isLoading && (
         <StaggerItem>
           <div className="label-mono" style={{ color: 'var(--graphite)' }}>
-            [LOADING...]
+            {t('common.loading')}
           </div>
         </StaggerItem>
       )}
@@ -138,7 +150,7 @@ export function IntegrationsPage() {
       {error && (
         <StaggerItem>
           <div className="label-mono" style={{ color: 'var(--rust)' }}>
-            [ERROR] Failed to load integrations.
+            {t('pages.integrations.loadingError')}
           </div>
         </StaggerItem>
       )}
@@ -158,6 +170,25 @@ export function IntegrationsPage() {
           </div>
         </StaggerItem>
       )}
+
+      <StaggerItem>
+        <div style={{ marginTop: '1.5rem' }}>
+          <Link
+            to="/integrations/keys"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--fg)',
+              textDecoration: 'none',
+            }}
+          >
+            {t('pages.byokKeys.manageKeysLink')}
+          </Link>
+        </div>
+      </StaggerItem>
     </StaggerContainer>
   );
 }

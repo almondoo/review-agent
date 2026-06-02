@@ -1,15 +1,17 @@
+import { useTranslation } from 'react-i18next';
 import { useOverview } from '../api/client.js';
 import { MetricCard } from '../components/metric-card.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
 
 export function OverviewPage() {
+  const { t } = useTranslation();
   const { data, isLoading, error } = useOverview();
 
   if (isLoading) {
     return (
       <div className="label-mono" style={{ color: 'var(--graphite)', padding: '2rem 0' }}>
-        [LOADING...]
+        {t('common.loading')}
       </div>
     );
   }
@@ -17,7 +19,7 @@ export function OverviewPage() {
   if (error || !data) {
     return (
       <div className="label-mono" style={{ color: 'var(--rust)', padding: '2rem 0' }}>
-        [ERROR] Failed to load overview metrics.
+        {t('pages.overview.loadingError')}
       </div>
     );
   }
@@ -25,7 +27,7 @@ export function OverviewPage() {
   return (
     <StaggerContainer>
       <StaggerItem>
-        <SectionHeading title="Overview" subtitle="Dashboard — current state" />
+        <SectionHeading title={t('pages.overview.title')} subtitle={t('pages.overview.subtitle')} />
       </StaggerItem>
 
       {/* Metrics grid */}
@@ -42,12 +44,27 @@ export function OverviewPage() {
         >
           {(
             [
-              { value: data.totalRepos, label: 'Total Repos', prefix: '', suffix: '' },
-              { value: data.reviewsMonth, label: 'Reviews / Month', prefix: '', suffix: '' },
-              { value: data.queueDepth, label: 'Queue Depth', prefix: '', suffix: '' },
+              {
+                value: data.totalRepos,
+                label: t('pages.overview.totalRepos'),
+                prefix: '',
+                suffix: '',
+              },
+              {
+                value: data.reviewsMonth,
+                label: t('pages.overview.reviewsMonth'),
+                prefix: '',
+                suffix: '',
+              },
+              {
+                value: data.queueDepth,
+                label: t('pages.overview.queueDepth'),
+                prefix: '',
+                suffix: '',
+              },
               {
                 value: data.costMtd,
-                label: 'Cost MTD (USD)',
+                label: t('pages.overview.costMtd'),
                 prefix: '$',
                 suffix: '',
                 decimals: 2,
@@ -97,7 +114,7 @@ export function OverviewPage() {
                 marginBottom: '1rem',
               }}
             >
-              system / status
+              {t('status.systemStatus')}
             </div>
           </div>
 
@@ -111,12 +128,17 @@ export function OverviewPage() {
                 marginBottom: '1rem',
               }}
             >
-              {data.queueDepth === 0 ? 'Idle.' : 'Active.'}
+              {data.queueDepth === 0 ? t('status.idle') : t('status.active')}
             </p>
             <p className="body-sm" style={{ color: 'var(--graphite)', maxWidth: '40ch' }}>
               {data.queueDepth === 0
-                ? 'No pending reviews in queue. Agent is standing by.'
-                : `${data.queueDepth} review${data.queueDepth === 1 ? '' : 's'} currently queued for processing.`}
+                ? t('status.idleDescription')
+                : t(
+                    data.queueDepth === 1
+                      ? 'status.activeDescription'
+                      : 'status.activeDescriptionPlural',
+                    { count: data.queueDepth },
+                  )}
             </p>
           </div>
         </div>

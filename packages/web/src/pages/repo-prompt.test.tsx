@@ -1,8 +1,7 @@
-import { fireEvent, screen } from '@testing-library/react';
-import { Route, Routes } from 'react-router-dom';
+import { act, fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepoDetail, RepoPrompt } from '../api/types.js';
-import { renderWithProviders } from '../test/render.js';
+import { renderWithDataRouter } from '../test/render.js';
 import { RepoPromptPage } from './repo-prompt.js';
 
 const SAMPLE_SYSTEM_PROMPT =
@@ -37,10 +36,37 @@ vi.mock('../api/client.js', () => ({
   }),
 }));
 
+// Mock useBlocker so that navigation tests do not rely on actual data-router
+// navigation in jsdom (which triggers Node's undici Request constructor and
+// fails with an AbortSignal mismatch in the jsdom environment).
+// We test the guard's behaviour by controlling the blocker state directly.
+const mockBlockerProceed = vi.fn();
+const mockBlockerReset = vi.fn();
+let mockBlockerState: 'idle' | 'blocked' | 'proceeding' = 'idle';
+
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>();
+  return {
+    ...actual,
+    useBlocker: (fn: Parameters<typeof actual.useBlocker>[0]) => {
+      // Call the condition function with stub locations to set the state.
+      // The mock ignores the actual condition — callers set mockBlockerState directly.
+      void fn;
+      if (mockBlockerState === 'blocked') {
+        return { state: 'blocked', proceed: mockBlockerProceed, reset: mockBlockerReset };
+      }
+      return { state: mockBlockerState };
+    },
+  };
+});
+
 describe('RepoPromptPage', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_USE_MOCK', 'true');
     mockMutate.mockReset();
+    mockBlockerProceed.mockReset();
+    mockBlockerReset.mockReset();
+    mockBlockerState = 'idle';
     mockIsPending = false;
   });
 
@@ -49,12 +75,9 @@ describe('RepoPromptPage', () => {
   });
 
   function render() {
-    return renderWithProviders(
-      <Routes>
-        <Route path="/repos/:id/prompt" element={<RepoPromptPage />} />
-      </Routes>,
-      { route: '/repos/repo-001/prompt' },
-    );
+    return renderWithDataRouter([{ path: '/repos/:id/prompt', element: <RepoPromptPage /> }], {
+      initialEntries: ['/repos/repo-001/prompt'],
+    });
   }
 
   it('renders "System Prompt" heading', () => {
@@ -117,5 +140,64 @@ describe('RepoPromptPage', () => {
     fireEvent.click(saveButton);
     fireEvent.click(saveButton);
     expect(mockMutate).not.toHaveBeenCalled();
+  });
+
+  // Navigation guard tests — blocker state is controlled via mockBlockerState
+  // to avoid triggering actual data-router navigation in jsdom.
+
+  it('shows ConfirmDialog when blocker is in blocked state', () => {
+    mockBlockerState = 'blocked';
+    render();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '[LEAVE]' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '[STAY]' })).toBeInTheDocument();
+  });
+
+  it('calls blocker.reset() when [STAY] is clicked', async () => {
+    mockBlockerState = 'blocked';
+    render();
+    const stayButton = screen.getByRole('button', { name: '[STAY]' });
+    await act(async () => {
+      fireEvent.click(stayButton);
+    });
+    expect(mockBlockerReset).toHaveBeenCalledTimes(1);
+    expect(mockBlockerProceed).not.toHaveBeenCalled();
+  });
+
+  it('calls blocker.proceed() when [LEAVE] is clicked', async () => {
+    mockBlockerState = 'blocked';
+    render();
+    const leaveButton = screen.getByRole('button', { name: '[LEAVE]' });
+    await act(async () => {
+      fireEvent.click(leaveButton);
+    });
+    expect(mockBlockerProceed).toHaveBeenCalledTimes(1);
+    expect(mockBlockerReset).not.toHaveBeenCalled();
+  });
+
+  it('does NOT show ConfirmDialog when blocker is idle (clean form)', () => {
+    mockBlockerState = 'idle';
+    render();
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('does NOT show ConfirmDialog after saving (isDirty becomes false)', () => {
+    // After a successful save, savedRef.current === draft, so isDirty = false.
+    // Simulate: render the page, save, then check that dialog is not shown.
+    mockBlockerState = 'idle';
+    mockMutate.mockImplementation((_vars: unknown, opts: { onSuccess?: () => void }) => {
+      opts.onSuccess?.();
+    });
+    render();
+    const textarea = screen.getByRole('textbox', { name: 'System prompt editor' });
+    fireEvent.change(textarea, { target: { value: 'new content' } });
+    // The [SAVE] button is now enabled
+    const saveButton = screen.getByRole('button', { name: '[SAVE]' });
+    fireEvent.click(saveButton);
+    // After save, the [UNSAVED] indicator should be gone (isDirty = false)
+    expect(screen.queryByText('[UNSAVED]')).toBeNull();
+    // Blocker is idle so no dialog
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

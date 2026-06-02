@@ -118,3 +118,60 @@ export type ReviewEventDetail = ReviewEvent & {
   systemPromptAtReview: string | null;
   externalUrl: string | null;
 };
+
+// --- BYOK LLM keys ---
+
+export const BYOK_PROVIDERS = [
+  'anthropic',
+  'openai',
+  'azure-openai',
+  'google',
+  'vertex',
+  'bedrock',
+  'openai-compatible',
+] as const;
+export type BYOKProvider = (typeof BYOK_PROVIDERS)[number];
+
+export type LlmKeyStatus = {
+  provider: BYOKProvider;
+  configured: boolean;
+};
+
+export type LlmKeysResponse = {
+  installationId: number;
+  keys: LlmKeyStatus[];
+};
+
+export type UpsertLlmKeyBody = {
+  installationId: number;
+  provider: BYOKProvider;
+  apiKey: string;
+};
+
+export type UpsertLlmKeyResponse = {
+  installationId: number;
+  provider: BYOKProvider;
+  configured: true;
+};
+
+export type RotateLlmKeyBody = {
+  installationId: number;
+  provider: BYOKProvider;
+};
+
+export type RotateLlmKeyResponse = {
+  installationId: number;
+  provider: BYOKProvider;
+  configured: true;
+};
+
+export type DeleteLlmKeyBody = {
+  installationId: number;
+  provider: BYOKProvider;
+};
+
+export type DeleteLlmKeyResponse = {
+  installationId: number;
+  provider: BYOKProvider;
+  configured: false;
+};

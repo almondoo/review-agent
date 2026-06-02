@@ -1,9 +1,11 @@
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RepoDetail, RepoMetrics, RepoPrompt } from '../api/types.js';
 import { renderWithProviders } from '../test/render.js';
 import { RepoDetailPage } from './repo-detail.js';
+
+const mockDeleteMutate = vi.hoisted(() => vi.fn());
 
 const SAMPLE_SYSTEM_PROMPT =
   'You are an expert software engineer performing a thorough code review. Your goal is to identify bugs, security vulnerabilities, performance issues, and maintainability concerns.';
@@ -38,12 +40,13 @@ vi.mock('../api/client.js', () => ({
   useRepoReviews: (_id: string, _limit: number) => ({ data: { items: [], nextCursor: null } }),
   useRepoPrompt: (_id: string) => ({ data: mockPrompt, isLoading: false, error: null }),
   usePatchRepo: () => ({ mutate: vi.fn() }),
-  useDeleteRepo: () => ({ mutate: vi.fn() }),
+  useDeleteRepo: () => ({ mutate: mockDeleteMutate }),
 }));
 
 describe('RepoDetailPage', () => {
   beforeEach(() => {
     vi.stubEnv('VITE_USE_MOCK', 'true');
+    mockDeleteMutate.mockReset();
   });
 
   afterEach(() => {
@@ -93,5 +96,75 @@ describe('RepoDetailPage', () => {
     render();
     expect(screen.getByText(/\[CUSTOM PROMPT\]/)).toBeInTheDocument();
     expect(screen.getByText(/You are an expert software engineer/)).toBeInTheDocument();
+  });
+
+  it('opens ConfirmDialog when the [DELETE] button is clicked', async () => {
+    render();
+    const deleteBtn = screen.getByRole('button', { name: 'Delete repository' });
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Delete repository')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '[DELETE]' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '[CANCEL]' })).toBeInTheDocument();
+  });
+
+  it('dismisses ConfirmDialog after confirm is clicked', async () => {
+    render();
+    const deleteBtn = screen.getByRole('button', { name: 'Delete repository' });
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    const confirmBtn = screen.getByRole('button', { name: '[DELETE]' });
+    await act(async () => {
+      confirmBtn.click();
+    });
+
+    // Dialog should close after confirming
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('closes ConfirmDialog without navigating away when [CANCEL] is clicked', async () => {
+    render();
+    const deleteBtn = screen.getByRole('button', { name: 'Delete repository' });
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    const cancelBtn = screen.getByRole('button', { name: '[CANCEL]' });
+    await act(async () => {
+      cancelBtn.click();
+    });
+
+    // Dialog should close; repo name is still visible on the page
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByText('acme/api-service')).toBeInTheDocument();
+  });
+
+  it('shows error toast when delete mutation fails', async () => {
+    mockDeleteMutate.mockImplementation((_id: string, opts: { onError?: () => void }) => {
+      opts.onError?.();
+    });
+    render();
+    const deleteBtn = screen.getByRole('button', { name: 'Delete repository' });
+
+    await act(async () => {
+      deleteBtn.click();
+    });
+
+    const confirmBtn = screen.getByRole('button', { name: '[DELETE]' });
+    await act(async () => {
+      confirmBtn.click();
+    });
+
+    // Dialog should close and error toast should appear
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(await screen.findByText('[FAIL] Failed to delete repository.')).toBeInTheDocument();
   });
 });
