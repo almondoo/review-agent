@@ -382,14 +382,33 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 
 | # | タイトル | Refined |
 |---|---|---|
-| [#118](https://github.com/almondoo/review-agent/issues/118) | dashboard i18n (ja/en, 既定 ja) via react-i18next | — |
-| [#119](https://github.com/almondoo/review-agent/issues/119) | 未保存変更の離脱確認 (全 dirty フォーム, `useBlocker`) | — |
-| [#120](https://github.com/almondoo/review-agent/issues/120) | 削除確認の共通 ConfirmDialog 化 (土台) | — |
-| [#121](https://github.com/almondoo/review-agent/issues/121) | BYOK LLM API キー登録ページ + KMS 暗号化書込 API (`question`: 認可モデル未解決) | — |
+| [#118](https://github.com/almondoo/review-agent/issues/118) | dashboard i18n (ja/en, 既定 ja) via react-i18next | ✅ landed (develop) |
+| [#119](https://github.com/almondoo/review-agent/issues/119) | 未保存変更の離脱確認 (全 dirty フォーム, `useBlocker`) | ✅ landed (develop) |
+| [#120](https://github.com/almondoo/review-agent/issues/120) | 削除確認の共通 ConfirmDialog 化 (土台) | ✅ landed (develop) |
+| [#121](https://github.com/almondoo/review-agent/issues/121) | BYOK LLM API キー登録ページ + KMS 暗号化書込 API (`question`: 認可モデル未解決) | 🛑 deferred (認可未決) |
 
 **実装順序**: `#120 (ConfirmDialog) ──► #119 / #121`、`#118` は独立並行。
 `#121` は本文の Open question (オペレータ単一トークン vs per-installation 認可) を
 解決後に着手。
+
+#### post-v1.2 wave B — dashboard UX、`develop` 上 (2026-06-02)
+
+#118 / #119 / #120 を多エージェント wave で landed（`develop`、未マージ）。#121 は
+Open question (認可モデル) 未決のため見送り。
+
+| # | Title (short) | 主な変更 |
+|---|---|---|
+| 118 | dashboard i18n (ja 既定) | `react-i18next` + `i18n/{ja,en}.json` (ja default+fallback) + header 言語切替 + navigator/localStorage 検出 + `<html lang>` + 全 user-facing 文字列外部化 |
+| 119 | 未保存変更の離脱確認 | `createBrowserRouter` 移行 (`useBlocker` 有効化) + `useUnsavedChangesPrompt` hook (SPA navigation guard + `beforeunload` 二重ガード) + `repos-new` dirty 検知 |
+| 120 | 共通 ConfirmDialog | `confirm-dialog.tsx` (portal / focus trap / Esc / backdrop / ARIA)、`repos` / `repo-detail` の delete を集約、`UnsavedChangesDialog` で #119 と共用 |
+
+**Wave 検証**: typecheck / lint / build green、unit 1935 passed + 13 skipped
+(DB integration、`TEST_DATABASE_APP_URL` で unlock)。`packages/web` coverage 全閾値
+クリア (branches 80.76% ≥ 75%)。`main` への送出は別 PR (`Closes #118 #119 #120`)。
+
+**#121 の再開条件**: 認可モデルを「operator 単一テナント」か
+「per-installation 認可 (所有権マッピング新設)」のどちらかに確定する
+(maintainer 判断、spec §22)。
 
 ### Docs
 
