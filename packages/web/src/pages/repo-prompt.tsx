@@ -1,14 +1,18 @@
 import { type ChangeEvent, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { usePutRepoPrompt, useRepoDetail, useRepoPrompt } from '../api/client.js';
 import { Hairline } from '../components/hairline.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { ToastContainer, useToast } from '../components/toast.js';
+import { UnsavedChangesDialog } from '../components/unsaved-changes-dialog.js';
+import { useUnsavedChangesPrompt } from '../hooks/use-unsaved-changes-prompt.js';
 import { formatDateUtc, formatNumber } from '../lib/format.js';
 
 const MAX_CHARS = 50_000;
 
 export function RepoPromptPage() {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const safeId = id ?? '';
   const { toast, messages, dismiss } = useToast();
@@ -32,17 +36,11 @@ export function RepoPromptPage() {
 
   const isDirty = draft !== savedRef.current;
 
-  // Warn on unload when dirty
-  useEffect(() => {
-    function handleBeforeUnload(e: BeforeUnloadEvent) {
-      if (isDirty) {
-        e.preventDefault();
-        e.returnValue = '';
-      }
-    }
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [isDirty]);
+  const {
+    isBlocked,
+    confirm: confirmLeave,
+    cancel: cancelLeave,
+  } = useUnsavedChangesPrompt(isDirty);
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     const val = e.target.value;
@@ -56,10 +54,10 @@ export function RepoPromptPage() {
       {
         onSuccess: () => {
           savedRef.current = draft;
-          toast('[OK] Prompt saved successfully.', 'success');
+          toast(t('toast.promptSaved'), 'success');
         },
         onError: () => {
-          toast('[FAIL] Failed to save prompt.', 'error');
+          toast(t('toast.promptFailed'), 'error');
         },
       },
     );
@@ -71,19 +69,20 @@ export function RepoPromptPage() {
 
   return (
     <>
+      <UnsavedChangesDialog isBlocked={isBlocked} confirm={confirmLeave} cancel={cancelLeave} />
       <ToastContainer messages={messages} onDismiss={dismiss} />
       <StaggerContainer style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         {/* Breadcrumb */}
         <StaggerItem>
           <div className="label-mono" style={{ color: 'var(--graphite)', marginBottom: '0.5rem' }}>
             <Link to="/repos" style={{ color: 'var(--graphite)' }}>
-              Repos
+              {t('pages.repoPrompt.repos')}
             </Link>
             {' / '}
             <Link to={`/repos/${safeId}`} style={{ color: 'var(--graphite)' }}>
               {repo?.name ?? safeId}
-            </Link>
-            {' / Prompt'}
+            </Link>{' '}
+            {t('pages.repoPrompt.breadcrumbPrompt')}
           </div>
         </StaggerItem>
 
@@ -101,13 +100,13 @@ export function RepoPromptPage() {
                   fontVariationSettings: "'opsz' 72, 'SOFT' 60",
                 }}
               >
-                System Prompt
+                {t('pages.repoPrompt.title')}
               </h1>
               {isDirty && (
                 <span
                   role="img"
-                  title="Unsaved changes"
-                  aria-label="Unsaved changes"
+                  title={t('dialog.unsavedChanges.title')}
+                  aria-label={t('dialog.unsavedChanges.title')}
                   style={{
                     width: '8px',
                     height: '8px',
@@ -120,8 +119,10 @@ export function RepoPromptPage() {
               )}
             </div>
             <p className="label-mono" style={{ color: 'var(--graphite)', marginTop: '0.375rem' }}>
-              {repo?.name ?? safeId} — Last updated{' '}
-              {promptData?.updatedAt ? formatDateUtc(promptData.updatedAt) : 'Never'}
+              {repo?.name ?? safeId} — {t('pages.repoPrompt.lastUpdated')}{' '}
+              {promptData?.updatedAt
+                ? formatDateUtc(promptData.updatedAt)
+                : t('pages.repoPrompt.never')}
             </p>
           </div>
           <Hairline style={{ marginBottom: '1.5rem' }} />
@@ -131,15 +132,15 @@ export function RepoPromptPage() {
         <StaggerItem style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {isLoading ? (
             <div className="label-mono" style={{ color: 'var(--graphite)' }}>
-              [LOADING...]
+              {t('common.loading')}
             </div>
           ) : (
             <textarea
               value={draft}
               onChange={handleChange}
-              placeholder="Leave empty to inherit the default system prompt."
+              placeholder={t('pages.repoPrompt.placeholder')}
               spellCheck={false}
-              aria-label="System prompt editor"
+              aria-label={t('pages.repoPrompt.editorLabel')}
               style={{
                 flex: 1,
                 minHeight: '60vh',
@@ -197,7 +198,7 @@ export function RepoPromptPage() {
             transition: 'background-color var(--transition-fast)',
           }}
         >
-          {putPrompt.isPending ? '[SAVING...]' : '[SAVE]'}
+          {putPrompt.isPending ? t('common.saving') : t('common.save')}
         </button>
 
         <button
@@ -209,23 +210,23 @@ export function RepoPromptPage() {
             fontSize: '0.6875rem',
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
-            color: isDirty ? 'var(--graphite)' : 'var(--graphite)',
+            color: 'var(--graphite)',
             opacity: isDirty ? 1 : 0.4,
             cursor: isDirty ? 'pointer' : 'not-allowed',
             padding: '0.5rem 0',
           }}
         >
-          [DISCARD]
+          {t('common.discard')}
         </button>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '1rem' }}>
           {isDirty && (
             <span className="label-mono" style={{ color: 'var(--rust)', fontSize: '0.5625rem' }}>
-              [UNSAVED]
+              {t('common.unsaved')}
             </span>
           )}
           <span className="label-mono" style={{ color: 'var(--graphite)' }} aria-live="polite">
-            {formatNumber(draft.length)} / {formatNumber(MAX_CHARS)} chars
+            {formatNumber(draft.length)} / {formatNumber(MAX_CHARS)} {t('pages.repoPrompt.chars')}
           </span>
         </div>
       </div>

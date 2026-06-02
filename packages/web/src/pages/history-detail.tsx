@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router-dom';
 import { useReviewDetail } from '../api/client.js';
 import type { ReviewEventDetail } from '../api/types.js';
@@ -30,6 +31,7 @@ type SystemPromptToggleProps = {
 };
 
 function SystemPromptToggle({ prompt }: SystemPromptToggleProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   return (
@@ -50,7 +52,7 @@ function SystemPromptToggle({ prompt }: SystemPromptToggleProps) {
           listStyle: 'none',
         }}
       >
-        {open ? '[HIDE PROMPT]' : '[SHOW PROMPT]'}
+        {open ? t('pages.historyDetail.hidePrompt') : t('pages.historyDetail.showPrompt')}
       </summary>
       <pre
         style={{
@@ -67,7 +69,7 @@ function SystemPromptToggle({ prompt }: SystemPromptToggleProps) {
           borderRadius: 'var(--radius)',
         }}
       >
-        {prompt ?? '[NULL] No snapshot.'}
+        {prompt ?? t('pages.historyDetail.nullPrompt')}
       </pre>
     </details>
   );
@@ -78,16 +80,19 @@ type DetailLayoutProps = {
 };
 
 function DetailLayout({ detail }: DetailLayoutProps) {
+  const { t } = useTranslation();
   const repoId = detail.repoId;
   const summaryText =
     detail.summary ??
     (detail.outcome === 'approved'
-      ? 'Review completed. No significant issues found.'
+      ? t('pages.historyDetail.summaryApproved')
       : detail.outcome === 'changes_requested'
-        ? 'Review completed. Changes requested.'
+        ? t('pages.historyDetail.summaryChangesRequested')
         : detail.outcome === 'commented'
-          ? 'Review completed. General observations posted.'
-          : 'Review did not complete successfully.');
+          ? t('pages.historyDetail.summaryCommented')
+          : t('pages.historyDetail.summaryFailed'));
+
+  const commentsCount = detail.comments.length;
 
   return (
     <StaggerContainer>
@@ -98,7 +103,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
           style={{ color: 'var(--graphite)', marginBottom: '0.5rem', fontSize: '0.6875rem' }}
         >
           <Link to="/history" style={{ color: 'var(--graphite)' }}>
-            History
+            {t('pages.historyDetail.history')}
           </Link>
           {' / '}
           <Link to={`/repos/${repoId}`} style={{ color: 'var(--graphite)' }}>
@@ -171,7 +176,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
           <div>
             {/* Summary */}
             <section style={{ marginBottom: '3rem' }}>
-              <SectionHeading title="Summary" />
+              <SectionHeading title={t('pages.historyDetail.summaryTitle')} />
               <p
                 style={{
                   fontFamily: 'var(--font-display)',
@@ -187,12 +192,17 @@ function DetailLayout({ detail }: DetailLayoutProps) {
             {/* Comments posted */}
             <section style={{ marginBottom: '3rem' }}>
               <SectionHeading
-                title="Comments Posted"
-                subtitle={`${detail.comments.length} inline comment${detail.comments.length === 1 ? '' : 's'}`}
+                title={t('pages.historyDetail.commentsTitle')}
+                subtitle={t(
+                  commentsCount === 1
+                    ? 'pages.historyDetail.commentsSubtitle_one'
+                    : 'pages.historyDetail.commentsSubtitle_other',
+                  { count: commentsCount },
+                )}
               />
               {detail.comments.length === 0 ? (
                 <p className="label-mono" style={{ color: 'var(--graphite)', fontSize: '0.75rem' }}>
-                  [ NO INLINE COMMENTS POSTED ]
+                  {t('pages.historyDetail.noInlineComments')}
                 </p>
               ) : (
                 <div>
@@ -238,10 +248,10 @@ function DetailLayout({ detail }: DetailLayoutProps) {
 
             {/* Tool calls */}
             <section style={{ marginBottom: '3rem' }}>
-              <SectionHeading title="Tool Calls" />
+              <SectionHeading title={t('pages.historyDetail.toolCallsTitle')} />
               {detail.toolCalls.length === 0 ? (
                 <p className="label-mono" style={{ color: 'var(--graphite)', fontSize: '0.75rem' }}>
-                  [ NO TOOL CALLS RECORDED ]
+                  {t('pages.historyDetail.noToolCalls')}
                 </p>
               ) : (
                 <table
@@ -265,7 +275,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                           paddingRight: '2rem',
                         }}
                       >
-                        name
+                        {t('pages.historyDetail.toolCallsHeaderName')}
                       </th>
                       <th
                         style={{
@@ -277,7 +287,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                           borderBottom: '1px solid var(--hairline)',
                         }}
                       >
-                        count
+                        {t('pages.historyDetail.toolCallsHeaderCount')}
                       </th>
                     </tr>
                   </thead>
@@ -341,7 +351,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   marginBottom: '0.875rem',
                 }}
               >
-                COST BREAKDOWN
+                {t('pages.historyDetail.costBreakdown')}
               </h3>
               <dl
                 style={{
@@ -354,19 +364,23 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   margin: 0,
                 }}
               >
-                <dt style={{ color: 'var(--graphite)' }}>prompt tokens:</dt>
+                <dt style={{ color: 'var(--graphite)' }}>
+                  {t('pages.historyDetail.promptTokens')}
+                </dt>
                 <dd style={{ color: 'var(--fg)', textAlign: 'right', margin: 0 }}>
                   {formatNumber(detail.tokens.prompt)}
                 </dd>
-                <dt style={{ color: 'var(--graphite)' }}>completion tokens:</dt>
+                <dt style={{ color: 'var(--graphite)' }}>
+                  {t('pages.historyDetail.completionTokens')}
+                </dt>
                 <dd style={{ color: 'var(--fg)', textAlign: 'right', margin: 0 }}>
                   {formatNumber(detail.tokens.completion)}
                 </dd>
-                <dt style={{ color: 'var(--graphite)' }}>total tokens:</dt>
+                <dt style={{ color: 'var(--graphite)' }}>{t('pages.historyDetail.totalTokens')}</dt>
                 <dd style={{ color: 'var(--fg)', textAlign: 'right', margin: 0 }}>
                   {formatNumber(detail.tokens.total)}
                 </dd>
-                <dt style={{ color: 'var(--graphite)' }}>usd:</dt>
+                <dt style={{ color: 'var(--graphite)' }}>{t('pages.historyDetail.usd')}</dt>
                 <dd style={{ color: 'var(--fg)', textAlign: 'right', margin: 0 }}>
                   ${detail.costUsd.toFixed(3)}
                 </dd>
@@ -392,13 +406,22 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   marginBottom: '0.875rem',
                 }}
               >
-                TIMING
+                {t('pages.historyDetail.timing')}
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                 {[
-                  { label: 'queued at', time: detail.timing.queuedAt },
-                  { label: 'started at', time: detail.timing.startedAt },
-                  { label: 'completed at', time: detail.timing.completedAt },
+                  {
+                    label: t('pages.historyDetail.queuedAt'),
+                    time: detail.timing.queuedAt,
+                  },
+                  {
+                    label: t('pages.historyDetail.startedAt'),
+                    time: detail.timing.startedAt,
+                  },
+                  {
+                    label: t('pages.historyDetail.completedAt'),
+                    time: detail.timing.completedAt,
+                  },
                 ].map((entry, idx, arr) => {
                   const prevTime = idx > 0 ? (arr[idx - 1]?.time ?? null) : null;
                   const elapsed =
@@ -492,7 +515,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   marginBottom: '0.5rem',
                 }}
               >
-                PROVIDER
+                {t('pages.historyDetail.provider')}
               </h3>
               <span
                 style={{
@@ -525,7 +548,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   marginBottom: '0.25rem',
                 }}
               >
-                SYSTEM PROMPT AT REVIEW TIME
+                {t('pages.historyDetail.systemPromptAtReview')}
               </h3>
               <SystemPromptToggle prompt={detail.systemPromptAtReview} />
             </div>
@@ -549,7 +572,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                   marginBottom: '0.875rem',
                 }}
               >
-                RELATED LINKS
+                {t('pages.historyDetail.relatedLinks')}
               </h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {detail.externalUrl !== null && isSafeExternalUrl(detail.externalUrl) ? (
@@ -564,7 +587,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                       textDecoration: 'none',
                     }}
                   >
-                    View PR ↗
+                    {t('pages.historyDetail.viewPr')}
                   </a>
                 ) : (
                   <span
@@ -577,7 +600,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                     }}
                     aria-disabled="true"
                   >
-                    View PR ↗
+                    {t('pages.historyDetail.viewPr')}
                   </span>
                 )}
                 <Link
@@ -589,7 +612,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                     textDecoration: 'none',
                   }}
                 >
-                  Repository →
+                  {t('pages.historyDetail.repository')}
                 </Link>
                 <Link
                   to={`/repos/${repoId}/prompt`}
@@ -600,7 +623,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
                     textDecoration: 'none',
                   }}
                 >
-                  Edit current prompt →
+                  {t('pages.historyDetail.editCurrentPrompt')}
                 </Link>
               </div>
             </div>
@@ -612,6 +635,7 @@ function DetailLayout({ detail }: DetailLayoutProps) {
 }
 
 export function HistoryDetailPage() {
+  const { t } = useTranslation();
   const { id } = useParams<{ id: string }>();
   const safeId = id ?? '';
   const { data, isLoading, error } = useReviewDetail(safeId);
@@ -619,7 +643,7 @@ export function HistoryDetailPage() {
   if (isLoading) {
     return (
       <div className="label-mono" style={{ color: 'var(--graphite)', padding: '2rem 0' }}>
-        [LOADING REVIEW...]
+        {t('pages.historyDetail.loadingReview')}
       </div>
     );
   }
@@ -628,10 +652,10 @@ export function HistoryDetailPage() {
     return (
       <div style={{ padding: '2rem 0' }}>
         <p className="label-mono" style={{ color: 'var(--rust)', marginBottom: '1rem' }}>
-          [NOT FOUND]
+          {t('pages.historyDetail.notFound')}
         </p>
         <Link to="/history" className="label-mono" style={{ color: 'var(--graphite)' }}>
-          [← Back to History]
+          {t('pages.historyDetail.backToHistory')}
         </Link>
       </div>
     );

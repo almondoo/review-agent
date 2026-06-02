@@ -1,14 +1,10 @@
-import type { ReactNode } from 'react';
 import { useId } from 'react';
+import { Outlet } from 'react-router-dom';
 import { GrainOverlay } from './grain-overlay.js';
 import { Header } from './header.js';
 import { Sidebar } from './sidebar.js';
 
-type LayoutProps = {
-  children: ReactNode;
-};
-
-export function Layout({ children }: LayoutProps) {
+export function Layout() {
   const mainContentId = useId();
   return (
     <>
@@ -26,7 +22,7 @@ export function Layout({ children }: LayoutProps) {
               maxWidth: 'calc(var(--max-width) - var(--sidebar-width))',
             }}
           >
-            {children}
+            <Outlet />
           </main>
         </div>
       </div>

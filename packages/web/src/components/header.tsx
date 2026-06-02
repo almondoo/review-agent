@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { LANG_STORAGE_KEY } from '../i18n/index.js';
 import { Hairline } from './hairline.js';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -19,6 +21,7 @@ function formatTimestamp(): string {
 }
 
 export function Header() {
+  const { t, i18n } = useTranslation();
   const [theme, setTheme] = useState<Theme>('system');
   const [timestamp] = useState(formatTimestamp);
 
@@ -44,7 +47,15 @@ export function Header() {
     });
   }
 
+  function toggleLanguage() {
+    const next = i18n.language === 'ja' ? 'en' : 'ja';
+    void i18n.changeLanguage(next);
+    localStorage.setItem(LANG_STORAGE_KEY, next);
+    document.documentElement.lang = next;
+  }
+
   const effectiveTheme = getEffectiveTheme(theme);
+  const isJa = i18n.language === 'ja';
 
   return (
     <header
@@ -74,25 +85,25 @@ export function Header() {
         review-agent
       </div>
 
-      {/* Right: timestamp + theme toggle */}
+      {/* Right: timestamp + lang toggle + theme toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
         {/* Timestamp stamp */}
         <span
           role="img"
           className="label-mono"
           style={{ color: 'var(--graphite)' }}
-          aria-label="Current date"
+          aria-label={t('header.currentDate')}
         >
           [{timestamp} — WAVE 17]
         </span>
 
         <Hairline vertical style={{ height: '20px' }} />
 
-        {/* Dark mode toggle */}
+        {/* Language toggle */}
         <button
           type="button"
-          onClick={toggleTheme}
-          aria-label={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} mode`}
+          onClick={toggleLanguage}
+          aria-label={t('header.switchLang')}
           style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '0.625rem',
@@ -106,7 +117,32 @@ export function Header() {
             transition: 'color var(--transition-fast), border-color var(--transition-fast)',
           }}
         >
-          {effectiveTheme === 'dark' ? '[LIGHT]' : '[DARK]'}
+          {isJa ? '[EN]' : '[JA]'}
+        </button>
+
+        <Hairline vertical style={{ height: '20px' }} />
+
+        {/* Dark mode toggle */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={
+            effectiveTheme === 'dark' ? t('header.switchToLight') : t('header.switchToDark')
+          }
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.625rem',
+            fontWeight: 600,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--graphite)',
+            padding: '0.25rem 0.5rem',
+            border: '1px solid var(--hairline)',
+            borderRadius: 'var(--radius)',
+            transition: 'color var(--transition-fast), border-color var(--transition-fast)',
+          }}
+        >
+          {effectiveTheme === 'dark' ? t('header.light') : t('header.dark')}
         </button>
       </div>
     </header>
