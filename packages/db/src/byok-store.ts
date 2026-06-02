@@ -9,9 +9,12 @@ import {
 import { installationSecrets } from '@review-agent/core/db';
 import { and, eq } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
+import type { TenantTransaction } from './tenancy.js';
 
 export type ByokStoreDeps = {
-  readonly db: DbClient;
+  /** Accept both the pool client and a tenant-scoped transaction so callers
+   * can construct the store inside a `withTenant` callback to honour RLS. */
+  readonly db: DbClient | TenantTransaction;
   readonly kms: KmsClient;
 };
 

@@ -1,5 +1,5 @@
 import type { KmsClient, QueueClient } from '@review-agent/core';
-import type { AuditAppender, ByokStore, DbClient } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { type ApiDeps, createApi } from './api/index.js';
@@ -32,11 +32,6 @@ export type AppDeps = {
    * In production, pass createAwsKmsClient() from @review-agent/kms-aws.
    */
   readonly kmsClient?: KmsClient;
-  /**
-   * Pre-constructed ByokStore (for tests). When omitted and kmsClient is
-   * set, one is built automatically inside createApi.
-   */
-  readonly byokStore?: ByokStore;
   /**
    * Pre-constructed AuditAppender (for tests).
    */
@@ -172,10 +167,8 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       })(),
       requireDashboardAuth: deps.api?.requireDashboardAuth ?? process.env.NODE_ENV === 'production',
       // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
-      // /integrations/llm-keys routes can wrap/unwrap data keys.
-      // Prefer pre-constructed store/appender injections (test overrides).
+      // /integrations/llm-keys routes can wrap/unwrap data keys per request.
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
-      ...(deps.byokStore !== undefined ? { byokStore: deps.byokStore } : {}),
       ...(deps.auditAppender !== undefined ? { auditAppender: deps.auditAppender } : {}),
       ...(kmsKeyId !== undefined && kmsKeyId.length > 0 ? { kmsKeyId } : {}),
     }),

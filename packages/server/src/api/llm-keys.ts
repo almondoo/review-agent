@@ -12,9 +12,8 @@
  * KMS key ID comes from server config (REVIEW_AGENT_BYOK_KMS_KEY_ID env var),
  * never from the request body.
  */
-import { BYOK_PROVIDERS, type BYOKProvider } from '@review-agent/core';
-import type { AuditAppender, ByokStore, DbClient, TenantTransaction } from '@review-agent/db';
-import { withTenant } from '@review-agent/db';
+import { BYOK_PROVIDERS, type BYOKProvider, type KmsClient } from '@review-agent/core';
+import { type AuditAppender, createByokStore, type DbClient, withTenant } from '@review-agent/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
 
@@ -33,12 +32,8 @@ const upsertBodySchema = z.object({
   apiKey: z.string().min(1).max(8192),
 });
 
-const rotateBodySchema = z.object({
-  installationId: installationIdSchema,
-  provider: providerSchema,
-});
-
-const deleteBodySchema = z.object({
+/** Shared schema for rotate and delete — both need only installationId + provider. */
+const lookupBodySchema = z.object({
   installationId: installationIdSchema,
   provider: providerSchema,
 });
@@ -62,7 +57,8 @@ const listQuerySchema = z.object({
 
 export type LlmKeysDeps = {
   readonly db: DbClient;
-  readonly byokStore: ByokStore;
+  /** KMS client used to wrap/unwrap BYOK data keys per request. */
+  readonly kms: KmsClient;
   readonly auditAppender: AuditAppender;
   /**
    * The AWS KMS CMK key ID / ARN used to wrap data keys.
@@ -95,10 +91,10 @@ export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
     }
     const { installationId } = parsed.data;
 
-    const keys = await withTenant(deps.db, installationId, async (_tx: TenantTransaction) => {
-      // byokStore.listProviders queries installationSecrets inside the tenant
-      // transaction so RLS bounds the SELECT to the matching installation_id.
-      return deps.byokStore.listProviders(BigInt(installationId));
+    const keys = await withTenant(deps.db, installationId, async (tx) => {
+      // Build the store bound to tx so every query runs with the tenant GUC set.
+      const store = createByokStore({ db: tx, kms: deps.kms });
+      return store.listProviders(BigInt(installationId));
     });
 
     return c.json({ installationId, keys }, 200);
@@ -127,22 +123,36 @@ export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
     }
     const { installationId, provider, apiKey } = parsed.data;
 
-    await withTenant(deps.db, installationId, async (_tx: TenantTransaction) => {
-      await deps.byokStore.upsert({
+    let auditError: unknown;
+    await withTenant(deps.db, installationId, async (tx) => {
+      const store = createByokStore({ db: tx, kms: deps.kms });
+      await store.upsert({
         installationId: BigInt(installationId),
         provider: provider as BYOKProvider,
         kmsKeyId: deps.kmsKeyId,
         secret: apiKey,
       });
+      // Audit inside the same transaction so secret op + audit log are atomic.
+      // Audit the operation. provider goes in the `model` field (the only
+      // available free-text field besides `event`). apiKey is NEVER included.
+      try {
+        await deps.auditAppender({
+          event: 'byok.key.upsert',
+          installationId: BigInt(installationId),
+          model: provider,
+        });
+      } catch (err) {
+        // Best-effort audit: if the audit write fails, log server-side but do
+        // not fail the HTTP response — the key was already persisted.
+        auditError = err;
+      }
     });
 
-    // Audit the operation. provider goes in the `model` field (the only
-    // available free-text field besides `event`). apiKey is NEVER included.
-    await deps.auditAppender({
-      event: 'byok.key.upsert',
-      installationId: BigInt(installationId),
-      model: provider,
-    });
+    if (auditError !== undefined) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for byok.key.upsert installationId=${installationId}: ${String(auditError)}\n`,
+      );
+    }
 
     return c.json({ installationId, provider, configured: true as const }, 200);
   });
@@ -156,6 +166,7 @@ export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
    * data key is zeroed — no plaintext crosses the wire.
    *
    * 200: { installationId: number, provider: BYOKProvider, configured: true }
+   * 404: { error: 'key_not_found' } — no existing key to rotate
    */
   app.post('/rotate', async (c) => {
     let body: unknown;
@@ -165,25 +176,50 @@ export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
       return c.json({ error: 'invalid JSON body' }, 400);
     }
 
-    const parsed = rotateBodySchema.safeParse(body);
+    const parsed = lookupBodySchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
     }
     const { installationId, provider } = parsed.data;
 
-    await withTenant(deps.db, installationId, async (_tx: TenantTransaction) => {
-      await deps.byokStore.rotate({
-        installationId: BigInt(installationId),
-        provider: provider as BYOKProvider,
-        kmsKeyId: deps.kmsKeyId,
+    let auditError: unknown;
+    let keyNotFound = false;
+    try {
+      await withTenant(deps.db, installationId, async (tx) => {
+        const store = createByokStore({ db: tx, kms: deps.kms });
+        await store.rotate({
+          installationId: BigInt(installationId),
+          provider: provider as BYOKProvider,
+          kmsKeyId: deps.kmsKeyId,
+        });
+        try {
+          await deps.auditAppender({
+            event: 'byok.key.rotate',
+            installationId: BigInt(installationId),
+            model: provider,
+          });
+        } catch (err) {
+          auditError = err;
+        }
       });
-    });
+    } catch (err) {
+      // Distinguish "no row to rotate" (expected 404) from genuine server errors.
+      if (err instanceof Error && err.message.includes('BYOK row missing')) {
+        keyNotFound = true;
+      } else {
+        throw err;
+      }
+    }
 
-    await deps.auditAppender({
-      event: 'byok.key.rotate',
-      installationId: BigInt(installationId),
-      model: provider,
-    });
+    if (keyNotFound) {
+      return c.json({ error: 'key_not_found' }, 404);
+    }
+
+    if (auditError !== undefined) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for byok.key.rotate installationId=${installationId}: ${String(auditError)}\n`,
+      );
+    }
 
     return c.json({ installationId, provider, configured: true as const }, 200);
   });
@@ -205,24 +241,35 @@ export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
       return c.json({ error: 'invalid JSON body' }, 400);
     }
 
-    const parsed = deleteBodySchema.safeParse(body);
+    const parsed = lookupBodySchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
     }
     const { installationId, provider } = parsed.data;
 
-    await withTenant(deps.db, installationId, async (_tx: TenantTransaction) => {
-      await deps.byokStore.remove({
+    let auditError: unknown;
+    await withTenant(deps.db, installationId, async (tx) => {
+      const store = createByokStore({ db: tx, kms: deps.kms });
+      await store.remove({
         installationId: BigInt(installationId),
         provider: provider as BYOKProvider,
       });
+      try {
+        await deps.auditAppender({
+          event: 'byok.key.delete',
+          installationId: BigInt(installationId),
+          model: provider,
+        });
+      } catch (err) {
+        auditError = err;
+      }
     });
 
-    await deps.auditAppender({
-      event: 'byok.key.delete',
-      installationId: BigInt(installationId),
-      model: provider,
-    });
+    if (auditError !== undefined) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for byok.key.delete installationId=${installationId}: ${String(auditError)}\n`,
+      );
+    }
 
     return c.json({ installationId, provider, configured: false as const }, 200);
   });

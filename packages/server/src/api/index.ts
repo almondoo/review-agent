@@ -1,6 +1,6 @@
 import type { KmsClient } from '@review-agent/core';
-import type { AuditAppender, ByokStore, DbClient } from '@review-agent/db';
-import { createAuditAppender, createByokStore } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
+import { createAuditAppender } from '@review-agent/db';
 import { Hono } from 'hono';
 import { createDashboardRouter } from './dashboard.js';
 import { createIntegrationsRouter, type IntegrationsEnv } from './integrations.js';
@@ -30,22 +30,17 @@ export type ApiDeps = {
    */
   readonly requireDashboardAuth?: boolean;
   /**
-   * KMS client used to wrap/unwrap BYOK data keys.
-   * When provided, a byokStore and auditAppender are constructed from it.
-   * When omitted the /integrations/llm-keys routes return 503.
+   * KMS client used to wrap/unwrap BYOK data keys per request.
+   * When provided, the /integrations/llm-keys routes are enabled.
+   * When omitted the routes return 503.
    */
   readonly kmsClient?: KmsClient;
   /**
    * AWS KMS CMK key ID / ARN used to wrap BYOK data keys.
    * Sourced from REVIEW_AGENT_BYOK_KMS_KEY_ID env var in production.
-   * Ignored when kmsClient is not provided.
+   * Required when kmsClient is provided — routes return 503 if missing.
    */
   readonly kmsKeyId?: string;
-  /**
-   * Pre-constructed ByokStore. When provided, kmsClient is not used to
-   * build a store (allows test injection).
-   */
-  readonly byokStore?: ByokStore;
   /**
    * Pre-constructed AuditAppender. When provided, a new one is not built
    * from deps.db (allows test injection).
@@ -99,30 +94,35 @@ export function createApi(deps: ApiDeps): Hono {
   api.route('/integrations', createIntegrationsRouter({ env: deps.env }));
 
   // Wire BYOK LLM key management routes when KMS is configured.
-  // Resolve the store + appender: prefer explicit injections (tests) over
-  // auto-construction from kmsClient + db.
-  const resolvedByokStore =
-    deps.byokStore ??
-    (deps.kmsClient !== undefined
-      ? createByokStore({ db: deps.db, kms: deps.kmsClient })
-      : undefined);
   const resolvedAuditAppender =
     deps.auditAppender ??
     (deps.now !== undefined
       ? createAuditAppender(deps.db, deps.now)
       : createAuditAppender(deps.db));
 
-  if (resolvedByokStore !== undefined && deps.kmsKeyId !== undefined && deps.kmsKeyId.length > 0) {
+  const kmsKeyId =
+    deps.kmsKeyId !== undefined && deps.kmsKeyId.length > 0 ? deps.kmsKeyId : undefined;
+
+  if (deps.kmsClient !== undefined && kmsKeyId !== undefined) {
+    // Capture in local consts so TypeScript narrows the types for the closure.
+    const kms = deps.kmsClient;
     api.route(
       '/integrations/llm-keys',
       createLlmKeysRouter({
         db: deps.db,
-        byokStore: resolvedByokStore,
+        kms,
         auditAppender: resolvedAuditAppender,
-        kmsKeyId: deps.kmsKeyId,
+        kmsKeyId,
       }),
     );
   } else {
+    // Emit a startup warning when kmsClient is present but kmsKeyId is missing/empty
+    // so operators know exactly which field to configure.
+    if (deps.kmsClient !== undefined) {
+      process.stderr.write(
+        '[review-agent] WARN: kmsClient is set but kmsKeyId (REVIEW_AGENT_BYOK_KMS_KEY_ID) is missing or empty — /api/integrations/llm-keys routes disabled (503). Set REVIEW_AGENT_BYOK_KMS_KEY_ID to enable BYOK.\n',
+      );
+    }
     // Routes not configured — return 503 so the frontend can detect misconfiguration.
     api.all('/integrations/llm-keys/*', (c) => c.json({ error: 'llm_keys_not_configured' }, 503));
     api.all('/integrations/llm-keys', (c) => c.json({ error: 'llm_keys_not_configured' }, 503));

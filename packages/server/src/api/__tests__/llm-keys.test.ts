@@ -1,18 +1,31 @@
 /**
  * Tests for /api/integrations/llm-keys routes.
  *
- * Uses a fake ByokStore, fake AuditAppender, and a fake withTenant-aware
- * DbClient so no live Postgres is required. The withTenant function is
- * mocked to call fn(db) directly so RLS path execution is asserted via
- * the call to withTenant itself.
+ * Uses a fake KmsClient, fake AuditAppender, and a fake DbClient so no live
+ * Postgres is required.
+ *
+ * The key RLS invariant is that every byok-store call must happen on the
+ * `tx` connection that withTenant set the GUC on — NOT on the pool `db`.
+ * The regression test section at the bottom proves this with a spy that
+ * captures which `db` instance was passed to `createByokStore`.
  */
-import { BYOK_PROVIDERS, type BYOKProvider } from '@review-agent/core';
+import { BYOK_PROVIDERS, type BYOKProvider, type KmsClient } from '@review-agent/core';
 import type { AuditAppender, ByokProviderStatus, ByokStore } from '@review-agent/db';
 import { describe, expect, it, vi } from 'vitest';
 import { createApi } from '../index.js';
 
 // ---------------------------------------------------------------------------
-// Fake ByokStore
+// Fake KmsClient (no real AWS calls)
+// ---------------------------------------------------------------------------
+function fakeKmsClient(): KmsClient {
+  return {
+    encryptDataKey: vi.fn(async (plaintext) => Buffer.from(plaintext)),
+    decryptDataKey: vi.fn(async (ciphertext) => Buffer.from(ciphertext)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fake ByokStore (returned by the mocked createByokStore)
 // ---------------------------------------------------------------------------
 type ByokKey = { provider: BYOKProvider; secret: string; kmsKeyId: string };
 type ByokStoreState = Map<string, ByokKey>;
@@ -85,9 +98,24 @@ function fakeDb() {
 }
 
 // ---------------------------------------------------------------------------
-// Mock drizzle-orm's withTenant to call fn(db) directly
-// (avoids needing a live PG connection for the transaction wrapper)
+// Module mock: replace withTenant and createByokStore with controllable fakes.
+//
+// createByokStore is mocked so we can:
+//   1. Control what store instance is returned (per-test state).
+//   2. Spy on which `db` argument it receives — the regression test uses this
+//      to assert the tx (not the pool db) is threaded in.
+//
+// withTenant is mocked to call fn(SENTINEL_TX) where SENTINEL_TX is a
+// distinct object from the pool `db`. The regression test verifies
+// createByokStore was called with SENTINEL_TX, not with pool db.
 // ---------------------------------------------------------------------------
+
+/** Sentinel transaction object — distinct from any fakeDb() instance. */
+const SENTINEL_TX = { _isTx: true as const };
+
+// Per-test store factory. Tests that need a custom store set this before calling makeApi.
+let currentStoreFactory: (() => ByokStore) | null = null;
+
 vi.mock('@review-agent/db', async () => {
   const actual = await vi.importActual<typeof import('@review-agent/db')>('@review-agent/db');
   return {
@@ -96,14 +124,17 @@ vi.mock('@review-agent/db', async () => {
       _db: unknown,
       _installationId: unknown,
       fn: (tx: unknown) => Promise<unknown>,
-    ) => fn({}),
+    ) => fn(SENTINEL_TX),
     createAuditAppender: () => async () => ({
       ts: new Date(),
       event: 'noop',
       prevHash: '0'.repeat(64),
       hash: '0'.repeat(64),
     }),
-    createByokStore: actual.createByokStore,
+    createByokStore: vi.fn((_deps: unknown) => {
+      if (currentStoreFactory) return currentStoreFactory();
+      return fakeBYOKStore();
+    }),
   };
 });
 
@@ -111,23 +142,26 @@ vi.mock('@review-agent/db', async () => {
 // Helper: build a createApi instance with all fake deps
 // ---------------------------------------------------------------------------
 function makeApi(opts: {
-  byokStore?: ByokStore;
+  kmsClient?: KmsClient;
   auditAppender?: AuditAppender;
   dashboardToken?: string;
   kmsKeyId?: string;
 }) {
   const db = fakeDb();
-  return createApi({
-    // biome-ignore lint/suspicious/noExplicitAny: test mock
-    db: db as any,
-    env: {},
-    now: () => new Date('2026-01-01T00:00:00Z'),
-    dashboardToken: opts.dashboardToken,
-    requireDashboardAuth: false,
-    byokStore: opts.byokStore,
-    auditAppender: opts.auditAppender,
-    kmsKeyId: opts.kmsKeyId ?? 'arn:aws:kms:us-east-1:111:key/test-cmk',
-  });
+  return {
+    api: createApi({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      env: {},
+      now: () => new Date('2026-01-01T00:00:00Z'),
+      dashboardToken: opts.dashboardToken,
+      requireDashboardAuth: false,
+      kmsClient: opts.kmsClient ?? fakeKmsClient(),
+      auditAppender: opts.auditAppender,
+      kmsKeyId: opts.kmsKeyId ?? 'arn:aws:kms:us-east-1:111:key/test-cmk',
+    }),
+    db,
+  };
 }
 
 const AUTH = { Authorization: 'Bearer test-token' };
@@ -140,10 +174,9 @@ const JSON_CT = { 'Content-Type': 'application/json' };
 describe('GET /integrations/llm-keys', () => {
   it('returns one entry per provider, all unconfigured by default', async () => {
     const state = new Map<string, ByokKey>();
-    const store = fakeBYOKStore(state);
+    currentStoreFactory = () => fakeBYOKStore(state);
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -172,10 +205,9 @@ describe('GET /integrations/llm-keys', () => {
       secret: 'sk-xxx',
       kmsKeyId: 'k',
     });
-    const store = fakeBYOKStore(state);
+    currentStoreFactory = () => fakeBYOKStore(state);
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -192,8 +224,8 @@ describe('GET /integrations/llm-keys', () => {
   });
 
   it('returns 422 when installationId is missing', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -205,8 +237,8 @@ describe('GET /integrations/llm-keys', () => {
   });
 
   it('returns 422 when installationId is not a positive integer', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -217,8 +249,8 @@ describe('GET /integrations/llm-keys', () => {
   });
 
   it('returns 401 without auth token', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -231,9 +263,9 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   it('stores the API key and returns configured: true', async () => {
     const state = new Map<string, ByokKey>();
     const store = fakeBYOKStore(state);
+    currentStoreFactory = () => store;
     const { appender, records } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -266,8 +298,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 422 for missing installationId', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -283,8 +315,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 422 for unknown provider', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -297,8 +329,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 422 for empty apiKey', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -311,8 +343,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 422 for apiKey exceeding 8192 chars', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -325,8 +357,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 400 for malformed JSON', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -341,8 +373,8 @@ describe('POST /integrations/llm-keys (upsert)', () => {
   });
 
   it('returns 401 without auth token', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -364,9 +396,9 @@ describe('POST /integrations/llm-keys/rotate', () => {
       kmsKeyId: 'k1',
     });
     const store = fakeBYOKStore(state);
+    currentStoreFactory = () => store;
     const { appender, records } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -395,9 +427,33 @@ describe('POST /integrations/llm-keys/rotate', () => {
     expect(store.rotate).toHaveBeenCalledOnce();
   });
 
+  it('returns 404 when rotating a non-existent key', async () => {
+    // Rotating a key that does not exist must return 404, not 500.
+    // The byok-store throws Error('BYOK row missing ...') — the handler must
+    // catch it and map to { error: 'key_not_found' } 404.
+    currentStoreFactory = () => fakeBYOKStore(); // empty state
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+    });
+
+    const res = await api.request('http://host/integrations/llm-keys/rotate', {
+      method: 'POST',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 99, provider: 'anthropic' }),
+    });
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe('key_not_found');
+    // Must not leak installationId or provider in the error body
+    expect(JSON.stringify(body)).not.toContain('99');
+    expect(JSON.stringify(body)).not.toContain('anthropic');
+  });
+
   it('returns 422 for missing provider', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -410,8 +466,8 @@ describe('POST /integrations/llm-keys/rotate', () => {
   });
 
   it('returns 400 for malformed JSON', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -429,9 +485,9 @@ describe('DELETE /integrations/llm-keys', () => {
     const state = new Map<string, ByokKey>();
     state.set(storeKey(5n, 'vertex'), { provider: 'vertex', secret: 'gcp-key', kmsKeyId: 'k' });
     const store = fakeBYOKStore(state);
+    currentStoreFactory = () => store;
     const { appender, records } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -456,10 +512,9 @@ describe('DELETE /integrations/llm-keys', () => {
   });
 
   it('is idempotent — deleting non-existent key still returns 200', async () => {
-    const store = fakeBYOKStore();
+    currentStoreFactory = () => fakeBYOKStore();
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -475,8 +530,8 @@ describe('DELETE /integrations/llm-keys', () => {
   });
 
   it('returns 422 for invalid provider', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -489,8 +544,8 @@ describe('DELETE /integrations/llm-keys', () => {
   });
 
   it('returns 400 for malformed JSON', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -503,8 +558,8 @@ describe('DELETE /integrations/llm-keys', () => {
   });
 
   it('returns 401 without auth token', async () => {
-    const api = makeApi({
-      byokStore: fakeBYOKStore(),
+    currentStoreFactory = () => fakeBYOKStore();
+    const { api } = makeApi({
       auditAppender: fakeAuditAppender().appender,
       dashboardToken: 'test-token',
     });
@@ -526,7 +581,7 @@ describe('503 when KMS not configured', () => {
       env: {},
       dashboardToken: undefined,
       requireDashboardAuth: false,
-      // No kmsKeyId, no byokStore → llm-keys routes not wired
+      // No kmsKeyId, no kmsClient → llm-keys routes not wired
     });
     const res = await api.request('http://host/integrations/llm-keys?installationId=1');
     expect(res.status).toBe(503);
@@ -536,10 +591,9 @@ describe('503 when KMS not configured', () => {
 describe('Response masking — no secret material ever returned', () => {
   it('POST upsert never echoes apiKey in any form', async () => {
     const SECRET = 'sk-SUPER-SECRET-KEY-NEVER-RETURN';
-    const store = fakeBYOKStore();
+    currentStoreFactory = () => fakeBYOKStore();
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -557,9 +611,9 @@ describe('Response masking — no secret material ever returned', () => {
 describe('withTenant / RLS path exercised', () => {
   it('listProviders is called with the correct installationId', async () => {
     const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -572,9 +626,9 @@ describe('withTenant / RLS path exercised', () => {
 
   it('upsert is called with the correct BigInt installationId', async () => {
     const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
     const { appender } = fakeAuditAppender();
-    const api = makeApi({
-      byokStore: store,
+    const { api } = makeApi({
       auditAppender: appender,
       dashboardToken: 'test-token',
     });
@@ -588,5 +642,234 @@ describe('withTenant / RLS path exercised', () => {
     expect(store.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ installationId: 123n, provider: 'openai' }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0 Regression: createByokStore must be called with the tx from withTenant,
+// NOT with the pool db. This test would FAIL against the old pool-bound code
+// (where deps.byokStore was constructed once with pool db and reused).
+// ---------------------------------------------------------------------------
+describe('P0 regression — byok store constructed with tx, not pool db', () => {
+  it('createByokStore receives the tx from withTenant for GET listProviders', async () => {
+    const { createByokStore: mockCreateByokStore } = await import('@review-agent/db');
+    const createByokStoreSpy = vi.mocked(mockCreateByokStore);
+    createByokStoreSpy.mockClear();
+
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api, db } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+    });
+
+    await api.request('http://host/integrations/llm-keys?installationId=5', { headers: AUTH });
+
+    // createByokStore must have been called exactly once with the tx (SENTINEL_TX),
+    // not with the pool db.
+    expect(createByokStoreSpy).toHaveBeenCalledOnce();
+    const callArg = createByokStoreSpy.mock.calls[0]?.[0];
+    expect(callArg?.db).toBe(SENTINEL_TX);
+    // Must NOT have been called with the pool db
+    expect(callArg?.db).not.toBe(db);
+  });
+
+  it('createByokStore receives the tx from withTenant for POST upsert', async () => {
+    const { createByokStore: mockCreateByokStore } = await import('@review-agent/db');
+    const createByokStoreSpy = vi.mocked(mockCreateByokStore);
+    createByokStoreSpy.mockClear();
+
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api, db } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+    });
+
+    await api.request('http://host/integrations/llm-keys', {
+      method: 'POST',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 10, provider: 'openai', apiKey: 'sk-x' }),
+    });
+
+    expect(createByokStoreSpy).toHaveBeenCalledOnce();
+    const callArg = createByokStoreSpy.mock.calls[0]?.[0];
+    expect(callArg?.db).toBe(SENTINEL_TX);
+    expect(callArg?.db).not.toBe(db);
+  });
+
+  it('createByokStore receives the tx from withTenant for POST rotate', async () => {
+    const { createByokStore: mockCreateByokStore } = await import('@review-agent/db');
+    const createByokStoreSpy = vi.mocked(mockCreateByokStore);
+    createByokStoreSpy.mockClear();
+
+    const state = new Map<string, ByokKey>();
+    state.set(storeKey(3n, 'openai'), { provider: 'openai', secret: 'sk-old', kmsKeyId: 'k' });
+    currentStoreFactory = () => fakeBYOKStore(state);
+    const { appender } = fakeAuditAppender();
+    const { api, db } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+    });
+
+    await api.request('http://host/integrations/llm-keys/rotate', {
+      method: 'POST',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 3, provider: 'openai' }),
+    });
+
+    expect(createByokStoreSpy).toHaveBeenCalledOnce();
+    const callArg = createByokStoreSpy.mock.calls[0]?.[0];
+    expect(callArg?.db).toBe(SENTINEL_TX);
+    expect(callArg?.db).not.toBe(db);
+  });
+
+  it('createByokStore receives the tx from withTenant for DELETE remove', async () => {
+    const { createByokStore: mockCreateByokStore } = await import('@review-agent/db');
+    const createByokStoreSpy = vi.mocked(mockCreateByokStore);
+    createByokStoreSpy.mockClear();
+
+    const state = new Map<string, ByokKey>();
+    state.set(storeKey(7n, 'vertex'), { provider: 'vertex', secret: 'gcp-key', kmsKeyId: 'k' });
+    currentStoreFactory = () => fakeBYOKStore(state);
+    const { appender } = fakeAuditAppender();
+    const { api, db } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+    });
+
+    await api.request('http://host/integrations/llm-keys', {
+      method: 'DELETE',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 7, provider: 'vertex' }),
+    });
+
+    expect(createByokStoreSpy).toHaveBeenCalledOnce();
+    const callArg = createByokStoreSpy.mock.calls[0]?.[0];
+    expect(callArg?.db).toBe(SENTINEL_TX);
+    expect(callArg?.db).not.toBe(db);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit best-effort: when auditAppender throws, the HTTP response is still 200
+// and a warning is written to stderr (not a 500).
+// ---------------------------------------------------------------------------
+describe('audit failure is best-effort — does not fail the HTTP response', () => {
+  it('POST upsert returns 200 even when auditAppender throws', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const failingAppender: AuditAppender = vi.fn(async () => {
+      throw new Error('audit DB down');
+    });
+    const { api } = makeApi({
+      auditAppender: failingAppender,
+      dashboardToken: 'test-token',
+    });
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const res = await api.request('http://host/integrations/llm-keys', {
+        method: 'POST',
+        headers: { ...AUTH, ...JSON_CT },
+        body: JSON.stringify({ installationId: 1, provider: 'openai', apiKey: 'sk-x' }),
+      });
+      expect(res.status).toBe(200);
+      // A warning must have been emitted to stderr
+      const warnCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnCalls.some((s) => s.includes('audit write failed'))).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('POST rotate returns 200 even when auditAppender throws', async () => {
+    const state = new Map<string, ByokKey>();
+    state.set(storeKey(2n, 'anthropic'), {
+      provider: 'anthropic',
+      secret: 'sk-orig',
+      kmsKeyId: 'k',
+    });
+    currentStoreFactory = () => fakeBYOKStore(state);
+    const failingAppender: AuditAppender = vi.fn(async () => {
+      throw new Error('audit DB down');
+    });
+    const { api } = makeApi({
+      auditAppender: failingAppender,
+      dashboardToken: 'test-token',
+    });
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const res = await api.request('http://host/integrations/llm-keys/rotate', {
+        method: 'POST',
+        headers: { ...AUTH, ...JSON_CT },
+        body: JSON.stringify({ installationId: 2, provider: 'anthropic' }),
+      });
+      expect(res.status).toBe(200);
+      const warnCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnCalls.some((s) => s.includes('audit write failed'))).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
+  it('DELETE returns 200 even when auditAppender throws', async () => {
+    const state = new Map<string, ByokKey>();
+    state.set(storeKey(4n, 'openai'), { provider: 'openai', secret: 'sk-x', kmsKeyId: 'k' });
+    currentStoreFactory = () => fakeBYOKStore(state);
+    const failingAppender: AuditAppender = vi.fn(async () => {
+      throw new Error('audit DB down');
+    });
+    const { api } = makeApi({
+      auditAppender: failingAppender,
+      dashboardToken: 'test-token',
+    });
+
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const res = await api.request('http://host/integrations/llm-keys', {
+        method: 'DELETE',
+        headers: { ...AUTH, ...JSON_CT },
+        body: JSON.stringify({ installationId: 4, provider: 'openai' }),
+      });
+      expect(res.status).toBe(200);
+      const warnCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnCalls.some((s) => s.includes('audit write failed'))).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P2: kmsClient without kmsKeyId emits a startup WARN and returns 503
+// ---------------------------------------------------------------------------
+describe('503 with WARN when kmsClient present but kmsKeyId absent', () => {
+  it('emits a startup WARN naming kmsKeyId and returns 503', async () => {
+    const db = fakeDb();
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let api: ReturnType<typeof createApi>;
+    try {
+      api = createApi({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        env: {},
+        dashboardToken: 'tok',
+        requireDashboardAuth: false,
+        kmsClient: fakeKmsClient(),
+        // kmsKeyId intentionally omitted
+      });
+      const warnCalls = stderrSpy.mock.calls.map((c) => String(c[0]));
+      expect(warnCalls.some((s) => s.includes('kmsKeyId') && s.includes('BYOK'))).toBe(true);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+    const res = await api.request('http://host/integrations/llm-keys?installationId=1', {
+      headers: { Authorization: 'Bearer tok' },
+    });
+    expect(res.status).toBe(503);
   });
 });
