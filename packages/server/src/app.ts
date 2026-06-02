@@ -1,5 +1,5 @@
-import type { QueueClient } from '@review-agent/core';
-import type { DbClient } from '@review-agent/db';
+import type { KmsClient, QueueClient } from '@review-agent/core';
+import type { AuditAppender, ByokStore, DbClient } from '@review-agent/db';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { type ApiDeps, createApi } from './api/index.js';
@@ -26,6 +26,21 @@ export type AppDeps = {
    * keep the handler hermetic.
    */
   readonly api?: Omit<ApiDeps, 'db' | 'now' | 'env'>;
+  /**
+   * KMS client for BYOK key wrapping. When provided, the
+   * /api/integrations/llm-keys routes are enabled.
+   * In production, pass createAwsKmsClient() from @review-agent/kms-aws.
+   */
+  readonly kmsClient?: KmsClient;
+  /**
+   * Pre-constructed ByokStore (for tests). When omitted and kmsClient is
+   * set, one is built automatically inside createApi.
+   */
+  readonly byokStore?: ByokStore;
+  /**
+   * Pre-constructed AuditAppender (for tests).
+   */
+  readonly auditAppender?: AuditAppender;
   /**
    * SNS signature verification options. Tests inject `verifySignature`
    * + `fetchCert` to keep the receiver offline. Production should
@@ -137,6 +152,9 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       // (the integrations response must never leak the token value).
     }).filter(([, v]) => v !== undefined),
   ) as ApiDeps['env'];
+  // BYOK KMS key ID: caller may supply via deps.api.kmsKeyId, otherwise fall back to env.
+  const kmsKeyId = deps.api?.kmsKeyId ?? process.env.REVIEW_AGENT_BYOK_KMS_KEY_ID;
+
   app.route(
     '/api',
     createApi({
@@ -153,6 +171,13 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
         return t !== undefined ? { dashboardToken: t } : {};
       })(),
       requireDashboardAuth: deps.api?.requireDashboardAuth ?? process.env.NODE_ENV === 'production',
+      // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
+      // /integrations/llm-keys routes can wrap/unwrap data keys.
+      // Prefer pre-constructed store/appender injections (test overrides).
+      ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
+      ...(deps.byokStore !== undefined ? { byokStore: deps.byokStore } : {}),
+      ...(deps.auditAppender !== undefined ? { auditAppender: deps.auditAppender } : {}),
+      ...(kmsKeyId !== undefined && kmsKeyId.length > 0 ? { kmsKeyId } : {}),
     }),
   );
 

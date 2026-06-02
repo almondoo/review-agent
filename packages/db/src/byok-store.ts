@@ -1,4 +1,5 @@
 import {
+  BYOK_PROVIDERS,
   type BYOKProvider,
   decryptWithDataKey,
   encryptWithDataKey,
@@ -21,6 +22,11 @@ export type ByokRecord = {
   readonly kmsKeyId: string;
 };
 
+export type ByokProviderStatus = {
+  readonly provider: BYOKProvider;
+  readonly configured: boolean;
+};
+
 export type ByokStore = {
   /** Persists / rotates the BYOK secret for an installation + provider. */
   upsert(record: ByokRecord & { readonly secret: string }): Promise<void>;
@@ -31,6 +37,18 @@ export type ByokStore = {
    * issues a fresh data key + IV. Use for §8.7 rotations.
    */
   rotate(record: ByokRecord): Promise<void>;
+  /**
+   * Deletes the BYOK secret row for an installation + provider.
+   * If the row does not exist this is a no-op (idempotent).
+   * Caller must wrap in withTenant for RLS enforcement.
+   */
+  remove(record: Pick<ByokRecord, 'installationId' | 'provider'>): Promise<void>;
+  /**
+   * Returns one entry per BYOK_PROVIDERS member indicating whether a
+   * secret row exists. Provider names only — no secret material.
+   * Caller must wrap in withTenant for RLS enforcement.
+   */
+  listProviders(installationId: bigint): Promise<ReadonlyArray<ByokProviderStatus>>;
 };
 
 // Repository for the installation_secrets table — handles AES-256-GCM
@@ -113,9 +131,32 @@ export function createByokStore(deps: ByokStoreDeps): ByokStore {
     await upsertWithSecret({ ...record, secret: existing });
   }
 
+  async function remove(lookup: Pick<ByokRecord, 'installationId' | 'provider'>): Promise<void> {
+    await db
+      .delete(installationSecrets)
+      .where(
+        and(
+          eq(installationSecrets.installationId, lookup.installationId),
+          eq(installationSecrets.provider, lookup.provider),
+        ),
+      );
+  }
+
+  async function listProviders(installationId: bigint): Promise<ReadonlyArray<ByokProviderStatus>> {
+    const rows = await db
+      .select({ provider: installationSecrets.provider })
+      .from(installationSecrets)
+      .where(eq(installationSecrets.installationId, installationId));
+
+    const configured = new Set(rows.map((r) => r.provider));
+    return BYOK_PROVIDERS.map((provider) => ({ provider, configured: configured.has(provider) }));
+  }
+
   return {
     upsert: upsertWithSecret,
     read,
     rotate,
+    remove,
+    listProviders,
   };
 }
