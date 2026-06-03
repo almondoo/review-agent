@@ -413,6 +413,30 @@ Critical を検出。byok-store を per-request の tenant tx にバインドし
 回帰テストを追加。**将来課題**: per-installation 認可 (所有権マッピング) は別 issue、
 `VITE_*` ダッシュボードトークンの bundle 露出は全 mutation 共通の既存事項 (要 deployment ガード)。
 
+### GitHub App オンボーディング (post-v1.2 wave C — 予定)
+
+Web ダッシュボードから GitHub App をインストールし、リポジトリを一括登録できる
+フルオンボーディングフロー。BE-0〜BE-5（server/db）と FE-A〜FE-C（web）の 9 issue。
+
+| 識別子 | Issue | タイトル (短縮) | Refined |
+|---|---|---|---|
+| BE-0 | [#123](https://github.com/almondoo/review-agent/issues/123) | github_installations + repos.installation_id + migrations | ✅ |
+| BE-1 | [#124](https://github.com/almondoo/review-agent/issues/124) | listInstallationRepos + App JWT mint | ✅ |
+| BE-2 | [#125](https://github.com/almondoo/review-agent/issues/125) | GitHub App setup callback + install-redirect | ✅ |
+| BE-3 | [#126](https://github.com/almondoo/review-agent/issues/126) | webhook installation イベント永続化 | ✅ |
+| BE-4 | [#127](https://github.com/almondoo/review-agent/issues/127) | accessible repos API + POST /api/repos/bulk | ✅ |
+| BE-5 | [#128](https://github.com/almondoo/review-agent/issues/128) | integrations に appSlug + installationCount 実カウント | ✅ |
+| FE-A | [#129](https://github.com/almondoo/review-agent/issues/129) | GitHub オンボーディング types + hooks + mocks | ✅ |
+| FE-B | [#130](https://github.com/almondoo/review-agent/issues/130) | /integrations に Connect GitHub ボタン + エラーバナー | ✅ |
+| FE-C | [#131](https://github.com/almondoo/review-agent/issues/131) | /integrations/github/repos repo 選択ページ | ✅ |
+
+新規 env: `GITHUB_APP_SLUG`, `REVIEW_AGENT_DASHBOARD_ORIGIN`。
+新規 migration: 0006 (github_installations), 0007 (repos.installation_id)。
+実装順: BE-0 → (BE-1, BE-3, BE-5) → (BE-2, BE-4) → FE-A → (FE-B, FE-C)。
+
+未解決点: BE-2 `setup_action=request` 保存要否 / BE-4 per-installation 認可は別 issue /
+BE-5 installationCount の RLS 回避方法。
+
 ### Docs
 
 | # | タイトル | Refined |
