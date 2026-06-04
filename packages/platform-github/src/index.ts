@@ -28,6 +28,10 @@ export {
   type ListReactionsArgs,
   listReviewCommentReactions,
 } from './feedback.js';
+export {
+  type InstallationRepo,
+  listInstallationRepos,
+} from './installation-repos.js';
 export { createGithubOrgConfigFetch, type GithubOrgConfigDeps } from './org-config.js';
 export { assertSafeRelativePath } from './path-guard.js';
 export { GITHUB_PLATFORM_ID, githubPlatform } from './platform.js';

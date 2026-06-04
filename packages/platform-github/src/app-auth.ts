@@ -124,6 +124,7 @@ export type InstallationToken = {
 export type AppAuthClient = {
   getInstallationToken(installationId: bigint): Promise<InstallationToken>;
   invalidate(installationId: bigint): Promise<void>;
+  createAppJwt(): Promise<string>;
 };
 
 export type CreateAppAuthOpts = {
@@ -133,6 +134,7 @@ export type CreateAppAuthOpts = {
   readonly now?: () => Date;
   readonly clockSkewMs?: number;
   readonly mintToken?: (installationId: bigint) => Promise<InstallationToken>;
+  readonly mintAppJwt?: () => Promise<string>;
 };
 
 const REFRESH_WINDOW_MS = 5 * 60 * 1000;
@@ -188,6 +190,15 @@ export function createAppAuthClient(opts: CreateAppAuthOpts): AppAuthClient {
       await opts.db
         .delete(installationTokens)
         .where(eq(installationTokens.installationId, installationId));
+    },
+    async createAppJwt() {
+      if (opts.mintAppJwt) {
+        return opts.mintAppJwt();
+      }
+      /* v8 ignore start -- default path hits @octokit/auth-app live; covered by integration tests */
+      const result = await auth({ type: 'app' });
+      return result.token;
+      /* v8 ignore stop */
     },
   };
 }

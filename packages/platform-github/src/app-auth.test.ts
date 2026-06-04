@@ -185,3 +185,42 @@ describe('createAppAuthClient cache lifecycle', () => {
     expect(db.rows.has(installationId)).toBe(false);
   });
 });
+
+describe('AppAuthClient.createAppJwt', () => {
+  it('returns the JWT token from auth({ type: "app" })', async () => {
+    const db = makeMockDb();
+    // Provide a mintToken to avoid needing a real private key; createAppJwt
+    // exercises the `auth` closure directly via the injected mintAppJwt option.
+    const mintAppJwt = vi.fn().mockResolvedValue('signed-jwt-abc');
+    const client = createAppAuthClient({
+      appId: 1,
+      privateKeyPem: 'pem',
+      // biome-ignore lint/suspicious/noExplicitAny: mock surface
+      db: db as any,
+      mintToken: vi.fn(),
+      mintAppJwt,
+    });
+
+    const jwt = await client.createAppJwt();
+
+    expect(jwt).toBe('signed-jwt-abc');
+    expect(mintAppJwt).toHaveBeenCalledOnce();
+  });
+
+  it('calls mintAppJwt on every invocation (no caching)', async () => {
+    const db = makeMockDb();
+    const mintAppJwt = vi.fn().mockResolvedValueOnce('jwt-1').mockResolvedValueOnce('jwt-2');
+    const client = createAppAuthClient({
+      appId: 1,
+      privateKeyPem: 'pem',
+      // biome-ignore lint/suspicious/noExplicitAny: mock surface
+      db: db as any,
+      mintToken: vi.fn(),
+      mintAppJwt,
+    });
+
+    expect(await client.createAppJwt()).toBe('jwt-1');
+    expect(await client.createAppJwt()).toBe('jwt-2');
+    expect(mintAppJwt).toHaveBeenCalledTimes(2);
+  });
+});
