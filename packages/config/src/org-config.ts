@@ -123,7 +123,20 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     profile: repoConfig.profile,
     provider: repoConfig.provider ?? orgConfig.provider,
     reviews: {
-      auto_review: { ...orgConfig.reviews.auto_review, ...repoConfig.reviews.auto_review },
+      auto_review: {
+        ...orgConfig.reviews.auto_review,
+        ...repoConfig.reviews.auto_review,
+        // List fields inside auto_review are concatenated (org first, then
+        // repo) so operators can add labels at org level that repos extend.
+        trigger_labels: dedup([
+          ...orgConfig.reviews.auto_review.trigger_labels,
+          ...repoConfig.reviews.auto_review.trigger_labels,
+        ]),
+        skip_labels: dedup([
+          ...orgConfig.reviews.auto_review.skip_labels,
+          ...repoConfig.reviews.auto_review.skip_labels,
+        ]),
+      },
       path_filters: dedup([...orgConfig.reviews.path_filters, ...repoConfig.reviews.path_filters]),
       path_instructions: [
         ...orgConfig.reviews.path_instructions,

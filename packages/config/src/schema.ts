@@ -37,6 +37,21 @@ const AutoReviewSchema = z
     drafts: z.boolean().default(false),
     base_branches: z.array(z.string().min(1)).default(['main', 'master', 'develop']),
     paths: z.array(z.string().min(1)).default([]),
+    /**
+     * Label-based trigger (#157): review fires when *any* of these labels
+     * is applied to the PR (`labeled` action). An empty list (default)
+     * means label-based triggering is disabled; push/command triggers still
+     * apply normally.
+     */
+    trigger_labels: z.array(z.string().min(1)).default([]),
+    /**
+     * Label-based skip (#157): auto-review is suppressed when *any* of
+     * these labels is currently on the PR. Checked on every push-triggered
+     * auto-review; commands (`/review`) are **not** affected by skip_labels
+     * (an explicit command always wins). An empty list (default) means no
+     * labels suppress review.
+     */
+    skip_labels: z.array(z.string().min(1)).default([]),
   })
   .strict();
 

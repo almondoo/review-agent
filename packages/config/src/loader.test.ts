@@ -58,6 +58,37 @@ describe('loadConfigFromYaml — explicit values', () => {
     expect(cfg.reviews.auto_review.drafts).toBe(true);
   });
 
+  // #157: trigger_labels / skip_labels schema validation
+  it('parses trigger_labels and skip_labels in auto_review', () => {
+    const cfg = loadConfigFromYaml(
+      `reviews:
+  auto_review:
+    trigger_labels: ["needs-review", "ready"]
+    skip_labels: ["wip", "no-review"]
+`,
+    );
+    expect(cfg.reviews.auto_review.trigger_labels).toEqual(['needs-review', 'ready']);
+    expect(cfg.reviews.auto_review.skip_labels).toEqual(['wip', 'no-review']);
+  });
+
+  it('defaults trigger_labels and skip_labels to empty arrays', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.reviews.auto_review.trigger_labels).toEqual([]);
+    expect(cfg.reviews.auto_review.skip_labels).toEqual([]);
+  });
+
+  it('rejects empty string entries in trigger_labels', () => {
+    expect(() =>
+      loadConfigFromYaml('reviews:\n  auto_review:\n    trigger_labels: ["needs-review", ""]\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects empty string entries in skip_labels', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  auto_review:\n    skip_labels: [""]\n')).toThrow(
+      ConfigError,
+    );
+  });
+
   it('parses path_instructions array', () => {
     const cfg = loadConfigFromYaml(
       `reviews:\n  path_instructions:\n    - path: "**/*.go"\n      instructions: "check errors"\n`,

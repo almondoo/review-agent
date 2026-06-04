@@ -288,4 +288,49 @@ privacy:
       'xoxb-[A-Za-z0-9-]+',
     ]);
   });
+
+  // #157: trigger_labels / skip_labels merge semantics
+  it('concatenates trigger_labels from org and repo, deduplicating', () => {
+    const org = loadConfigFromYaml(
+      `reviews:
+  auto_review:
+    trigger_labels: ["needs-review"]
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+reviews:
+  auto_review:
+    trigger_labels: ["needs-review", "ready"]
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.trigger_labels).toEqual(['needs-review', 'ready']);
+  });
+
+  it('concatenates skip_labels from org and repo, deduplicating', () => {
+    const org = loadConfigFromYaml(
+      `reviews:
+  auto_review:
+    skip_labels: ["wip"]
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+reviews:
+  auto_review:
+    skip_labels: ["wip", "no-review"]
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.skip_labels).toEqual(['wip', 'no-review']);
+  });
+
+  it('trigger_labels / skip_labels default to empty arrays when absent', () => {
+    const org = loadConfigFromYaml('language: ja-JP\n');
+    const repo = loadConfigFromYaml('extends: org\n');
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.trigger_labels).toEqual([]);
+    expect(merged.reviews.auto_review.skip_labels).toEqual([]);
+  });
 });
