@@ -15,9 +15,10 @@ CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方
 | 観点 | 状態 |
 |---|---|
 | Latest wave on `main` | **post-v1.2 waves A–C** — PR [#133](https://github.com/almondoo/review-agent/pull/133) merged 2026-06-04（GitHub App dashboard onboarding + dashboard SPA + eval/feedback hardening、#123〜#131 を main へ）。直前は v1.0.1+v1.1+v1.2（PR [#94](https://github.com/almondoo/review-agent/pull/94), 2026-05-18, `Closes #83〜#93`）|
-| Latest wave on `develop` | **#132 interim IDOR interlock** — `develop` に `REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書を landed（2026-06-04、`main` 先行）。直前は `main` と同期（post-v1.2 wave C を PR [#133](https://github.com/almondoo/review-agent/pull/133) で main にマージ、2026-06-04）。#133 は Closes 漏れのため #124〜#131 はマージ後に手動 close 済み |
-| Active follow-on issues | **#132** (per-installation IDOR hardening) — interim fail-closed interlock（`REVIEW_AGENT_MULTI_TENANT`）+ GA 設計文書を develop に landed。**フル per-principal authz（AC#1/#2）は GA 据え置き**（認証モデル決定待ち）で #132 は GA tracking ticket として open 継続 |
-| Operator-runtime 待機タスク | **#97 (default baseline)** / **#102 (per-provider parity)** — 本物の `ANTHROPIC_API_KEY` + 課金枠が必要 |
+| Latest wave on `develop` | **config-as-code & quality wave（進行中、2026-06-04〜）** — landed: #143 eval gate / #139 OSS governance / #147 BYOK doc / #146 config resolution+provenance / #148 ruleset。実装中/予定: #156→#159→#151→#145（config chain）+ #155/#157/#149（runner/platform）。直前は #132 interim IDOR interlock（`REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書）|
+| post-v1.2 follow-on (#95–#110) | **全 close 済み** — recover-sync-state(#105) / fail-open OTel metrics(#106) / docs(#98/#100/#103) / test(#107/#108) / baseline(#97) / parity(#102) / CodeCommit feedback re-scrape(#110) すべて shipped・closed |
+| Active GA tracking | **#132** (per-installation IDOR hardening) — interim fail-closed interlock + GA 設計文書を develop に landed。**フル per-principal authz（AC#1/#2）は GA 据え置き**（認証モデル決定待ち）で #132 は GA tracking ticket として open 継続。#161 (dashboard RBAC) は #132 の認証モデルに依存 |
+| 次wave候補 (open, 未refined) | **#134–#160 / #162** — richer PR summary / local trial / audit log / SSO / cost analytics / quality metrics / notifications / presets / platform 拡張(GitLab/GHES) 等の大型 epic 群。多くは spec 沈黙で製品/UX 判断 (spec §22) を要する。#136/#137/#138/#140/#144/#154 は外部リソース・他issue依存でブロック |
 
 Live state は GitHub の検索で確認:
 
@@ -360,18 +361,22 @@ unlock)。typecheck / lint / build green。
 
 ---
 
-## Active follow-on issues (post-v1.2 wave A 後)
+## post-v1.2 follow-on wave (#95–#131 closed; #132 interim landed) — 履歴
 
-実装 / docs / ops タスク。Refined 列が ✅ のものは
-open question 解決済みで「issue を読んで即着手」できる状態。
+> **このセクションは履歴（shipped 記録）です。** 以下の実装/docs/test/operator
+> issue (#95–#110, #118–#131) は **すべて close 済み**。#132 は interim interlock を
+> develop に landed したが GA tracking として **open 継続**。アクティブな未着手作業
+> ではない（2026-06-04 時点で `gh issue list --state open` に現れるのは #132 と
+> #134–#162 のみ）。新規の未着手バックログは末尾の「## Open backlog」を参照。
 
-### 実装系
+### 実装系（closed）
 
-| # | タイトル | Refined |
+| # | タイトル | 状態 |
 |---|---|---|
-| [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
-| [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
-| _(unfiled)_ | CodeCommit web embedded auto-setup + server worker JobHandler — spec: [`codecommit-web-embedded-auto-setup.md`](./specs/codecommit-web-embedded-auto-setup.md) / handoff: [`session-handoff-2026-05-29-dashboard.md`](./specs/session-handoff-2026-05-29-dashboard.md) — 13–14 person-days (B0 blocker = JobHandler) | — |
+| [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | ✅ closed |
+| [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | ✅ closed |
+| [#110](https://github.com/almondoo/review-agent/issues/110) | CodeCommit `recover feedback-history` re-scrape (#105 から分割) | ✅ closed |
+| _(unfiled)_ | CodeCommit web embedded auto-setup + server worker JobHandler — spec: [`codecommit-web-embedded-auto-setup.md`](./specs/codecommit-web-embedded-auto-setup.md) / handoff: [`session-handoff-2026-05-29-dashboard.md`](./specs/session-handoff-2026-05-29-dashboard.md) — 13–14 person-days (B0 blocker = JobHandler) — **未起票・将来検討** | n/a |
 
 ### Dashboard / web UI (2026-06-01 追加)
 
@@ -477,36 +482,62 @@ maintainer 承認の **Option A**（fail-closed guard + GA 設計文書）とし
 
 新規 env: `REVIEW_AGENT_MULTI_TENANT`。
 
-### Docs
+### Docs / Test / Operator runtime（すべて closed）
 
-| # | タイトル | Refined |
+| # | タイトル | 状態 |
 |---|---|---|
-| [#98](https://github.com/almondoo/review-agent/issues/98) | worked-example Server-mode worker handler | — |
-| [#100](https://github.com/almondoo/review-agent/issues/100) | v1.1 → v1.2 migration guide | — |
-| [#103](https://github.com/almondoo/review-agent/issues/103) | review_eval_event SQL playbook | — |
+| [#98](https://github.com/almondoo/review-agent/issues/98) | worked-example Server-mode worker handler | ✅ closed |
+| [#100](https://github.com/almondoo/review-agent/issues/100) | v1.1 → v1.2 migration guide | ✅ closed |
+| [#103](https://github.com/almondoo/review-agent/issues/103) | review_eval_event SQL playbook | ✅ closed |
+| [#107](https://github.com/almondoo/review-agent/issues/107) | migration rollback / forward-compat regression suite | ✅ closed |
+| [#108](https://github.com/almondoo/review-agent/issues/108) | self-feedback loop end-to-end integration test | ✅ closed |
+| [#97](https://github.com/almondoo/review-agent/issues/97) | first baseline measurement (Anthropic Sonnet) | ✅ closed |
+| [#102](https://github.com/almondoo/review-agent/issues/102) | populate parity.json (8 プロバイダ) | ✅ closed |
 
-### Test
+上記の依存・実装順序（#107→#100、#108→#107、#97→CI gate enforcing、#102→#97）は
+すべて消化済み。詳細は各 issue の close コメント参照。
 
-| # | タイトル |
-|---|---|
-| [#107](https://github.com/almondoo/review-agent/issues/107) | migration rollback / forward-compat regression suite |
-| [#108](https://github.com/almondoo/review-agent/issues/108) | self-feedback loop end-to-end integration test |
+---
 
-### Operator runtime (コード作業なし、API key / DB 必須)
+## Open backlog — next-wave candidates（open, 2026-06-04 時点）
 
-| # | タイトル | 推定コスト |
+`gh issue list --state open` の実態。post-v1.2 follow-on は全 close したため、
+現在の未着手 open issue は **#132（GA tracking）と #134–#162** のみ。多くは
+roadmap 上「次 wave 候補」で未 refined の大型 epic。spec 沈黙のため製品/UX 判断
+(spec §22) を要するものは [B]、外部リソース/他issue依存でブロックされるものは [C]。
+
+### [A] 自律実装着手中（config-as-code & quality wave, develop）
+
+本セッションで着手。AC 明確・spec 参照あり・合理的デフォルトで進行可能なもの。
+
+| # | タイトル | 状態 |
 |---|---|---|
-| [#97](https://github.com/almondoo/review-agent/issues/97) | first baseline measurement (Anthropic Sonnet) | \$2.20 / ラン |
-| [#102](https://github.com/almondoo/review-agent/issues/102) | populate parity.json (8 プロバイダ) | \$5〜\$15 |
+| [#143](https://github.com/almondoo/review-agent/issues/143) | review-quality regression eval gate | ✅ landed (develop) |
+| [#139](https://github.com/almondoo/review-agent/issues/139) | OSS governance files (LICENSE/CoC/CHANGELOG/release-process) | ✅ landed (develop) |
+| [#147](https://github.com/almondoo/review-agent/issues/147) | BYOK key storage model & leak/incident runbook | ✅ landed (develop) |
+| [#146](https://github.com/almondoo/review-agent/issues/146) | config-as-code resolution + per-run provenance log | ✅ landed (develop) |
+| [#148](https://github.com/almondoo/review-agent/issues/148) | ruleset block (enable/min_severity per category) | ✅ landed (develop) |
+| [#156](https://github.com/almondoo/review-agent/issues/156) | externalize pipeline settings (max_steps 等) | 🔄 実装中 |
+| [#159](https://github.com/almondoo/review-agent/issues/159) | JSON Schema + `config validate` + editor completion | ⏳ 予定 (#148+#156 後) |
+| [#151](https://github.com/almondoo/review-agent/issues/151) | presets with `extends` + bundled first-party presets | ⏳ 予定 (#148+#159 後) |
+| [#145](https://github.com/almondoo/review-agent/issues/145) | config dry-run / preview | ⏳ 予定 (#146+#156 後) |
+| [#155](https://github.com/almondoo/review-agent/issues/155) | feedback loop 👍/👎 → FP suppression | ⏳ 予定 |
+| [#157](https://github.com/almondoo/review-agent/issues/157) | trigger control (manual/partial re-run, skip, label/comment) | ⏳ 予定 |
+| [#149](https://github.com/almondoo/review-agent/issues/149) | inline-comment replies & conversation | ⏳ 予定 (#157 後) |
 
-### 依存関係 / 実装順序
+### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
-```
-#107 (migration compat)     ──relates──► #100 (migration guide)
-#108 (E2E self-feedback)    ──relates──► #107 (CI infra 共有)
-#97  ──blocks──► CI gate enforcing 化 (現在 informational)
-#102 ──recommends► #97 完了後に並行で
-```
+#134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
+#142 quality metrics / #150 onboarding & docs system / #152 committable suggestions /
+#153 one-command start / #158 large-PR/monorepo strategy /
+#160 external-tool ingestion (lint/types/SAST) / #162 platform 拡張 (GitLab/GHES)。
+
+### [C] 外部リソース / 前提ブロック
+
+#132 (GA per-principal authz — 認証モデル決定待ち) / #161 (dashboard RBAC — #132 依存) /
+#137 (SSO — #161 依存) / #136 (audit log — #161 の actor identity 前提) /
+#138 (retry/DLQ/alerting — #144 依存) / #140 (cost analytics — #144/#142 依存) /
+#144 (notifications — #138/#140 のイベント源前提) / #154 (preset 配布 — npm publish 権限要)。
 
 ---
 
