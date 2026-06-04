@@ -259,6 +259,27 @@ const CoordinationSchema = z
   })
   .strict();
 
+// Committable-suggestion gating (#152). Controls which categories of LLM
+// suggestions are rendered as GitHub ```suggestion blocks (or equivalent
+// informational code blocks on other platforms).
+//
+//   enabled (default true)   — when false, all `suggestion` fields are stripped
+//                              before posting; only the comment body is published.
+//   categories (default all) — suggestion blocks are only rendered for findings
+//                              whose category is in this list. Findings in other
+//                              categories keep their body but lose the suggestion
+//                              block. Findings with no category always keep their
+//                              suggestion (category-level gating requires a
+//                              category to match against).
+const SuggestionsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    categories: z.array(z.enum(CATEGORIES)).default([...CATEGORIES]),
+  })
+  .strict();
+
+export type Suggestions = z.infer<typeof SuggestionsSchema>;
+
 // Feedback-loop tuning (#155). `suppress_after` is the number of distinct
 // 👎 / `/feedback reject` signals on the same finding fingerprint before a
 // persistent suppression rule is created (stored as a `suppression_rule`
@@ -366,6 +387,10 @@ export const ConfigSchema = z
     // 👎/reject signals on a finding fingerprint trigger a persistent
     // suppression rule. Absent `feedback` key == defaults (suppress_after: 3).
     feedback: FeedbackSchema.default({}),
+    // Committable-suggestion gating (#152): controls whether and for which
+    // categories `suggestion` fields are rendered as platform suggestion blocks.
+    // Absent `suggestions` key == defaults (enabled: true, all categories).
+    suggestions: SuggestionsSchema.default(SuggestionsSchema.parse({})),
   })
   .strict();
 

@@ -5,7 +5,7 @@ import {
   mergeWithEnv,
   resolveEffectiveConfig,
 } from '@review-agent/config';
-import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
+import type { Diff, PR, PRRef, ReviewState, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createCodecommitVCS } from '@review-agent/platform-codecommit';
 import { createGithubVCS } from '@review-agent/platform-github';
@@ -163,6 +163,7 @@ export async function runReviewCommand(
       maxFiles: config.reviews.max_files,
       maxDiffLines: config.reviews.max_diff_lines,
       maxSteps: config.reviews.max_steps,
+      suggestions: config.suggestions,
       privacy: {
         allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
         denyPaths: config.privacy.deny_paths,
@@ -198,7 +199,7 @@ export async function runReviewCommand(
     return { status: 'cancelled', postedComments: 0, costUsd: result.costUsd };
   }
 
-  await postOrUpdate(vcs, ref, pr, result, previousState);
+  await postOrUpdate(vcs, ref, pr, result, previousState, diff);
   io.stdout(`Posted ${result.comments.length} comments.\n`);
   return {
     status: 'reviewed',
@@ -377,6 +378,7 @@ async function postOrUpdate(
   pr: PR,
   result: RunnerResult,
   previousState: ReviewState | null,
+  diff?: Diff,
 ): Promise<void> {
   const state = buildReviewState({
     previousState,
@@ -387,11 +389,17 @@ async function postOrUpdate(
     tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
     costUsd: result.costUsd,
   });
+  // #152: forward per-file patch data so the GitHub adapter can validate
+  // suggestion anchor lines against the diff hunk context window.
+  const diffPayload = diff
+    ? { files: diff.files.map((f) => ({ path: f.path, patch: f.patch })) }
+    : undefined;
   await vcs.postReview(ref, {
     comments: result.comments,
     summary: result.summary,
     state,
     event: result.reviewEvent,
+    ...(diffPayload !== undefined ? { diff: diffPayload } : {}),
   });
   await vcs.upsertStateComment(ref, state);
 }

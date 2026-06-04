@@ -60,6 +60,8 @@ function fakeVcs(overrides: Partial<VCS> = {}): VCS {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
+      committableSuggestions: true,
     },
     getPR: async () => fakePR(),
     getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),

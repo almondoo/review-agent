@@ -1786,3 +1786,185 @@ describe('runReview — suppression enforcement (#155)', () => {
     expect(result.droppedBySuppression).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// runReview — suggestions config gating (#152)
+// ---------------------------------------------------------------------------
+describe('runReview — suggestions config gating (#152)', () => {
+  const outputWithSuggestions: ReviewOutput = {
+    summary: 'Two findings with suggestions.',
+    comments: [
+      {
+        path: 'src/a.ts',
+        line: 1,
+        side: 'RIGHT',
+        body: 'Extract to helper.',
+        severity: 'minor',
+        category: 'maintainability',
+        suggestion: 'const helper = () => {};',
+      },
+      {
+        path: 'src/b.ts',
+        line: 5,
+        side: 'RIGHT',
+        body: 'Parameterize this query.',
+        severity: 'major',
+        category: 'security',
+        suggestion: 'db.query("SELECT 1", params)',
+      },
+    ],
+    tokensUsed: { input: 500, output: 100 },
+    costUsd: 0.002,
+  };
+
+  it('strips all suggestions when suggestions.enabled is false', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => outputWithSuggestions),
+    });
+    const job: ReviewJob = {
+      ...baseJob,
+      suggestions: { enabled: false, categories: ['maintainability', 'security'] },
+    };
+    const result = await runReview(job, provider);
+    for (const c of result.comments) {
+      expect(c.suggestion).toBeUndefined();
+    }
+    // Comment bodies must still be present.
+    expect(result.comments).toHaveLength(2);
+    expect(result.comments[0]?.body).toBe('Extract to helper.');
+    expect(result.comments[1]?.body).toBe('Parameterize this query.');
+  });
+
+  it('strips suggestion only from comments in categories NOT in suggestions.categories', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => outputWithSuggestions),
+    });
+    // Only allow suggestion for 'security'; 'maintainability' should be stripped.
+    const job: ReviewJob = {
+      ...baseJob,
+      suggestions: { enabled: true, categories: ['security'] },
+    };
+    const result = await runReview(job, provider);
+    const maintComment = result.comments.find((c) => c.path === 'src/a.ts');
+    const secComment = result.comments.find((c) => c.path === 'src/b.ts');
+    expect(maintComment?.suggestion).toBeUndefined();
+    expect(secComment?.suggestion).toBe('db.query("SELECT 1", params)');
+    // Bodies must be preserved in both.
+    expect(maintComment?.body).toBe('Extract to helper.');
+    expect(secComment?.body).toBe('Parameterize this query.');
+  });
+
+  it('keeps suggestion when category is undefined (no category restriction applies)', async () => {
+    const outputNoCat: ReviewOutput = {
+      ...outputWithSuggestions,
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'No category comment.',
+          severity: 'minor',
+          // No category field
+          suggestion: 'const x = 1;',
+        },
+      ],
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => outputNoCat) });
+    // Only bug allowed — but the comment has no category, so it keeps its suggestion.
+    const job: ReviewJob = {
+      ...baseJob,
+      suggestions: { enabled: true, categories: ['bug'] },
+    };
+    const result = await runReview(job, provider);
+    expect(result.comments[0]?.suggestion).toBe('const x = 1;');
+  });
+
+  it('passes all suggestions through when job.suggestions is absent (back-compat)', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => outputWithSuggestions),
+    });
+    // No suggestions field on the job.
+    const result = await runReview(baseJob, provider);
+    const aComment = result.comments.find((c) => c.path === 'src/a.ts');
+    const bComment = result.comments.find((c) => c.path === 'src/b.ts');
+    expect(aComment?.suggestion).toBe('const helper = () => {};');
+    expect(bComment?.suggestion).toBe('db.query("SELECT 1", params)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runReview — suggestion field included in output secret scan (#152)
+// ---------------------------------------------------------------------------
+describe('runReview — suggestion secret scan (#152)', () => {
+  it('aborts when a secret is present in a suggestion field (output scan)', async () => {
+    const secretInSuggestion: ReviewOutput = {
+      summary: 'Clean summary.',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'Consider refactoring.',
+          severity: 'minor',
+          // suggestion contains a fake AWS key that quickScanContent should detect
+          suggestion: 'const key = "AKIAIOSFODNN7EXAMPLE";',
+        },
+      ],
+      tokensUsed: { input: 100, output: 20 },
+      costUsd: 0.001,
+    };
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => secretInSuggestion),
+    });
+    await expect(runReview(baseJob, provider)).rejects.toBeInstanceOf(SecretLeakAbortedError);
+    await expect(runReview(baseJob, provider)).rejects.toMatchObject({
+      phase: 'output',
+    });
+  });
+
+  it('redacts a custom pattern that appears in the suggestion field (non-abort finding)', async () => {
+    const customSecret = 'CUSTOM-SECRET-XYZ123';
+    const taintedSuggestion: ReviewOutput = {
+      summary: 'Ok.',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'Clean body.',
+          severity: 'minor',
+          suggestion: `const v = "${customSecret}";`,
+        },
+      ],
+      tokensUsed: { input: 100, output: 20 },
+      costUsd: 0.001,
+    };
+    const provider = makeProvider({ generateReview: vi.fn(async () => taintedSuggestion) });
+    // Inject a scanContent that finds the secret in the suggestion but
+    // emits a non-aborting medium-tag finding so we can test the redact path.
+    const scanContent = vi.fn((text: string) => {
+      if (text.includes(customSecret)) {
+        return [
+          {
+            ruleId: 'custom-0',
+            description: 'custom secret',
+            file: '',
+            startLine: 1,
+            endLine: 1,
+            match: customSecret,
+            secret: customSecret,
+            entropy: 0,
+            tags: ['medium'] as ReadonlyArray<string>,
+          },
+        ];
+      }
+      return [];
+    });
+    const result = await runReview(baseJob, provider, { scanContent });
+    const c = result.comments[0];
+    // Body should be clean (no secret there)
+    expect(c?.body).toBe('Clean body.');
+    // Suggestion should have the secret redacted
+    expect(c?.suggestion).toBe('const v = "[REDACTED:custom-0]";');
+  });
+});

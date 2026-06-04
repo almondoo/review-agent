@@ -180,6 +180,15 @@ describe('createCodecommitVCS — getFile', () => {
   });
 });
 
+describe('createCodecommitVCS — capabilities', () => {
+  it('declares committableSuggestions=false (informational only, no hunk check)', () => {
+    const client = fakeClient({});
+    const vcs = createCodecommitVCS({ client });
+    expect(vcs.capabilities.committableSuggestions).toBe(false);
+    expect(vcs.capabilities.conversationReply).toBe(false);
+  });
+});
+
 describe('createCodecommitVCS — postReview', () => {
   it('posts a top-level summary then one comment per inline finding', async () => {
     const seen: Array<{ name: string; input: unknown }> = [];
@@ -298,6 +307,59 @@ describe('createCodecommitVCS — postReview', () => {
     expect((inlinePosts[1]?.input as { content: string }).content).toBe(
       'second finding\nwith two lines\n\n<!-- fingerprint:fedcba9876543210 -->',
     );
+  });
+
+  it('renders suggestion as informational fenced block when suggestion is present (#152)', async () => {
+    const seen: Array<{ name: string; input: unknown }> = [];
+    const client = {
+      send: vi.fn(async (cmd: { constructor: { name: string }; input: unknown }) => {
+        seen.push({ name: cmd.constructor.name, input: cmd.input });
+        if (cmd.constructor.name === 'GetPullRequestCommand') {
+          return {
+            pullRequest: {
+              pullRequestTargets: [{ sourceCommit: 'h1', destinationCommit: 'b1' }],
+            },
+          };
+        }
+        return { comment: { commentId: 'cid' } };
+      }),
+    };
+    const vcs = createCodecommitVCS({ client });
+    await vcs.postReview(REF, {
+      summary: 'suggestion test',
+      comments: [
+        {
+          path: 'a.ts',
+          line: 5,
+          side: 'RIGHT',
+          body: 'consider extracting this',
+          fingerprint: 'aabbccddeeff0011',
+          severity: 'minor',
+          suggestion: 'const helper = () => { ... };',
+        },
+      ],
+      state: {
+        schemaVersion: 1,
+        lastReviewedSha: 'h1',
+        baseSha: 'b1',
+        reviewedAt: '2026-04-30T00:00:00Z',
+        modelUsed: 'm',
+        totalTokens: 0,
+        totalCostUsd: 0,
+        commentFingerprints: [],
+      },
+    });
+    const inlinePosts = seen.filter((s) => s.name === 'PostCommentForPullRequestCommand').slice(1); // skip summary post
+    const content = (inlinePosts[0]?.input as { content: string }).content;
+    // Must contain the original body
+    expect(content).toContain('consider extracting this');
+    // Must contain the informational block (not GitHub's ```suggestion syntax)
+    expect(content).toContain('**Suggested fix:**');
+    expect(content).toContain('```\nconst helper = () => { ... };\n```');
+    // Must NOT use GitHub's committable suggestion syntax
+    expect(content).not.toContain('```suggestion');
+    // Fingerprint marker must be present
+    expect(content).toContain('<!-- fingerprint:aabbccddeeff0011 -->');
   });
 });
 
@@ -670,7 +732,7 @@ describe('createCodecommitVCS — exposed metadata', () => {
     expect(vcs.platform).toBe('codecommit');
   });
 
-  it('declares CodeCommit-specific capabilities (no clone, postgres-only state, codecommit approval, no commit msgs, no conversationReply)', () => {
+  it('declares CodeCommit-specific capabilities (no clone, postgres-only state, codecommit approval, no commit msgs, no conversationReply, no committableSuggestions)', () => {
     const vcs = createCodecommitVCS({ client: fakeClient({}) });
     expect(vcs.capabilities).toEqual({
       clone: false,
@@ -678,6 +740,7 @@ describe('createCodecommitVCS — exposed metadata', () => {
       approvalEvent: 'codecommit',
       commitMessages: false,
       conversationReply: false,
+      committableSuggestions: false,
     });
   });
 });

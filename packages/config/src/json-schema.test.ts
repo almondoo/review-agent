@@ -41,6 +41,7 @@ describe('generateJsonSchema', () => {
       'server',
       'codecommit',
       'ruleset',
+      'suggestions',
     ]) {
       expect(props[required], `expected '${required}' in JSON Schema properties`).toBeDefined();
     }

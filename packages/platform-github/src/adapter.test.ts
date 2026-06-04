@@ -46,7 +46,7 @@ describe('createGithubVCS', () => {
     expect(vcs.platform).toBe('github');
   });
 
-  it('declares the full set of GitHub capabilities (clone, native state, github event, commit msgs, conversationReply)', () => {
+  it('declares the full set of GitHub capabilities (clone, native state, github event, commit msgs, conversationReply, committableSuggestions)', () => {
     const vcs = createGithubVCS({ token: 't', octokit: createMockOctokit({}) });
     expect(vcs.capabilities).toEqual({
       clone: true,
@@ -54,6 +54,7 @@ describe('createGithubVCS', () => {
       approvalEvent: 'github',
       commitMessages: true,
       conversationReply: true,
+      committableSuggestions: true,
     });
   });
 
@@ -507,6 +508,130 @@ describe('postReview', () => {
     expect(args.comments[1]?.body).toBe(
       'second finding\nwith two lines\n\n<!-- fingerprint:fedcba9876543210 -->',
     );
+  });
+
+  it('renders suggestion as ```suggestion block when anchor is within hunk (RIGHT, valid line)', async () => {
+    // Patch: single hunk starting at line 1 with 3 lines.
+    const patch = ['@@ -1,3 +1,3 @@', ' context', '+added line 2', ' context line 3'].join('\n');
+    const createReview = vi.fn(async () => ({ data: { id: 5 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 's',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 2,
+          side: 'RIGHT',
+          body: 'consider this change',
+          severity: 'minor',
+          fingerprint: 'aaaaaaaabbbbbbbb',
+          suggestion: 'const x = newValue;',
+        },
+      ],
+      state: validState,
+      diff: { files: [{ path: 'src/a.ts', patch }] },
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { comments: { body: string }[] };
+    const body = args.comments[0]?.body ?? '';
+    expect(body).toContain('consider this change');
+    expect(body).toContain('```suggestion\nconst x = newValue;\n```');
+    expect(body).toContain('<!-- fingerprint:aaaaaaaabbbbbbbb -->');
+    // Suggestion block must appear BEFORE the fingerprint marker.
+    expect(body.indexOf('```suggestion')).toBeLessThan(body.indexOf('<!-- fingerprint:'));
+  });
+
+  it('suppresses suggestion (posts plain body) when anchor line is outside hunk', async () => {
+    // Patch covers lines 1-3 only; comment is anchored at line 10.
+    const patch = ['@@ -1,3 +1,3 @@', ' context', '+added at 2', ' context at 3'].join('\n');
+    const createReview = vi.fn(async () => ({ data: { id: 6 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 's',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 10,
+          side: 'RIGHT',
+          body: 'body only',
+          severity: 'minor',
+          fingerprint: 'ccccccccdddddddd',
+          suggestion: 'should be suppressed',
+        },
+      ],
+      state: validState,
+      diff: { files: [{ path: 'src/a.ts', patch }] },
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { comments: { body: string }[] };
+    const body = args.comments[0]?.body ?? '';
+    expect(body).toContain('body only');
+    expect(body).not.toContain('```suggestion');
+    expect(body).not.toContain('should be suppressed');
+  });
+
+  it('suppresses suggestion when side is LEFT', async () => {
+    const patch = ['@@ -1,3 +1,3 @@', ' context at 1', '+added at 2', ' context at 3'].join('\n');
+    const createReview = vi.fn(async () => ({ data: { id: 7 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 's',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'LEFT',
+          body: 'left side comment',
+          severity: 'minor',
+          fingerprint: 'eeeeeeeefffffff0',
+          suggestion: 'should not appear',
+        },
+      ],
+      state: validState,
+      diff: { files: [{ path: 'src/a.ts', patch }] },
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { comments: { body: string }[] };
+    const body = args.comments[0]?.body ?? '';
+    expect(body).toContain('left side comment');
+    expect(body).not.toContain('```suggestion');
+  });
+
+  it('suppresses suggestion when no diff is provided (fail-closed)', async () => {
+    const createReview = vi.fn(async () => ({ data: { id: 8 } }));
+    const vcs = createGithubVCS({
+      token: 't',
+      octokit: createMockOctokit({ pulls: { createReview } }),
+    });
+    const review: ReviewPayload = {
+      summary: 's',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT',
+          body: 'no diff available',
+          severity: 'minor',
+          fingerprint: '1111111122222222',
+          suggestion: 'should be suppressed',
+        },
+      ],
+      state: validState,
+      // No diff field — fail-closed behavior expected.
+    };
+    await vcs.postReview(ref, review);
+    const args = createReview.mock.calls[0]?.[0] as { comments: { body: string }[] };
+    const body = args.comments[0]?.body ?? '';
+    expect(body).not.toContain('```suggestion');
   });
 });
 

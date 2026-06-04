@@ -595,7 +595,46 @@ async function runReviewInner(
         });
   const filteredKept = afterSuppression;
 
-  const scannedText = [result.summary, ...filteredKept.map((c) => c.body)].join('\n\n');
+  // #152: apply suggestions config gating BEFORE secret scanning so the
+  // scan operates on the final comment shape (same fields that will be
+  // posted to the VCS).
+  //
+  // Gating rules (when `job.suggestions` is present):
+  //   1. `enabled: false` → strip suggestion from every comment.
+  //   2. `enabled: true, categories: [...]` → strip suggestion from
+  //      comments whose `category` is NOT in the list. Comments with no
+  //      `category` field always keep their suggestion (no category to
+  //      match against means no category restriction applies).
+  const jobSuggestions = job.suggestions;
+  const afterSuggestionGating =
+    jobSuggestions === undefined
+      ? filteredKept
+      : filteredKept.map((c) => {
+          if (!c.suggestion) return c;
+          if (!jobSuggestions.enabled) {
+            const { suggestion: _s, ...rest } = c;
+            return rest as import('@review-agent/core').InlineComment;
+          }
+          if (c.category !== undefined && !jobSuggestions.categories.includes(c.category)) {
+            const { suggestion: _s, ...rest } = c;
+            return rest as import('@review-agent/core').InlineComment;
+          }
+          return c;
+        });
+
+  // #152: include suggestion fields in the output secret scan.
+  // GitHub's "Apply suggestion" button copies the suggestion body verbatim
+  // into the repository; an LLM-emitted secret in a suggestion would
+  // persist in source history if applied. Scanning both body and suggestion
+  // closes that path. The existing scan already covers `suggestion` in
+  // `createReviewOutputSchema` (URL allowlist); this gitleaks scan adds the
+  // runtime secret-pattern check for the post-LLM output pass.
+  const scannedTexts: string[] = [result.summary];
+  for (const c of afterSuggestionGating) {
+    scannedTexts.push(c.body);
+    if (c.suggestion) scannedTexts.push(c.suggestion);
+  }
+  const scannedText = scannedTexts.join('\n\n');
   const outputFindings = [...scanContent(scannedText)];
   const outputDecision = shouldAbortReview(outputFindings);
   if (outputDecision.abort) {
@@ -611,8 +650,14 @@ async function runReviewInner(
     outputFindings.length === 0 ? result.summary : applyRedactions(result.summary, outputFindings);
   const comments =
     outputFindings.length === 0
-      ? filteredKept
-      : filteredKept.map((c) => ({ ...c, body: applyRedactions(c.body, outputFindings) }));
+      ? afterSuggestionGating
+      : afterSuggestionGating.map((c) => ({
+          ...c,
+          body: applyRedactions(c.body, outputFindings),
+          ...(c.suggestion !== undefined
+            ? { suggestion: applyRedactions(c.suggestion, outputFindings) }
+            : {}),
+        }));
 
   // Take the larger of the two sources so refused-before-dispatch
   // calls (counted locally) AND retry-path calls (counted on the

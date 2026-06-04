@@ -173,6 +173,7 @@ export async function runDryRunCommand(io: ProgramIo, opts: DryRunOpts): Promise
       maxFiles: config.reviews.max_files,
       maxDiffLines: config.reviews.max_diff_lines,
       maxSteps: config.reviews.max_steps,
+      suggestions: config.suggestions,
       privacy: {
         allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
         denyPaths: config.privacy.deny_paths,

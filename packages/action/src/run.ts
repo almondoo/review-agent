@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { type Config, KNOWN_REVIEW_BOT_LOGINS, resolveEffectiveConfig } from '@review-agent/config';
 import {
+  type Diff,
   computeDiffStrategy as defaultComputeDiffStrategy,
   type PR,
   type PRRef,
@@ -159,6 +160,7 @@ export async function runAction(
     maxFiles: config.reviews.max_files,
     maxDiffLines: config.reviews.max_diff_lines,
     maxSteps: config.reviews.max_steps,
+    suggestions: config.suggestions,
     privacy: {
       allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
       denyPaths: config.privacy.deny_paths,
@@ -180,6 +182,7 @@ export async function runAction(
   await postOrUpdate(vcs, ctx.ref, pr, result, previousState, {
     stateWriteRetries: inputs.stateWriteRetries,
     log,
+    diff,
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
   });
 
@@ -312,6 +315,7 @@ async function postOrUpdate(
   opts: {
     readonly stateWriteRetries: number;
     readonly log: (msg: string, meta?: Record<string, unknown>) => void;
+    readonly diff: Diff;
     readonly sleep?: (ms: number) => Promise<void>;
   },
 ): Promise<void> {
@@ -332,6 +336,11 @@ async function postOrUpdate(
   // takes a total-attempt count; `stateWriteRetries` is the number of
   // retries on top of the first attempt, so total = retries + 1.
   const totalAttempts = opts.stateWriteRetries + 1;
+  // #152: forward per-file patch data so the GitHub adapter can validate
+  // suggestion anchor lines against the diff hunk context window.
+  const diffPayload = {
+    files: opts.diff.files.map((f) => ({ path: f.path, patch: f.patch })),
+  };
   await withRetry(
     () =>
       vcs.postReview(ref, {
@@ -339,6 +348,7 @@ async function postOrUpdate(
         summary: result.summary,
         state,
         event: result.reviewEvent,
+        diff: diffPayload,
       }),
     {
       attempts: totalAttempts,

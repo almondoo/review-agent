@@ -365,6 +365,42 @@ describe('loadConfigFromYaml — ruleset block (#148)', () => {
   });
 });
 
+describe('loadConfigFromYaml — suggestions block (#152)', () => {
+  it('defaults suggestions to enabled=true and all categories', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.suggestions.enabled).toBe(true);
+    // All 7 CATEGORIES should be present in the default list.
+    expect(cfg.suggestions.categories).toHaveLength(7);
+    expect(cfg.suggestions.categories).toContain('bug');
+    expect(cfg.suggestions.categories).toContain('security');
+  });
+
+  it('parses suggestions.enabled: false', () => {
+    const cfg = loadConfigFromYaml('suggestions:\n  enabled: false\n');
+    expect(cfg.suggestions.enabled).toBe(false);
+  });
+
+  it('parses suggestions.categories as a restricted list', () => {
+    const cfg = loadConfigFromYaml(
+      'suggestions:\n  enabled: true\n  categories:\n    - security\n    - bug\n',
+    );
+    expect(cfg.suggestions.enabled).toBe(true);
+    expect(cfg.suggestions.categories).toEqual(['security', 'bug']);
+  });
+
+  it('rejects unknown categories in suggestions.categories', () => {
+    expect(() => loadConfigFromYaml('suggestions:\n  categories:\n    - unknown_cat\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects extra keys in suggestions block (strict)', () => {
+    expect(() => loadConfigFromYaml('suggestions:\n  enabled: true\n  extra_key: nope\n')).toThrow(
+      ConfigError,
+    );
+  });
+});
+
 describe('resolveEffectiveConfig', () => {
   describe('precedence: repo > org > defaults', () => {
     it('primarySource is "repo-yaml" when repo YAML is provided', () => {

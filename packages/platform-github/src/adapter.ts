@@ -27,6 +27,7 @@ export const GITHUB_CAPABILITIES: VcsCapabilities = {
   approvalEvent: 'github',
   commitMessages: true,
   conversationReply: true,
+  committableSuggestions: true,
 };
 
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
@@ -37,6 +38,7 @@ import {
   parseStateComment,
   type StateParseEventHandler,
 } from './state-comment.js';
+import { buildSuggestionBody, buildValidRightLines } from './suggestion.js';
 
 const STATUS_MAP: Readonly<Record<string, DiffFile['status']>> = {
   added: 'added',
@@ -270,15 +272,43 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
   const postReview = async (ref: PRRef, review: ReviewPayload): Promise<void> => {
     ensureGithub(ref);
     const summaryWithState = buildSummaryWithState(review.summary, review.state);
+
+    // #152: build a per-file map from path → valid RIGHT-side line numbers
+    // for suggestion hunk validation. We derive this from the diff files
+    // carried on the ReviewPayload (added in #152). When no diff is
+    // available the map is empty and all suggestions are suppressed to
+    // plain comment bodies (fail-closed: never post a suggestion that
+    // GitHub would reject with 422).
+    const patchByPath = new Map<string, string | null>();
+    for (const f of review.diff?.files ?? []) {
+      patchByPath.set(f.path, f.patch);
+    }
+
     // #96: append the hidden `<!-- fingerprint:<fp> -->` marker so the
     // `/feedback` command (#95) can resolve the target inline comment
     // by reading its parent body, without a DB round-trip.
-    const comments = review.comments.map((c) => ({
-      path: c.path,
-      line: c.line,
-      side: c.side,
-      body: appendFingerprintMarker(c.body, c.fingerprint),
-    }));
+    //
+    // #152: before appending the fingerprint marker, optionally prepend
+    // a GitHub ```suggestion block when the anchor is within the diff
+    // hunk (RIGHT side, valid line). Suggestions outside the hunk or on
+    // the LEFT side are suppressed to a plain comment body.
+    const comments = review.comments.map((c) => {
+      const validLines = buildValidRightLines(patchByPath.get(c.path));
+      const commentSide = c.side ?? 'RIGHT';
+      const bodyWithSuggestion = buildSuggestionBody(
+        c.body,
+        c.suggestion,
+        commentSide,
+        c.line,
+        validLines,
+      );
+      return {
+        path: c.path,
+        line: c.line,
+        side: c.side,
+        body: appendFingerprintMarker(bodyWithSuggestion, c.fingerprint),
+      };
+    });
     // `event` is optional on ReviewPayload so callers that haven't
     // been updated (or third-party adapters via the VCS interface)
     // still get the v0.1 `COMMENT` behavior. Wiring the runner

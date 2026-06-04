@@ -56,6 +56,13 @@ export const CODECOMMIT_CAPABILITIES: VcsCapabilities = {
    * `postReply` and skip the conversational flow for CodeCommit installations.
    */
   conversationReply: false,
+  /**
+   * CodeCommit does not support GitHub's committable ```suggestion syntax.
+   * The adapter renders `InlineComment.suggestion` as an informational
+   * fenced code block instead — no commit button available. No hunk
+   * validity check is needed because the block is purely informational.
+   */
+  committableSuggestions: false,
 };
 
 // CodeCommit identifies a PR by a string `pullRequestId` that is a positive
@@ -242,6 +249,15 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
       );
     }
     for (const c of review.comments) {
+      // #152: CodeCommit does not support GitHub's committable ```suggestion
+      // syntax. When a suggestion is present, render it as an informational
+      // fenced code block so the reviewer can still read and apply it manually.
+      // No hunk validation is needed because this is purely informational —
+      // we never post a platform-native committable suggestion here.
+      let commentBody = c.body;
+      if (c.suggestion) {
+        commentBody = `${commentBody}\n\n**Suggested fix:**\n\`\`\`\n${c.suggestion}\n\`\`\``;
+      }
       // #96: same hidden marker as the GitHub adapter so a
       // CodeCommit `/feedback` (#95) reply can resolve the target
       // comment via its parent body.
@@ -256,7 +272,7 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
             filePosition: c.line,
             relativeFileVersion: c.side === 'LEFT' ? 'BEFORE' : 'AFTER',
           },
-          content: appendFingerprintMarker(c.body, c.fingerprint),
+          content: appendFingerprintMarker(commentBody, c.fingerprint),
         }),
       );
     }

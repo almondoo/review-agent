@@ -173,6 +173,21 @@ export type ReviewPayload = {
    * comment API.
    */
   readonly event?: ReviewEvent;
+  /**
+   * The diff used for this review. Optional for back-compat.
+   *
+   * When present, the GitHub adapter uses `DiffFile.patch` per file to
+   * validate whether a `suggestion` anchor line is within a diff hunk
+   * (committable-suggestion validity gate, #152). Absent means no diff
+   * is available and all suggestions are suppressed to plain comment
+   * bodies (fail-closed — never post a suggestion GitHub would reject).
+   */
+  readonly diff?: {
+    readonly files: ReadonlyArray<{
+      readonly path: string;
+      readonly patch: string | null;
+    }>;
+  };
 };
 
 /**

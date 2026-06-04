@@ -141,6 +141,18 @@ CodeCommit-specific settings. Ignored by all other VCS adapters.
 
 ---
 
+## `suggestions`
+
+Controls how `suggestion` fields from LLM findings are rendered in inline
+review comments. See [suggestions.md](./suggestions.md) for full details.
+
+| Key | Type | Default | Scope | Description |
+|---|---|---|---|---|
+| `suggestions.enabled` | boolean | `true` | repo, org | When `false`, all `suggestion` fields are stripped before posting; only the comment body is published. |
+| `suggestions.categories` | `Category[]` | all categories | repo, org | Only render suggestion blocks for findings in these categories. Findings in other categories lose the suggestion block (body preserved). Findings with no `category` field always keep their suggestion. |
+
+---
+
 ## Effective-config resolution log
 
 Since issue #146, every run emits a `ConfigResolutionLog` that records which

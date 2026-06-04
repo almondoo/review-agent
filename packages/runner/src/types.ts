@@ -262,6 +262,25 @@ export type ReviewJob = {
    * env var when the YAML key is absent). Bounds: 1–50.
    */
   readonly maxSteps?: number;
+  /**
+   * Committable-suggestion gating (#152). Controls whether and for which
+   * categories the runner forwards `suggestion` fields to the platform adapter.
+   *
+   * - `enabled: false` — all `suggestion` fields are stripped from every
+   *   comment before posting; only the comment body reaches the VCS.
+   * - `categories` — only comments whose `category` is in this list keep
+   *   their suggestion. Comments in other categories have their suggestion
+   *   field removed (body is preserved). Comments with no `category` field
+   *   always keep their suggestion.
+   *
+   * Optional for back-compat — absent means no suggestion gating is applied
+   * (suggestions flow to the adapter unchanged, subject only to the adapter's
+   * hunk-validity check for GitHub).
+   */
+  readonly suggestions?: {
+    readonly enabled: boolean;
+    readonly categories: ReadonlyArray<(typeof CATEGORIES)[number]>;
+  };
 };
 
 export type FinalizedComment = InlineComment & {

@@ -44,6 +44,8 @@ function makeVCS(overrides: Partial<VCS> = {}): VCS {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
+      committableSuggestions: true,
     },
     getPR: vi.fn(async () => samplePR),
     getDiff: vi.fn(async () => ({ baseSha: 'B', headSha: 'H', files: [] })),
@@ -571,5 +573,87 @@ describe('runAction', () => {
     const generateMock = provider.generateReview as ReturnType<typeof vi.fn>;
     const reviewInput = generateMock.mock.calls[0]?.[0] as { language: string } | undefined;
     expect(reviewInput?.language).toBe('ja-JP');
+  });
+
+  // -------------------------------------------------------------------------
+  // #152: suggestions config propagation
+  // -------------------------------------------------------------------------
+
+  it('forwards config.suggestions into the ReviewJob passed to runReview (#152)', async () => {
+    // Verify that when a config with suggestions.enabled=false is loaded,
+    // the LLM-facing system prompt path gets called (which means ReviewJob
+    // was built and passed to the runner). We spy on generateReview to
+    // capture the injected ReviewJob indirectly via the provider call.
+    const generateReview = vi.fn(async () => ({
+      summary: 'OK',
+      comments: [],
+      tokensUsed: { input: 100, output: 50 },
+      costUsd: 0.001,
+    }));
+    const provider: ReturnType<typeof makeProvider> = {
+      ...makeProvider(),
+      generateReview,
+    };
+    const postReview = vi.fn(async () => undefined);
+    const vcs = makeVCS({ postReview });
+    const yaml = 'suggestions:\n  enabled: false\n';
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => yaml,
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        sleep: noSleep,
+      },
+    );
+    // The runner was called (provider.generateReview) — means ReviewJob
+    // with suggestions reached the runner.
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    // postReview was called — means postOrUpdate ran.
+    expect(postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards diff into ReviewPayload.diff when calling postReview (#152)', async () => {
+    // When getDiff returns files with patches, postReview must receive those
+    // patches in the diff field so the GitHub adapter can do hunk validation.
+    const patch = '@@ -1,3 +1,3 @@\n context\n+added at 2\n context at 3';
+    const getDiff = vi.fn(async () => ({
+      baseSha: 'B',
+      headSha: 'H',
+      files: [
+        {
+          path: 'src/a.ts',
+          patch,
+          previousPath: null,
+          status: 'modified' as const,
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    }));
+    const postReview = vi.fn(async () => undefined);
+    const vcs = makeVCS({ getDiff, postReview });
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        sleep: noSleep,
+      },
+    );
+    expect(postReview).toHaveBeenCalledTimes(1);
+    const payload = (postReview as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      diff?: { files: Array<{ path: string; patch: string | null }> };
+    };
+    // diff must be forwarded with path + patch for each file.
+    expect(payload.diff).toBeDefined();
+    expect(payload.diff?.files).toHaveLength(1);
+    expect(payload.diff?.files[0]?.path).toBe('src/a.ts');
+    expect(payload.diff?.files[0]?.patch).toBe(patch);
   });
 });

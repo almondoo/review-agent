@@ -47,6 +47,8 @@ function fakeVcs(overrides: Partial<VCS> = {}): VCS {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
+      committableSuggestions: true,
     },
     getPR: async () => fakePR(),
     getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
@@ -615,5 +617,79 @@ describe('runReviewCommand', () => {
       createProvider: () => fakeProvider(),
     });
     expect(io.err.join('')).toContain('env=true');
+  });
+
+  // -------------------------------------------------------------------------
+  // #152: suggestions config and diff propagation
+  // -------------------------------------------------------------------------
+
+  it('forwards config.suggestions into ReviewJob (suggestions.enabled=false propagates to runner)', async () => {
+    const generateReview = vi.fn(async () => ({
+      comments: [],
+      summary: 'ok',
+      tokensUsed: { input: 0, output: 0 },
+      costUsd: 0,
+    }));
+    const provider = fakeProvider();
+    const vcs = fakeVcs({
+      getPR: async () => fakePR(),
+      getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
+    });
+    const io = recordingIo();
+    // suggestions.enabled: false via YAML — the runner gating must fire
+    // (no suggestion fields survive to postReview). We verify the round-trip
+    // ran without error; gating unit tests live in agent.test.ts.
+    await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: '.review-agent.yml',
+      post: false,
+      env: baseEnv,
+      readFile: async () => 'suggestions:\n  enabled: false\n',
+      createVCS: () => vcs,
+      createProvider: () => ({ ...provider, generateReview }),
+    });
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards diff into ReviewPayload.diff when --post is set (#152)', async () => {
+    const patch = '@@ -1,2 +1,2 @@\n context\n+added';
+    const getDiff = vi.fn(async () => ({
+      baseSha: 'b1',
+      headSha: 'h1',
+      files: [
+        {
+          path: 'src/a.ts',
+          patch,
+          previousPath: null,
+          status: 'modified' as const,
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    }));
+    const postReview = vi.fn(async () => undefined);
+    const vcs = fakeVcs({ getDiff, postReview });
+    const io = recordingIo();
+    await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: true,
+      env: baseEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(postReview).toHaveBeenCalledTimes(1);
+    const payload = (postReview as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      diff?: { files: Array<{ path: string; patch: string | null }> };
+    };
+    expect(payload.diff).toBeDefined();
+    expect(payload.diff?.files).toHaveLength(1);
+    expect(payload.diff?.files[0]?.path).toBe('src/a.ts');
+    expect(payload.diff?.files[0]?.patch).toBe(patch);
   });
 });

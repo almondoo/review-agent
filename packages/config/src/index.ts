@@ -41,4 +41,5 @@ export {
   type Ruleset,
   type RulesetCategory,
   RulesetSchema,
+  type Suggestions,
 } from './schema.js';
