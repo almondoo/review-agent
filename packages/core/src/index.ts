@@ -127,6 +127,7 @@ export {
   type ReviewPayload,
   type ReviewState,
   SEVERITIES,
+  SEVERITY_RANK,
   type Severity,
   SIDES,
   type Side,

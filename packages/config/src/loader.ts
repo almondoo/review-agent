@@ -217,6 +217,7 @@ function buildSectionSources(
     'coordination',
     'server',
     'codecommit',
+    'ruleset',
   ] as const;
 
   for (const key of topLevelKeys) {

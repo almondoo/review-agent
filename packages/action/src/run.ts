@@ -160,6 +160,7 @@ export async function runAction(
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
     requestChangesOn: config.reviews.request_changes_on,
+    ruleset: config.ruleset,
     pathFilters: config.reviews.path_filters,
     maxFiles: config.reviews.max_files,
     maxDiffLines: config.reviews.max_diff_lines,

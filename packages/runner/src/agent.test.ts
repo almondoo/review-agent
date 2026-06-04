@@ -5,7 +5,7 @@ import {
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import { describe, expect, it, vi } from 'vitest';
-import { runReview } from './agent.js';
+import { DEFAULT_RULESET_CATEGORY, runReview } from './agent.js';
 import { CUSTOM_RULE_ID_PREFIX, type GitleaksFinding } from './gitleaks.js';
 import { MAX_TOOL_CALLS } from './tools.js';
 import { REVIEW_ABORT_REASONS, type ReviewJob } from './types.js';
@@ -1494,5 +1494,182 @@ describe('runReview — onConfigResolution hook (issue #146)', () => {
     await runReview(jobWithLog, provider, { onConfigResolution });
     expect(callOrder[0]).toBe('hook');
     expect(callOrder[1]).toBe('llm');
+  });
+});
+
+describe('runReview — ruleset filter (#148)', () => {
+  // Helpers: outputs that carry explicit categories for ruleset testing.
+  function makeOutputWithCategories(): ReviewOutput {
+    return {
+      summary: 'Three findings.',
+      comments: [
+        {
+          path: 'src/a.ts',
+          line: 1,
+          side: 'RIGHT' as const,
+          body: 'SQL injection risk.',
+          severity: 'critical' as const,
+          category: 'security' as const,
+        },
+        {
+          path: 'src/b.ts',
+          line: 5,
+          side: 'RIGHT' as const,
+          body: 'Duplicated logic.',
+          severity: 'minor' as const,
+          category: 'maintainability' as const,
+        },
+        {
+          path: 'src/c.ts',
+          line: 10,
+          side: 'RIGHT' as const,
+          body: 'Wrong indent.',
+          severity: 'info' as const,
+          category: 'style' as const,
+        },
+      ],
+      tokensUsed: { input: 1000, output: 200 },
+      costUsd: 0.001,
+    };
+  }
+
+  it('passes all comments through when ruleset is absent (back-compat)', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(baseJob, provider);
+    expect(result.comments).toHaveLength(3);
+    expect(result.droppedByRuleset).toBe(0);
+  });
+
+  it('passes all comments through when ruleset is empty {}', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview({ ...baseJob, ruleset: {} }, provider);
+    expect(result.comments).toHaveLength(3);
+    expect(result.droppedByRuleset).toBe(0);
+  });
+
+  it('suppresses findings in a disabled category (enabled: false)', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(
+      { ...baseJob, ruleset: { style: { enabled: false, min_severity: 'info' } } },
+      provider,
+    );
+    // style comment should be dropped
+    expect(result.comments).toHaveLength(2);
+    expect(result.droppedByRuleset).toBe(1);
+    expect(result.comments.every((c) => c.category !== 'style')).toBe(true);
+  });
+
+  it('disabling multiple categories drops all their findings', async () => {
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(
+      {
+        ...baseJob,
+        ruleset: {
+          style: { enabled: false, min_severity: 'info' },
+          maintainability: { enabled: false, min_severity: 'info' },
+        },
+      },
+      provider,
+    );
+    expect(result.comments).toHaveLength(1);
+    expect(result.droppedByRuleset).toBe(2);
+    expect(result.comments[0]?.category).toBe('security');
+  });
+
+  it('suppresses findings below min_severity floor for their category', async () => {
+    // maintainability finding is 'minor'; setting min_severity: 'major' drops it.
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(
+      {
+        ...baseJob,
+        ruleset: { maintainability: { enabled: true, min_severity: 'major' } },
+      },
+      provider,
+    );
+    expect(result.comments).toHaveLength(2);
+    expect(result.droppedByRuleset).toBe(1);
+    expect(result.comments.every((c) => c.category !== 'maintainability')).toBe(true);
+  });
+
+  it('keeps findings at or above the min_severity floor', async () => {
+    // security finding is 'critical'; min_severity: 'major' must keep it.
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(
+      {
+        ...baseJob,
+        ruleset: { security: { enabled: true, min_severity: 'major' } },
+      },
+      provider,
+    );
+    const securityKept = result.comments.filter((c) => c.category === 'security');
+    expect(securityKept).toHaveLength(1);
+  });
+
+  it('keeps findings whose category has no ruleset entry (pass-through)', async () => {
+    // maintainability is not in the ruleset → always kept regardless of severity.
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => makeOutputWithCategories()),
+    });
+    const result = await runReview(
+      {
+        ...baseJob,
+        ruleset: {
+          style: { enabled: false, min_severity: 'info' },
+          // maintainability not present → no filter
+        },
+      },
+      provider,
+    );
+    const maintainabilityKept = result.comments.filter((c) => c.category === 'maintainability');
+    expect(maintainabilityKept).toHaveLength(1);
+  });
+
+  it(`assigns DEFAULT_RULESET_CATEGORY ('${DEFAULT_RULESET_CATEGORY}') to findings without a category`, async () => {
+    // The baseJob validOutput has no category on its comments.
+    // DEFAULT_RULESET_CATEGORY is 'bug'; disabling 'bug' must drop them.
+    const provider = makeProvider({ generateReview: vi.fn(async () => validOutput) });
+    const result = await runReview(
+      { ...baseJob, ruleset: { bug: { enabled: false, min_severity: 'info' } } },
+      provider,
+    );
+    // Both comments in validOutput have no category → assigned 'bug' → dropped.
+    expect(result.comments).toHaveLength(0);
+    expect(result.droppedByRuleset).toBe(2);
+  });
+
+  it('applies min_severity against DEFAULT_RULESET_CATEGORY for uncategorized findings', async () => {
+    // validOutput comments have severity 'minor' and 'major', no category.
+    // DEFAULT_RULESET_CATEGORY = 'bug'; set min_severity: 'critical' for 'bug'.
+    const provider = makeProvider({ generateReview: vi.fn(async () => validOutput) });
+    const result = await runReview(
+      { ...baseJob, ruleset: { bug: { enabled: true, min_severity: 'critical' } } },
+      provider,
+    );
+    // Both are below 'critical' → both dropped.
+    expect(result.comments).toHaveLength(0);
+    expect(result.droppedByRuleset).toBe(2);
+  });
+
+  it('droppedByRuleset is 0 when no ruleset filter is configured (no-op)', async () => {
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider);
+    expect(result.droppedByRuleset).toBe(0);
+  });
+
+  it('DEFAULT_RULESET_CATEGORY is the documented default ("bug")', () => {
+    // Regression guard: the default must be 'bug' per spec §10.1 documentation.
+    expect(DEFAULT_RULESET_CATEGORY).toBe('bug');
   });
 });

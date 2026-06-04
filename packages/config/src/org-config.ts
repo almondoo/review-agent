@@ -151,6 +151,12 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     repo: { ...orgConfig.repo, ...repoConfig.repo },
     skills: [...orgConfig.skills, ...repoConfig.skills],
     incremental: { ...orgConfig.incremental, ...repoConfig.incremental },
+    // Ruleset merge: org provides the base per-category entries; repo
+    // overrides on a per-category basis (repo wins per the §10.2 "repo
+    // wins on scalars / nested objects" rule). Categories present only
+    // in org are inherited; categories present in repo shadow the org
+    // entry for that key entirely.
+    ruleset: { ...orgConfig.ruleset, ...repoConfig.ruleset },
   };
   // Run through Zod again so the merged object is structurally valid
   // (in particular, lists of `path_instructions` are revalidated).

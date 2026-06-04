@@ -245,6 +245,95 @@ describe('defaultConfig', () => {
   });
 });
 
+describe('loadConfigFromYaml — ruleset block (#148)', () => {
+  it('defaults ruleset to an empty record (no filtering)', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.ruleset).toEqual({});
+  });
+
+  it('parses a single enabled category with default min_severity', () => {
+    const cfg = loadConfigFromYaml('ruleset:\n  security:\n    enabled: true\n');
+    expect(cfg.ruleset.security).toEqual({ enabled: true, min_severity: 'info' });
+  });
+
+  it('parses enabled: false to suppress a category', () => {
+    const cfg = loadConfigFromYaml('ruleset:\n  style:\n    enabled: false\n');
+    expect(cfg.ruleset.style).toEqual({ enabled: false, min_severity: 'info' });
+  });
+
+  it('parses min_severity: major to filter low-severity findings', () => {
+    const cfg = loadConfigFromYaml('ruleset:\n  performance:\n    min_severity: major\n');
+    expect(cfg.ruleset.performance).toEqual({ enabled: true, min_severity: 'major' });
+  });
+
+  it('parses multiple categories in one block', () => {
+    const yaml = [
+      'ruleset:',
+      '  security:',
+      '    enabled: true',
+      '    min_severity: major',
+      '  style:',
+      '    enabled: false',
+      '  bug:',
+      '    min_severity: critical',
+    ].join('\n');
+    const cfg = loadConfigFromYaml(yaml);
+    expect(cfg.ruleset.security).toEqual({ enabled: true, min_severity: 'major' });
+    expect(cfg.ruleset.style).toEqual({ enabled: false, min_severity: 'info' });
+    expect(cfg.ruleset.bug).toEqual({ enabled: true, min_severity: 'critical' });
+  });
+
+  it('rejects an unknown category key in the ruleset block', () => {
+    // 'correctness' is not a CATEGORIES value — Zod should reject it.
+    expect(() => loadConfigFromYaml('ruleset:\n  correctness:\n    enabled: true\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects an unknown min_severity value in ruleset', () => {
+    // 'low' and 'medium' are from the issue-body examples but not in SEVERITIES.
+    expect(() => loadConfigFromYaml('ruleset:\n  security:\n    min_severity: low\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects an unknown min_severity value: high (not in SEVERITIES)', () => {
+    // SEVERITIES is ['critical','major','minor','info'] — 'high' is not valid.
+    expect(() => loadConfigFromYaml('ruleset:\n  security:\n    min_severity: high\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects an extra key inside a category entry (strict schema)', () => {
+    expect(() =>
+      loadConfigFromYaml('ruleset:\n  security:\n    enabled: true\n    extra: nope\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('all known CATEGORIES are accepted as valid ruleset keys', () => {
+    // Regression guard: every CATEGORIES entry must parse without error.
+    const yaml = [
+      'ruleset:',
+      '  bug:',
+      '    enabled: true',
+      '  security:',
+      '    enabled: true',
+      '  performance:',
+      '    enabled: true',
+      '  maintainability:',
+      '    enabled: true',
+      '  style:',
+      '    enabled: true',
+      '  docs:',
+      '    enabled: true',
+      '  test:',
+      '    enabled: true',
+    ].join('\n');
+    const cfg = loadConfigFromYaml(yaml);
+    expect(Object.keys(cfg.ruleset)).toHaveLength(7);
+  });
+});
+
 describe('resolveEffectiveConfig', () => {
   describe('precedence: repo > org > defaults', () => {
     it('primarySource is "repo-yaml" when repo YAML is provided', () => {

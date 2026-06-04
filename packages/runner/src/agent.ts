@@ -1,11 +1,14 @@
 import {
+  type Category,
   CONFIDENCES,
   type Confidence,
   computeReviewEvent,
   createReviewOutputSchema,
   globToRegExp,
   SchemaValidationError,
+  SEVERITY_RANK,
   SecretLeakAbortedError,
+  type Severity,
   URL_ALLOWLIST_ISSUE_PREFIX,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
@@ -43,6 +46,19 @@ import type {
 
 const RETRY_PROMPT_SUFFIX =
   '\n\nIMPORTANT: your previous response failed schema validation. Produce strictly valid output that matches the configured schema.';
+
+/**
+ * Default category assigned to findings that carry no `category` field.
+ * Findings without a category are always assigned this value before the
+ * ruleset filter runs, so every finding is subject to a deterministic
+ * policy (never silently dropped without a defined rule — spec §10.1).
+ *
+ * `'bug'` is the documented default: a finding without a category is
+ * most likely a correctness issue (the most conservative assumption).
+ * This constant is exported so tests can assert the documented default
+ * without hard-coding the string.
+ */
+export const DEFAULT_RULESET_CATEGORY: Category = 'bug';
 
 /**
  * Operator-facing summary text for the two retry-then-abort cases
@@ -106,6 +122,7 @@ function buildCapSkipResult(
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: 0,
+    droppedByRuleset: 0,
     toolCalls: 0,
     reviewEvent: 'COMMENT',
     aborted: { reason, internalIssues: [] },
@@ -127,6 +144,55 @@ function classifyAbort(err: SchemaValidationError): {
     return { reason: 'url_allowlist', summary: URL_ALLOWLIST_ABORT_SUMMARY };
   }
   return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
+}
+
+/**
+ * Apply the operator's `ruleset` configuration to the kept comment list.
+ * Three-step pipeline:
+ *
+ *   1. Assign `DEFAULT_RULESET_CATEGORY` to any comment whose `category`
+ *      field is absent or undefined, so every finding is subject to a
+ *      deterministic policy (never silently dropped without a defined rule).
+ *   2. Suppress findings whose effective category has `enabled: false`.
+ *   3. Suppress findings whose `severity` rank is strictly below the
+ *      `min_severity` floor configured for their effective category.
+ *
+ * When `ruleset` is absent or empty (`{}`), no filtering is applied and
+ * the function returns the input list unchanged (zero cost).
+ */
+function applyRulesetFilter(
+  comments: ReadonlyArray<import('@review-agent/core').InlineComment>,
+  ruleset: ReviewJob['ruleset'],
+): { kept: ReadonlyArray<import('@review-agent/core').InlineComment>; dropped: number } {
+  if (!ruleset || Object.keys(ruleset).length === 0) {
+    return { kept: comments, dropped: 0 };
+  }
+  let dropped = 0;
+  const kept: Array<import('@review-agent/core').InlineComment> = [];
+  for (const comment of comments) {
+    // Step 1: assign default category when absent.
+    const effectiveCategory: Category = comment.category ?? DEFAULT_RULESET_CATEGORY;
+    const entry = ruleset[effectiveCategory];
+    // No entry for this category → no filtering (default pass).
+    if (entry === undefined) {
+      kept.push(comment);
+      continue;
+    }
+    // Step 2: suppress disabled categories.
+    if (!entry.enabled) {
+      dropped += 1;
+      continue;
+    }
+    // Step 3: suppress below min_severity floor.
+    const commentRank = SEVERITY_RANK[comment.severity as Severity];
+    const floorRank = SEVERITY_RANK[entry.min_severity as Severity];
+    if (commentRank < floorRank) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(comment);
+  }
+  return { kept, dropped };
 }
 
 async function runReviewInner(
@@ -419,6 +485,7 @@ async function runReviewInner(
         model: provider.model,
         provider: provider.name,
         droppedDuplicates: 0,
+        droppedByRuleset: 0,
         toolCalls: toolCallCounter,
         reviewEvent: 'COMMENT',
         aborted: {
@@ -440,7 +507,15 @@ async function runReviewInner(
   // do not "remember" we suppressed them, by design — operator wants
   // them silent, not memoized).
   const minConfidence = job.minConfidence ?? 'low';
-  const filteredKept = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+  const afterConfidence = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+
+  // Apply the operator-configured ruleset filter *after* the confidence
+  // filter. The ruleset is the §10.1 category/severity enforcement layer:
+  //   1. Findings with no `category` get DEFAULT_RULESET_CATEGORY ('bug').
+  //   2. Findings in a disabled category are suppressed.
+  //   3. Findings below the category's `min_severity` floor are suppressed.
+  const rulesetResult = applyRulesetFilter(afterConfidence, job.ruleset);
+  const filteredKept = rulesetResult.kept;
 
   const scannedText = [result.summary, ...filteredKept.map((c) => c.body)].join('\n\n');
   const outputFindings = [...scanContent(scannedText)];
@@ -491,6 +566,7 @@ async function runReviewInner(
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
     droppedByFeedback: dedup.droppedByFeedback,
+    droppedByRuleset: rulesetResult.dropped,
     toolCalls,
     reviewEvent,
   };

@@ -1,4 +1,4 @@
-export { runReview } from './agent.js';
+export { DEFAULT_RULESET_CATEGORY, runReview } from './agent.js';
 export {
   type AutoFetchBudget,
   type AutoFetchedFile,

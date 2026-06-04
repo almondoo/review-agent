@@ -156,6 +156,7 @@ export async function runReviewCommand(
       costCapUsd: opts.costCapUsd ?? config.cost.max_usd_per_pr,
       minConfidence: config.reviews.min_confidence,
       requestChangesOn: config.reviews.request_changes_on,
+      ruleset: config.ruleset,
       pathFilters: config.reviews.path_filters,
       maxFiles: config.reviews.max_files,
       maxDiffLines: config.reviews.max_diff_lines,

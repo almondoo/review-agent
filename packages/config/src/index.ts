@@ -25,4 +25,11 @@ export {
   type OrgConfigCacheOpts,
   type OrgConfigFetch,
 } from './org-config.js';
-export { type Config, type ConfigInput, ConfigSchema } from './schema.js';
+export {
+  type Config,
+  type ConfigInput,
+  ConfigSchema,
+  type Ruleset,
+  type RulesetCategory,
+  RulesetSchema,
+} from './schema.js';

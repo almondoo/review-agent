@@ -1,4 +1,5 @@
 import {
+  type CATEGORIES,
   type Confidence,
   type InlineComment,
   REVIEW_ABORT_REASONS,
@@ -6,6 +7,7 @@ import {
   type ReviewAbortReason,
   type ReviewEvent,
   type ReviewState,
+  type SEVERITIES,
   type Severity,
   type Side,
 } from '@review-agent/core';
@@ -216,6 +218,30 @@ export type ReviewJob = {
     readonly repo: string;
   };
   /**
+   * Per-category ruleset configuration. Declares which categories are
+   * active and what the minimum severity floor is for each. The runner
+   * applies this filter after dedup and min_confidence:
+   *
+   *   1. Findings with no category are assigned to `DEFAULT_RULESET_CATEGORY`
+   *      so they are always subject to a deterministic policy (never silently
+   *      dropped without a defined rule).
+   *   2. Findings whose effective category has `enabled: false` are suppressed.
+   *   3. Findings whose severity rank is strictly below `min_severity` for
+   *      their effective category are suppressed.
+   *
+   * Optional for back-compat — callers that do not pass `ruleset` get the
+   * no-op default (all categories enabled, min_severity='info' which is rank 0
+   * and therefore never filters anything out).
+   */
+  readonly ruleset?: Readonly<
+    Partial<
+      Record<
+        (typeof CATEGORIES)[number],
+        { readonly enabled: boolean; readonly min_severity: (typeof SEVERITIES)[number] }
+      >
+    >
+  >;
+  /**
    * Inspectable record of which config source (repo YAML, org YAML,
    * env, or defaults) produced the effective config for this run.
    * Optional for back-compat — callers that do not use
@@ -279,6 +305,14 @@ export type RunnerResult = {
    * recorders can tell "feature off" from "feature on, no drops".
    */
   readonly droppedByFeedback?: number;
+  /**
+   * Comments suppressed by the `job.ruleset` filter (category disabled
+   * or severity below the category's `min_severity` floor). Separated
+   * from `droppedDuplicates` so the eval harness can measure ruleset
+   * effectiveness independently from dedup. Zero when `job.ruleset` is
+   * absent or the ruleset does not filter any comments.
+   */
+  readonly droppedByRuleset: number;
   /**
    * Number of tool calls (`read_file` / `glob` / `grep`) that the
    * LLM made during this review. Surfaced for cost-guard accounting

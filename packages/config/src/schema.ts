@@ -1,8 +1,10 @@
 import {
+  CATEGORIES,
   CONFIDENCES,
   isValidGlob,
   isValidRegex,
   REQUEST_CHANGES_THRESHOLDS,
+  SEVERITIES,
   WORKSPACE_STRATEGIES,
 } from '@review-agent/core';
 import { z } from 'zod';
@@ -224,6 +226,48 @@ const CoordinationSchema = z
   })
   .strict();
 
+// Per-category ruleset entry. Each named category can be toggled on/off
+// and can enforce a minimum severity floor. Findings whose severity is
+// strictly below `min_severity` are suppressed for that category; findings
+// whose category has `enabled: false` are suppressed entirely.
+//
+// Category keys must be one of the values in `CATEGORIES` from
+// `@review-agent/core`. Unknown keys are rejected at parse time with a
+// Zod "Unrecognized key(s)" error so operators get an actionable message
+// (e.g. "ruleset.correctness: Unrecognized key(s)") rather than a silent
+// no-op. The known categories are:
+//   bug, security, performance, maintainability, style, docs, test
+//
+// NOTE: the issue body mentions `security/performance/style/tests/correctness`
+// as examples. This implementation uses the canonical CATEGORIES from core:
+//   - `test` (not `tests`) — matches the core taxonomy.
+//   - `bug` + `maintainability` cover what the issue called `correctness`.
+// Operators who want to gate on "correctness-class" findings should use
+// `bug: { min_severity: major }` and/or `maintainability: { enabled: false }`.
+const RulesetCategorySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    // Severity floor: findings strictly below this rank are suppressed for
+    // this category. Default `'info'` means "post everything" (info is the
+    // lowest rank so nothing is filtered out by default). Rank order:
+    //   critical (3) > major (2) > minor (1) > info (0).
+    min_severity: z.enum(SEVERITIES).default('info'),
+  })
+  .strict();
+
+export type RulesetCategory = z.infer<typeof RulesetCategorySchema>;
+
+// The full ruleset block. Each key is a known category; unknown keys are
+// rejected by `.strict()` on the wrapper (via `z.record` + explicit key
+// constraint below). We use `z.record(z.enum(CATEGORIES), ...)` so Zod
+// rejects unknown category names at parse time.
+//
+// An empty ruleset (`ruleset: {}`) is valid — all categories default to
+// `{ enabled: true, min_severity: 'info' }` which is a no-op filter.
+export const RulesetSchema = z.record(z.enum(CATEGORIES), RulesetCategorySchema).default({});
+
+export type Ruleset = z.infer<typeof RulesetSchema>;
+
 // `extends: 'org'` (§10.2 layer 3) opts the repo into merging the
 // `<org>/.github/review-agent.yml` central config underneath this
 // file. Without `extends`, the org file is consulted only as a
@@ -248,6 +292,13 @@ export const ConfigSchema = z
     coordination: CoordinationSchema.default({}),
     server: ServerSchema.default({}),
     codecommit: CodecommitSchema.default({}),
+    // Per-category ruleset block. Keys are `CATEGORIES` values; each entry
+    // has `enabled` (default true) and `min_severity` (default 'info').
+    // Findings whose category has `enabled: false` are suppressed; findings
+    // below `min_severity` for their category are also suppressed. The runner
+    // applies this filter after dedup and min_confidence. An absent `ruleset`
+    // key is identical to `ruleset: {}` — no filtering.
+    ruleset: RulesetSchema,
   })
   .strict();
 
