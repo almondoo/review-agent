@@ -298,6 +298,40 @@ export type FinalizedComment = InlineComment & {
  */
 export { REVIEW_ABORT_REASONS, type ReviewAbortReason };
 
+/**
+ * A file excluded from the review run before the LLM was called.
+ * Populated by the cap pipeline in `runReview` for path-filter matches,
+ * max_files overflows, and max_diff_lines overflows.
+ */
+export type ExcludedFile = {
+  readonly path: string;
+  /**
+   * Human-readable reason for the exclusion. One of:
+   * - `'path_filter'`       — matched a `reviews.path_filters` glob.
+   * - `'max_files_cap'`     — diff exceeded `reviews.max_files`; this
+   *                           file was part of the overflow.
+   * - `'max_diff_lines_cap'`— diff exceeded `reviews.max_diff_lines`;
+   *                           this file was part of the overflow.
+   */
+  readonly reason: 'path_filter' | 'max_files_cap' | 'max_diff_lines_cap';
+};
+
+/**
+ * Report of all files that were excluded before the LLM was called.
+ * Attached to `RunnerResult.exclusionReport` when at least one file
+ * was excluded (path filter hit or cap exceeded). Optional for
+ * back-compat — callers that pre-date #145 will not supply this field.
+ *
+ * The `capsApplied` field names which hard caps fired during this run:
+ * - `max_files`      — the post-path-filter file count exceeded `maxFiles`.
+ * - `max_diff_lines` — the post-path-filter line count exceeded `maxDiffLines`.
+ * Both may be set simultaneously when both thresholds are exceeded.
+ */
+export type ExclusionReport = {
+  readonly excludedFiles: ReadonlyArray<ExcludedFile>;
+  readonly capsApplied: ReadonlyArray<'max_files' | 'max_diff_lines'>;
+};
+
 export type RunnerResult = {
   readonly comments: ReadonlyArray<InlineComment>;
   readonly summary: string;
@@ -339,6 +373,15 @@ export type RunnerResult = {
    * underlying `pulls.createReview` event.
    */
   readonly reviewEvent: ReviewEvent;
+  /**
+   * Files excluded before the LLM was called — path-filter matches and
+   * max_files / max_diff_lines cap overflows. Present whenever at least
+   * one file was excluded. Optional for back-compat: callers that pre-date
+   * #145 will not supply this field and receive `undefined`. Consumers
+   * (dry-run command, eval harness) should treat `undefined` as "no
+   * exclusions recorded" rather than "no exclusions occurred".
+   */
+  readonly exclusionReport?: ExclusionReport;
   /**
    * Set when the agent loop gracefully aborted (spec §7.3 #4): the
    * LLM produced output that failed the response schema twice — once

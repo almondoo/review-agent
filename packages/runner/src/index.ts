@@ -115,6 +115,8 @@ export {
 export type {
   ConfigResolutionLog,
   ConfigResolutionSource,
+  ExcludedFile,
+  ExclusionReport,
   Middleware,
   MiddlewareCtx,
   ReviewJob,

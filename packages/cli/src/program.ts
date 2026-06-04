@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { auditExportCommand } from './commands/audit-export.js';
 import { auditPruneCommand } from './commands/audit-prune.js';
+import { runDryRunCommand } from './commands/dry-run.js';
 import { runEvalCommand } from './commands/eval.js';
 import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
 import {
@@ -61,6 +62,35 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         env,
       });
       io.exit(result.status === 'reviewed' || result.status === 'skipped' ? 0 : 1);
+    });
+
+  program
+    .command('dry-run')
+    .description(
+      'Preview effective config and optionally run the review pipeline without posting to the PR.',
+    )
+    .option('--config <path>', 'path to .review-agent.yml', '.review-agent.yml')
+    .option(
+      '--pr <owner/repo#number>',
+      "run the full review pipeline against this PR (no-post); format: 'owner/repo#<n>'",
+    )
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
+    .option('--lang <code>', 'override output language (BCP 47)')
+    .addOption(new Option('--profile <profile>', 'override review profile').choices([...PROFILES]))
+    .action(async (opts: DryRunCliOpts) => {
+      const result = await runDryRunCommand(io, {
+        configPath: opts.config,
+        ...(opts.pr !== undefined ? { pr: opts.pr } : {}),
+        platform: opts.platform,
+        ...(opts.lang ? { language: opts.lang } : {}),
+        ...(opts.profile ? { profile: opts.profile } : {}),
+        env,
+      });
+      io.exit(result.status === 'config_only' || result.status === 'reviewed' ? 0 : 1);
     });
 
   const config = program.command('config').description('Inspect / validate config.');
@@ -369,6 +399,14 @@ type ReviewCliOpts = {
   profile?: (typeof PROFILES)[number];
   costCapUsd?: number;
   post?: boolean;
+};
+
+type DryRunCliOpts = {
+  config: string;
+  pr?: string;
+  platform: (typeof PLATFORMS)[number];
+  lang?: string;
+  profile?: (typeof PROFILES)[number];
 };
 
 type EvalCliOpts = {

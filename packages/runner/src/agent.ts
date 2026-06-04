@@ -36,6 +36,8 @@ import { composeSystemPrompt, MAX_LEARNED_FACTS } from './prompts/system-prompt.
 import { wrapUntrusted } from './prompts/untrusted.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
 import type {
+  ExcludedFile,
+  ExclusionReport,
   Middleware,
   MiddlewareCtx,
   ReviewAbortReason,
@@ -113,6 +115,7 @@ function buildCapSkipResult(
   provider: LlmProvider,
   reason: ReviewAbortReason,
   summary: string,
+  exclusionReport: ExclusionReport,
 ): RunnerResult {
   return {
     comments: [],
@@ -126,6 +129,7 @@ function buildCapSkipResult(
     toolCalls: 0,
     reviewEvent: 'COMMENT',
     aborted: { reason, internalIssues: [] },
+    exclusionReport,
   };
 }
 
@@ -325,19 +329,49 @@ async function runReviewInner(
   // a "still fetch siblings but hide the change" one).
   const parsedDiff = parseDiffByFile(job.diffText);
   const filteredDiff = applyPathFilters(parsedDiff, job.pathFilters);
+
+  // Collect files removed by path_filters so they appear in the
+  // exclusionReport regardless of whether a cap also fires.
+  const pathFilterExclusions: ReadonlyArray<ExcludedFile> =
+    filteredDiff !== parsedDiff
+      ? parsedDiff.files
+          .filter((f) => !filteredDiff.files.some((kf) => kf.path === f.path))
+          .map((f) => ({ path: f.path, reason: 'path_filter' as const }))
+      : [];
+
   if (filteredDiff.files.length > job.maxFiles) {
+    // All remaining files (post-filter) are "excluded" by the cap.
+    const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
+      path: f.path,
+      reason: 'max_files_cap' as const,
+    }));
+    const exclusionReport: ExclusionReport = {
+      excludedFiles: [...pathFilterExclusions, ...capExclusions],
+      capsApplied: ['max_files'],
+    };
     return buildCapSkipResult(
       provider,
       'max_files_exceeded',
       maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
+      exclusionReport,
     );
   }
   const diffLineCount = countDiffLines(filteredDiff);
   if (diffLineCount > job.maxDiffLines) {
+    // All remaining files (post-filter) are "excluded" by the cap.
+    const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
+      path: f.path,
+      reason: 'max_diff_lines_cap' as const,
+    }));
+    const exclusionReport: ExclusionReport = {
+      excludedFiles: [...pathFilterExclusions, ...capExclusions],
+      capsApplied: ['max_diff_lines'],
+    };
     return buildCapSkipResult(
       provider,
       'max_diff_lines_exceeded',
       maxDiffLinesSkipSummary(diffLineCount, job.maxDiffLines),
+      exclusionReport,
     );
   }
   const filtersApplied = filteredDiff !== parsedDiff;
@@ -475,6 +509,10 @@ async function runReviewInner(
   } catch (err) {
     if (err instanceof SchemaValidationError) {
       const { reason, summary } = classifyAbort(err);
+      const abortExclusionReport: ExclusionReport | undefined =
+        pathFilterExclusions.length > 0
+          ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+          : undefined;
       return {
         comments: [],
         // The summary is the ONLY string that will reach a public
@@ -497,6 +535,7 @@ async function runReviewInner(
           reason,
           internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
         },
+        ...(abortExclusionReport !== undefined ? { exclusionReport: abortExclusionReport } : {}),
       };
     }
     throw err;
@@ -562,6 +601,15 @@ async function runReviewInner(
   // request changes on findings that aren't actually being posted.
   const reviewEvent = computeReviewEvent(comments, job.requestChangesOn ?? 'critical');
 
+  // Build exclusionReport when path filters removed at least one file.
+  // For the successful (non-cap-skip) path, no cap fired so `capsApplied`
+  // is always empty; the report is omitted entirely when no files were
+  // excluded (the undefined-means-no-exclusions contract on RunnerResult).
+  const exclusionReport: ExclusionReport | undefined =
+    pathFilterExclusions.length > 0
+      ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+      : undefined;
+
   return {
     comments,
     summary,
@@ -574,6 +622,7 @@ async function runReviewInner(
     droppedByRuleset: rulesetResult.dropped,
     toolCalls,
     reviewEvent,
+    ...(exclusionReport !== undefined ? { exclusionReport } : {}),
   };
 }
 
