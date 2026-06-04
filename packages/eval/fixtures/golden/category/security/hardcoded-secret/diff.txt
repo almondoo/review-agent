@@ -1,0 +1,10 @@
+--- a/src/config/database.ts
++++ b/src/config/database.ts
+@@ -1,7 +1,7 @@
+ export const dbConfig = {
+   host: process.env.DB_HOST ?? 'localhost',
+   port: 5432,
+-  password: process.env.DB_PASSWORD,
++  password: 'S3cur3P@ssw0rd!',
+   database: 'production',
+ };

@@ -1,0 +1,13 @@
+--- a/src/cache/user-cache.ts
++++ b/src/cache/user-cache.ts
+@@ -1,10 +1,8 @@
+-const TTL_MS = 5 * 60 * 1000; // 5 minutes
+-
+ const cache = new Map<string, { value: User; expiresAt: number }>();
+
+ export function cacheUser(id: string, user: User): void {
+-  cache.set(id, { value: user, expiresAt: Date.now() + TTL_MS });
++  cache.set(id, { value: user, expiresAt: Infinity });
+ }
+
+ export function getCachedUser(id: string): User | undefined {

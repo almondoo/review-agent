@@ -1,0 +1,11 @@
+--- a/src/export/csv.ts
++++ b/src/export/csv.ts
+@@ -1,8 +1,8 @@
++const MAX_ROWS = 10_000;
++
+ export async function exportCsv(filter: Filter): Promise<string> {
+-  const rows = await db.records.findAll(filter, { limit: 10_000 });
++  const rows = await db.records.findAll(filter);
+   const lines = rows.map((r) => toCsvLine(r));
+   return lines.join('\n');
+ }

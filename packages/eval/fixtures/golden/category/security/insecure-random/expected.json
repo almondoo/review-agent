@@ -1,0 +1,20 @@
+{
+  "review_category": "security",
+  "bug_class": "insecure-random",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "insecure-random-session-token",
+      "must_contain_any": [
+        "Math.random",
+        "cryptographic",
+        "crypto",
+        "predictable",
+        "entropy",
+        "insecure"
+      ],
+      "severity": "critical"
+    }
+  ],
+  "rationale": "Replaced `crypto.randomBytes` (cryptographically secure, 256-bit entropy) with `Math.random` (only ~1 million possible values). Session tokens generated this way are trivially brute-forceable."
+}

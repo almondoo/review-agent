@@ -1,0 +1,12 @@
+--- a/src/util/array.ts
++++ b/src/util/array.ts
+@@ -1,8 +1,8 @@
+ export function findFirst<T>(arr: T[], predicate: (item: T) => boolean): T | undefined {
+   for (const item of arr) {
+     if (predicate(item)) {
+-      return item;
++      item;
+     }
+   }
+   return undefined;
+ }

@@ -1,0 +1,20 @@
+{
+  "review_category": "security",
+  "bug_class": "hardcoded-secret",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "hardcoded-secret-db-password",
+      "must_contain_any": [
+        "hardcoded",
+        "secret",
+        "credential",
+        "environment variable",
+        "env var",
+        "plaintext"
+      ],
+      "severity": "critical"
+    }
+  ],
+  "rationale": "Replaced env-var lookup with a hardcoded plaintext password. Committing credentials to source control is a critical security violation — the secret will appear in git history and any clone."
+}

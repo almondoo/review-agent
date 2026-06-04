@@ -1,0 +1,16 @@
+--- a/src/api/middleware.ts
++++ b/src/api/middleware.ts
+@@ -1,9 +1,9 @@
+-const ALLOWED_ROLES = ['admin', 'editor', 'viewer'] as const;
+-type Role = (typeof ALLOWED_ROLES)[number];
+-
+-export function checkRole(role: Role): boolean {
+-  return ALLOWED_ROLES.includes(role);
++export function checkRole(role: string): boolean {
++  return role === 'admin' || role === 'editor' || role === 'viewer';
+ }
+
+ export function requireAdmin(role: string): void {
+-  if (role !== 'admin') throw new Error('Forbidden');
++  if (role !== 'admin') throw new Error('403 - Access denied to non-admin role');
+ }

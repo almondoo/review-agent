@@ -1,0 +1,20 @@
+{
+  "review_category": "style",
+  "bug_class": "magic-string",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "magic-string-role-constants",
+      "must_contain_any": [
+        "magic string",
+        "constant",
+        "enum",
+        "as const",
+        "duplication",
+        "hard-coded"
+      ],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "Replaced the typed `ALLOWED_ROLES` constant with repeated string literals scattered across two functions. Magic strings are hard to refactor safely — a typo in one copy silently introduces an inconsistency."
+}

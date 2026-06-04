@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Per-category precision/recall baseline for the review-quality regression gate (#143). The gate (pnpm eval:gate) blocks if any category's precision or recall drops beyond its threshold vs this file. Promote via: pnpm eval:baseline --apply (requires deliberate opt-in).",
+  "recorded_at": null,
+  "model": null,
+  "git_sha": null,
+  "thresholds": {
+    "comment": "Regression is detected when current metric < baseline metric - threshold. Values in [0, 1]. Default ±5% = 0.05 for all categories unless overridden.",
+    "default_precision_drop_max": 0.05,
+    "default_recall_drop_max": 0.05,
+    "per_category": {
+      "security": {
+        "precision_drop_max": 0.05,
+        "recall_drop_max": 0.05
+      },
+      "performance": {
+        "precision_drop_max": 0.05,
+        "recall_drop_max": 0.05
+      },
+      "style": {
+        "precision_drop_max": 0.05,
+        "recall_drop_max": 0.1
+      },
+      "tests": {
+        "precision_drop_max": 0.05,
+        "recall_drop_max": 0.1
+      },
+      "correctness": {
+        "precision_drop_max": 0.05,
+        "recall_drop_max": 0.05
+      }
+    }
+  },
+  "current": {
+    "comment": "Null until the operator runs `pnpm eval:baseline --apply` for the first time. A null baseline is treated as unmeasured: the gate reports scores but does not block.",
+    "pending_measurement": true,
+    "per_category": {
+      "security": {
+        "precision": null,
+        "recall": null
+      },
+      "performance": {
+        "precision": null,
+        "recall": null
+      },
+      "style": {
+        "precision": null,
+        "recall": null
+      },
+      "tests": {
+        "precision": null,
+        "recall": null
+      },
+      "correctness": {
+        "precision": null,
+        "recall": null
+      }
+    }
+  },
+  "history": []
+}

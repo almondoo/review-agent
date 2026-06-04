@@ -1,0 +1,21 @@
+{
+  "review_category": "correctness",
+  "bug_class": "boundary-condition",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "boundary-condition-paginate",
+      "must_contain_any": [
+        "off-by-one",
+        "page 1",
+        "first page",
+        "index",
+        "start",
+        "boundary",
+        "pagination"
+      ],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Changed `(page - 1) * pageSize` to `page * pageSize`. For 1-based page numbering, `page=1` now starts at offset `pageSize` instead of `0`, skipping the first page entirely and returning the second page as page 1."
+}

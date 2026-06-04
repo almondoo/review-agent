@@ -1,0 +1,20 @@
+{
+  "review_category": "style",
+  "bug_class": "dead-code",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "dead-code-unused-functions",
+      "must_contain_any": [
+        "unused",
+        "dead code",
+        "unreachable",
+        "never called",
+        "legacyFormat",
+        "unusedHelper"
+      ],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "Two private functions (`legacyFormat`, `unusedHelper`) are added but never called. Dead code adds maintenance burden and confuses future readers about intent."
+}

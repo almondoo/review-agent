@@ -1,0 +1,16 @@
+--- a/src/payments/__tests__/checkout.test.ts
++++ b/src/payments/__tests__/checkout.test.ts
+@@ -1,12 +1,12 @@
+ describe('checkout', () => {
+-  it('charges the card and returns a receipt', async () => {
++  it.skip('charges the card and returns a receipt', async () => {
+     const receipt = await checkout({ cardToken: 'tok_visa', amount: 100 });
+     expect(receipt.status).toBe('paid');
+     expect(receipt.chargeId).toMatch(/^ch_/);
+   });
+
+-  it('declines an expired card', async () => {
++  it.skip('declines an expired card', async () => {
+     await expect(checkout({ cardToken: 'tok_expired', amount: 50 })).rejects.toThrow('card_declined');
+   });
+ });

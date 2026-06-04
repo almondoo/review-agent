@@ -1,0 +1,7 @@
+--- a/src/util/validator.ts
++++ b/src/util/validator.ts
+@@ -1,7 +1,7 @@
+ export function isInRange(value: number, min: number, max: number): boolean {
+-  return value >= min && value <= max;
++  return value >= min || value <= max;
+ }

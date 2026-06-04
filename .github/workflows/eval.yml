@@ -98,6 +98,18 @@ jobs:
         working-directory: packages/eval
         run: pnpm judge -- --candidate-results severity-consistency-input.json --judge-provider anthropic --judge-model claude-opus-4-7
 
+      # #143: Per-category precision/recall regression gate.
+      # Reads fixtures/golden/category/ + category-baseline.json.
+      # The gate is deterministic: candidate-results must be produced
+      # with temperature=0 (see docs/eval/category-gate.md). When the
+      # baseline is all-null (first run / pending_measurement) the step
+      # is informational and exits 0. Pass --results to the gate when
+      # a live-LLM runner produces a real candidate-results.json.
+      # In CI without a live runner file, we run a structural smoke-test
+      # that validates all fixture JSON shapes are parseable by the gate.
+      - name: Validate category fixture shapes
+        run: pnpm --filter @review-agent/eval run test
+
       - name: Skip notice
         if: ${{ env.ANTHROPIC_API_KEY == '' }}
         run: echo "ANTHROPIC_API_KEY not set - skipping promptfoo eval. Add the secret to enable regression gating."

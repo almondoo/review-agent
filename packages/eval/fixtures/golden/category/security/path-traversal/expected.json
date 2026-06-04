@@ -1,0 +1,13 @@
+{
+  "review_category": "security",
+  "bug_class": "path-traversal",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "path-traversal-filename",
+      "must_contain_any": ["path traversal", "directory traversal", "../", "sanitiz", "normalize"],
+      "severity": "critical"
+    }
+  ],
+  "rationale": "Removed the traversal sanitisation (`replace(/\\.\\.\\//g, '')`) and constant base-dir variable. An attacker can pass `../../etc/passwd` as `filename` to read arbitrary files outside the upload directory."
+}

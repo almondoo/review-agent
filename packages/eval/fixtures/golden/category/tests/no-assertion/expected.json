@@ -1,0 +1,13 @@
+{
+  "review_category": "tests",
+  "bug_class": "no-assertion",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "no-assertion-parse-config",
+      "must_contain_any": ["assert", "expect", "no assertion", "smoke test", "verify", "check"],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "The two `expect` assertions were removed, leaving a test that calls `parseConfig` but never checks its output. The test now only verifies that the function does not throw — it will pass even if the return value is completely wrong."
+}

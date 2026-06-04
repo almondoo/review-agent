@@ -1,0 +1,10 @@
+--- a/src/auth/token.ts
++++ b/src/auth/token.ts
+@@ -1,7 +1,7 @@
+-import { randomBytes } from 'node:crypto';
+-
+ export function generateSessionToken(): string {
+-  return randomBytes(32).toString('hex');
++  const n = Math.floor(Math.random() * 1_000_000);
++  return n.toString(16).padStart(6, '0');
+ }

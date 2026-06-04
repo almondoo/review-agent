@@ -1,0 +1,20 @@
+{
+  "review_category": "style",
+  "bug_class": "inconsistent-naming",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "inconsistent-naming-order-fields",
+      "must_contain_any": [
+        "camelCase",
+        "naming convention",
+        "snake_case",
+        "PascalCase",
+        "inconsistent",
+        "convention"
+      ],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "Fields changed from camelCase (`createdAt`, `updatedAt`, `totalAmount`, `lineItems`) to a mixture of snake_case and PascalCase. TypeScript DTO field names should consistently follow camelCase in this codebase."
+}

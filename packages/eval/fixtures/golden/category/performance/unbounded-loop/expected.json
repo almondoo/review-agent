@@ -1,0 +1,13 @@
+{
+  "review_category": "performance",
+  "bug_class": "unbounded-result-set",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "unbounded-query-export-csv",
+      "must_contain_any": ["limit", "unbounded", "pagination", "OOM", "memory", "all rows"],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Removed the `limit: 10_000` guard while keeping the unused `MAX_ROWS` constant. `findAll(filter)` without a limit can now return an unbounded result set, causing OOM on large tables and excessive query latency."
+}

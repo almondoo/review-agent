@@ -1,0 +1,13 @@
+{
+  "review_category": "tests",
+  "bug_class": "test-skipped",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "test-skipped-checkout",
+      "must_contain_any": ["skip", "skipped", "disabled", "it.skip", "xit", "todo"],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "Both checkout tests were silently disabled with `it.skip`. Skipped tests give false green — the CI suite passes but critical payment-flow coverage is gone with no obvious signal."
+}
