@@ -15,7 +15,7 @@ CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方
 | 観点 | 状態 |
 |---|---|
 | Latest wave on `main` | **post-v1.2 waves A–C** — PR [#133](https://github.com/almondoo/review-agent/pull/133) merged 2026-06-04（GitHub App dashboard onboarding + dashboard SPA + eval/feedback hardening、#123〜#131 を main へ）。直前は v1.0.1+v1.1+v1.2（PR [#94](https://github.com/almondoo/review-agent/pull/94), 2026-05-18, `Closes #83〜#93`）|
-| Latest wave on `develop` | **config-as-code & quality wave（進行中、2026-06-04〜）** — landed: #143 eval gate / #139 OSS governance / #147 BYOK doc / #146 config resolution+provenance / #148 ruleset。実装中/予定: #156→#159→#151→#145（config chain）+ #155/#157/#149（runner/platform）。直前は #132 interim IDOR interlock（`REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書）|
+| Latest wave on `develop` | **config-as-code & quality wave（[A] 全12 issue landed）+ dashboard 認証/RBAC（#161 landed, 2026-06-04）** — [A]: #143/#139/#147/#146/#148/#156/#159/#151/#145/#155/#157/#149。#161: per-user 認証 + RBAC（共有 token 置換、`REVIEW_AGENT_AUTH_MODE`、viewer/editor/admin、security-review 済み）。直前は #132 interim IDOR interlock（`REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書）|
 | post-v1.2 follow-on (#95–#110) | **全 close 済み** — recover-sync-state(#105) / fail-open OTel metrics(#106) / docs(#98/#100/#103) / test(#107/#108) / baseline(#97) / parity(#102) / CodeCommit feedback re-scrape(#110) すべて shipped・closed |
 | Active GA tracking | **#132** (per-installation IDOR hardening) — interim fail-closed interlock + GA 設計文書を develop に landed。**フル per-principal authz（AC#1/#2）は GA 据え置き**（認証モデル決定待ち）で #132 は GA tracking ticket として open 継続。#161 (dashboard RBAC) は #132 の認証モデルに依存 |
 | 次wave候補 (open, 未refined) | **#134–#160 / #162** — richer PR summary / local trial / audit log / SSO / cost analytics / quality metrics / notifications / presets / platform 拡張(GitLab/GHES) 等の大型 epic 群。多くは spec 沈黙で製品/UX 判断 (spec §22) を要する。#136/#137/#138/#140/#144/#154 は外部リソース・他issue依存でブロック |
@@ -533,6 +533,35 @@ develop に commit 済み、統合検証フル green（typecheck 13/13・lint・
 operator の Lambda entrypoint が compose する設計（既存 historyReader/evalRecorder と同モデル、
 in-repo 未配線）。
 
+### [A2] dashboard 認証 & RBAC — #161 landed (develop, 2026-06-04)
+
+共有 bearer token に代わる **per-user 認証 + RBAC** を develop に landed（本セッションで自律実装、
+maintainer 決定の "local accounts + session JWT" 方針）。後方互換（既定 `legacy` モードで既存デプロイ
+無破壊）。security-review 実施済み（Critical/High/Medium 0、Low 1 = scrypt パラメータ上限キャップを適用）。
+統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。**未 push / develop→main
+未マージ**（maintainer 判断）。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#161](https://github.com/almondoo/review-agent/issues/161) | dashboard 認証/RBAC（共有 token 置換、viewer/editor/admin） | ✅ landed (develop) |
+
+主な変更:
+- **core**: `operator_principals` / `installation_memberships` テーブル + migration `0011_dashboard_auth`、
+  scrypt パスワード hash（自己記述フォーマット + パラメータ上限）、`DASHBOARD_ROLES`/`roleSatisfies`、
+  `audit_log.actor`（canonicalPayload は actor 非 null 時のみ含め HMAC チェーン後方互換）。
+- **server**: JWT(jose HS256) + `tokenVersion` 失効、`sessionAuth`（`REVIEW_AGENT_AUTH_MODE=legacy|session|both`、
+  `REVIEW_AGENT_SESSION_SECRET` fail-closed 起動）、`installationAuthz`/`requireRole`（membership 由来、
+  cross-principal=404 / role 不足=403、#132 の 501 interlock を legacy で温存）、`/api/auth/{login,me,logout}`、
+  admin アクションに audit actor 配線。
+- **cli**: `review-agent user create|list|set-password|delete|grant|revoke`。
+- **web**: `/login` + 保護ルート + セッショントークン(localStorage) + ロール出し分け + i18n(ja/en)。
+- **docs**: [`docs/security/dashboard-auth.md`](./security/dashboard-auth.md)（auth モード / ロール / 後方互換 移行手順）。
+
+新規 env: `REVIEW_AGENT_AUTH_MODE`, `REVIEW_AGENT_SESSION_SECRET`, `REVIEW_AGENT_SESSION_TTL_SECONDS`。
+新規 migration: `0011_dashboard_auth`。
+**unblock**: #136（actor identity 基盤が入った）/ #141（dashboard auth フロー）/ #137（SSO は #161 の
+per-user 認証の上に OIDC/IdP を載せる形で着手可）。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
@@ -542,10 +571,13 @@ in-repo 未配線）。
 
 ### [C] 外部リソース / 前提ブロック
 
-#132 (GA per-principal authz — 認証モデル決定待ち) / #161 (dashboard RBAC — #132 依存) /
-#137 (SSO — #161 依存) / #136 (audit log — #161 の actor identity 前提) /
+#132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
+フル per-principal credential 方式の最終決定は GA 据え置き) /
+#137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
+#136 (audit log — #161 で actor identity 基盤が入ったため着手可、要 refine) /
 #138 (retry/DLQ/alerting — #144 依存) / #140 (cost analytics — #144/#142 依存) /
 #144 (notifications — #138/#140 のイベント源前提) / #154 (preset 配布 — npm publish 権限要)。
+（#161 は landed したため [C] から除外 → [A2] 参照）
 
 ---
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useAuth } from '../contexts/auth-context.js';
 import { LANG_STORAGE_KEY } from '../i18n/index.js';
 import { Hairline } from './hairline.js';
 
@@ -22,6 +23,7 @@ function formatTimestamp(): string {
 
 export function Header() {
   const { t, i18n } = useTranslation();
+  const { legacy, authenticated, principal, logout } = useAuth();
   const [theme, setTheme] = useState<Theme>('system');
   const [timestamp] = useState(formatTimestamp);
 
@@ -85,8 +87,51 @@ export function Header() {
         review-agent
       </div>
 
-      {/* Right: timestamp + lang toggle + theme toggle */}
+      {/* Right: user info + logout + timestamp + lang toggle + theme toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+        {/* Logged-in username (session mode only) */}
+        {authenticated && !legacy && principal && (
+          <>
+            <span
+              className="label-mono"
+              style={{ color: 'var(--graphite)' }}
+              title={t('header.loggedInAs', { username: principal.username })}
+            >
+              {principal.username}
+            </span>
+            <Hairline vertical style={{ height: '20px' }} />
+          </>
+        )}
+
+        {/* Logout button (session mode only) */}
+        {authenticated && !legacy && (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                void logout();
+              }}
+              aria-label={t('header.logout')}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.625rem',
+                fontWeight: 600,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                color: 'var(--graphite)',
+                padding: '0.25rem 0.5rem',
+                border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius)',
+                transition: 'color var(--transition-fast), border-color var(--transition-fast)',
+                cursor: 'pointer',
+                backgroundColor: 'transparent',
+              }}
+            >
+              {t('header.logoutLabel')}
+            </button>
+            <Hairline vertical style={{ height: '20px' }} />
+          </>
+        )}
         {/* Timestamp stamp */}
         <span
           role="img"

@@ -13,6 +13,11 @@ export default defineConfig({
         'src/**/*.test.ts',
         'src/db/schema/index.ts',
         'src/db/schema/roles.ts',
+        // These schema files contain only Drizzle FK thunks (()=>ref) and table-builder
+        // callbacks that v8 counts as functions but that are never invoked via getTableConfig.
+        // Structural correctness is verified in schema.test.ts via getTableConfig assertions.
+        'src/db/schema/repos.ts',
+        'src/db/schema/installation-memberships.ts',
         'src/db/schema/__tests__/**',
         'src/kms/index.ts',
       ],

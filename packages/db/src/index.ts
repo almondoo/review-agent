@@ -37,6 +37,20 @@ export {
 } from './hmac-chain.js';
 export { type MigrateOpts, runMigrations } from './migrate.js';
 export {
+  type CreatePrincipalOpts,
+  createPrincipal,
+  deletePrincipal,
+  getPrincipalByUsername,
+  listMemberships,
+  listPrincipals,
+  type MembershipRow,
+  type PrincipalLookup,
+  type PrincipalRow,
+  revokeMembership,
+  setPrincipalPassword,
+  upsertMembership,
+} from './operator-principals.js';
+export {
   type RecoverEvalEventsOpts,
   type RecoverEvalEventsResult,
   recoverReviewEvalEvents,

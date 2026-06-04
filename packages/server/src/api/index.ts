@@ -1,16 +1,31 @@
 import type { KmsClient } from '@review-agent/core';
+import { hashPassword, verifyPassword } from '@review-agent/core';
 import type { AuditAppender, DbClient } from '@review-agent/db';
 import { createAuditAppender } from '@review-agent/db';
 import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
+import { z } from 'zod';
+import { issueSessionToken } from '../auth/jwt.js';
+import { findPrincipalByUsername } from '../auth/principal-store.js';
+import type { AuthMode } from '../auth/session-auth.js';
+import { sessionAuth } from '../auth/session-auth.js';
+import { createAuthRouter } from './auth.js';
 import { createDashboardRouter } from './dashboard.js';
 import { createGithubReposRouter } from './github-repos.js';
 import { createIntegrationsRouter, type IntegrationsEnv } from './integrations.js';
 import { createLlmKeysRouter } from './llm-keys.js';
-import { bearerTokenAuth } from './middleware/auth.js';
 import { devCors } from './middleware/cors.js';
 import { createReposRouter } from './repos.js';
 import { createReviewsRouter } from './reviews.js';
+
+// Pre-computed dummy hash — paid once at module load time. Used on the
+// "username not found" code path to prevent timing discrimination.
+const DUMMY_HASH = hashPassword('dummy-password-for-timing-safety');
+
+const loginBodySchema = z.object({
+  username: z.string().min(1).max(200),
+  password: z.string().min(1).max(1024),
+});
 
 export type ApiDeps = {
   readonly db: DbClient;
@@ -23,6 +38,10 @@ export type ApiDeps = {
    * Bearer token for `/api` authentication. When unset and `requireDashboardAuth`
    * is false the namespace is open (a warning is logged). When `requireDashboardAuth`
    * is true every request receives 503 until the token is configured.
+   *
+   * In legacy / both AUTH_MODE this is the shared bearer token accepted by
+   * sessionAuth. In session AUTH_MODE this field is ignored for authentication
+   * but the presence/absence still governs the startup warning.
    */
   readonly dashboardToken?: string;
   /**
@@ -67,6 +86,28 @@ export type ApiDeps = {
    * See docs/security/multi-tenant-authz.md and issue #132.
    */
   readonly multiTenant?: boolean;
+  /**
+   * Authentication mode (issue #161 phase 2).
+   *
+   * 'legacy'  — only REVIEW_AGENT_DASHBOARD_TOKEN (shared bearer) is accepted.
+   *             Per-user login is disabled (POST /api/auth/login returns 404).
+   * 'session' — only HS256 JWTs issued by POST /api/auth/login are accepted.
+   *             REVIEW_AGENT_SESSION_SECRET must be set (≥32 chars).
+   * 'both'    — JWT is tried first; shared token is tried as fallback.
+   *
+   * Default: 'legacy' (no change to existing deployments).
+   */
+  readonly authMode?: AuthMode;
+  /**
+   * HS256 signing secret for JWT session tokens (REVIEW_AGENT_SESSION_SECRET).
+   * Required when authMode is 'session' or 'both'. Validated at startup in createApp.
+   */
+  readonly sessionSecret?: string;
+  /**
+   * JWT absolute TTL in seconds (REVIEW_AGENT_SESSION_TTL_SECONDS).
+   * Default: 43200 (12h).
+   */
+  readonly sessionTtlSeconds?: number;
 };
 
 /**
@@ -92,24 +133,108 @@ export function createApi(deps: ApiDeps): Hono {
   // Resolve multiTenant flag: caller wins; fall back to env.
   const multiTenant = deps.multiTenant ?? parseMultiTenantEnv();
 
+  // Resolve auth mode and session config.
+  const authMode: AuthMode = deps.authMode ?? 'legacy';
+  const sessionTtlSeconds = deps.sessionTtlSeconds ?? 43200;
+
   // Dev-only CORS — no-op in production
   api.use('/*', devCors(deps.env));
 
-  // One-shot startup warning when auth is disabled.
+  // One-shot startup warning when legacy auth is disabled / misconfigured.
   const tokenConfigured = deps.dashboardToken !== undefined && deps.dashboardToken.length > 0;
-  if (!tokenConfigured && !(deps.requireDashboardAuth ?? false)) {
+  if (authMode === 'legacy' && !tokenConfigured && !(deps.requireDashboardAuth ?? false)) {
     process.stderr.write(
       '[review-agent] WARN: /api authentication disabled (REVIEW_AGENT_DASHBOARD_TOKEN not set). Block /api/* at your reverse proxy if exposed publicly.\n',
     );
   }
 
+  // -------------------------------------------------------------------------
+  // POST /auth/login — OUTSIDE sessionAuth (unauthenticated endpoint).
+  //
+  // Registered directly on the api app so it is reachable without auth.
+  // All other /auth/* and all other /api/* routes are protected by sessionAuth
+  // applied below via api.use('*').
+  // -------------------------------------------------------------------------
+  api.post('/auth/login', async (c) => {
+    if (authMode === 'legacy') {
+      return c.json({ error: 'not_found' }, 404);
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid JSON body' }, 400);
+    }
+
+    const parsed = loginBodySchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
+    }
+
+    const { username, password } = parsed.data;
+    const principal = await findPrincipalByUsername(deps.db, username);
+
+    if (principal === null) {
+      // Username not found. Run verifyPassword against the dummy hash to
+      // prevent timing discrimination between "unknown user" and "wrong password".
+      verifyPassword(password, DUMMY_HASH);
+      return c.json({ error: 'invalid credentials' }, 401);
+    }
+
+    const valid = verifyPassword(password, principal.passwordHash);
+    if (!valid) {
+      return c.json({ error: 'invalid credentials' }, 401);
+    }
+
+    if (deps.sessionSecret === undefined) {
+      // Should not happen if fail-closed startup validation ran, but guard anyway.
+      return c.json({ error: 'session_secret_not_configured' }, 503);
+    }
+
+    const token = await issueSessionToken(
+      {
+        principalId: principal.id,
+        username: principal.username,
+        tokenVersion: principal.tokenVersion,
+      },
+      deps.sessionSecret,
+      sessionTtlSeconds,
+    );
+
+    return c.json({ token, expiresIn: sessionTtlSeconds }, 200);
+  });
+
+  // -------------------------------------------------------------------------
+  // Apply sessionAuth to ALL subsequent routes.
+  // Because api.post('/auth/login', ...) is registered BEFORE this use('*'),
+  // Hono processes the login handler first and returns early — the middleware
+  // never runs for POST /auth/login.
+  //
+  // IMPORTANT: In Hono, `use('*')` middleware runs for ALL matching routes
+  // including those registered via route(). However, route handlers registered
+  // BEFORE a use() call are processed first. Since login is registered above,
+  // it will match and return before sessionAuth is invoked.
+  //
+  // Note: Hono actually processes middleware and routes in the ORDER they are
+  // registered. Since login handler is registered above via api.post(), and
+  // sessionAuth is registered below via api.use(), all routes registered after
+  // this point will have sessionAuth run first.
+  // -------------------------------------------------------------------------
   api.use(
     '*',
-    bearerTokenAuth({
-      token: deps.dashboardToken,
+    sessionAuth({
+      authMode,
+      sharedToken: deps.dashboardToken,
       requireAuth: deps.requireDashboardAuth ?? false,
+      sessionSecret: deps.sessionSecret,
+      db: deps.db,
     }),
   );
+
+  // Register the remaining /auth routes (logout, me) — these ARE protected
+  // by sessionAuth since they are registered after the use('*') above.
+  api.route('/auth', createAuthRouter({ db: deps.db }));
 
   api.route(
     '/dashboard',
@@ -176,7 +301,7 @@ export function createApi(deps: ApiDeps): Hono {
   // The sub-router mounts:
   //   GET  /github/installations/:installationId/repos
   //   POST /repos/bulk
-  // Both are covered by the bearer-token middleware applied above.
+  // Both are covered by the sessionAuth middleware applied above.
   api.route(
     '/',
     createGithubReposRouter({

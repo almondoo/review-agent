@@ -9,6 +9,7 @@ import { StaggerContainer, StaggerItem } from '../components/page-transition.js'
 import { SectionHeading } from '../components/section-heading.js';
 import { ToastContainer, useToast } from '../components/toast.js';
 import { UnsavedChangesDialog } from '../components/unsaved-changes-dialog.js';
+import { useAuth } from '../contexts/auth-context.js';
 import { useUnsavedChangesPrompt } from '../hooks/use-unsaved-changes-prompt.js';
 
 // Map from provider value to i18n label key.
@@ -71,6 +72,9 @@ const actionBtnStyle: React.CSSProperties = {
 export function ByokKeysPage() {
   const { t } = useTranslation();
   const { messages, toast, dismiss } = useToast();
+  const { maxRole, legacy } = useAuth();
+  // BYOK key management is admin-only.
+  const canManageKeys = legacy || maxRole === 'admin';
 
   // Installation ID input state
   const [installationIdInput, setInstallationIdInput] = useState('');
@@ -393,34 +397,38 @@ export function ByokKeysPage() {
                         : t('pages.byokKeys.statusNotConfigured')}
                     </span>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button
-                        type="button"
-                        disabled={!keyStatus.configured}
-                        onClick={() => handleRotateClick(keyStatus.provider)}
-                        style={{
-                          ...actionBtnStyle,
-                          opacity: keyStatus.configured ? 1 : 0.35,
-                          cursor: keyStatus.configured ? 'pointer' : 'not-allowed',
-                        }}
-                        aria-label={`${t('pages.byokKeys.actionRotate')} ${t(PROVIDER_LABEL_KEYS[keyStatus.provider])}`}
-                      >
-                        {t('pages.byokKeys.actionRotate')}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!keyStatus.configured}
-                        onClick={() => handleRemoveClick(keyStatus.provider)}
-                        style={{
-                          ...actionBtnStyle,
-                          color: keyStatus.configured ? 'var(--rust)' : 'var(--graphite)',
-                          borderColor: keyStatus.configured ? 'var(--rust)' : 'var(--hairline)',
-                          opacity: keyStatus.configured ? 1 : 0.35,
-                          cursor: keyStatus.configured ? 'pointer' : 'not-allowed',
-                        }}
-                        aria-label={`${t('pages.byokKeys.actionRemove')} ${t(PROVIDER_LABEL_KEYS[keyStatus.provider])}`}
-                      >
-                        {t('pages.byokKeys.actionRemove')}
-                      </button>
+                      {canManageKeys && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={!keyStatus.configured}
+                            onClick={() => handleRotateClick(keyStatus.provider)}
+                            style={{
+                              ...actionBtnStyle,
+                              opacity: keyStatus.configured ? 1 : 0.35,
+                              cursor: keyStatus.configured ? 'pointer' : 'not-allowed',
+                            }}
+                            aria-label={`${t('pages.byokKeys.actionRotate')} ${t(PROVIDER_LABEL_KEYS[keyStatus.provider])}`}
+                          >
+                            {t('pages.byokKeys.actionRotate')}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!keyStatus.configured}
+                            onClick={() => handleRemoveClick(keyStatus.provider)}
+                            style={{
+                              ...actionBtnStyle,
+                              color: keyStatus.configured ? 'var(--rust)' : 'var(--graphite)',
+                              borderColor: keyStatus.configured ? 'var(--rust)' : 'var(--hairline)',
+                              opacity: keyStatus.configured ? 1 : 0.35,
+                              cursor: keyStatus.configured ? 'pointer' : 'not-allowed',
+                            }}
+                            aria-label={`${t('pages.byokKeys.actionRemove')} ${t(PROVIDER_LABEL_KEYS[keyStatus.provider])}`}
+                          >
+                            {t('pages.byokKeys.actionRemove')}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                   {idx < data.keys.length - 1 && <Hairline />}
@@ -430,8 +438,8 @@ export function ByokKeysPage() {
           </StaggerItem>
         )}
 
-        {/* Add / replace form */}
-        {resolvedInstallationId !== null && (
+        {/* Add / replace form — admin only */}
+        {resolvedInstallationId !== null && canManageKeys && (
           <StaggerItem>
             <div style={{ maxWidth: '480px', marginTop: '2rem' }}>
               <h2

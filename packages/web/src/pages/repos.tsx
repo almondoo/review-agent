@@ -12,6 +12,7 @@ import { PlatformBadge } from '../components/platform-badge.js';
 import { SectionHeading } from '../components/section-heading.js';
 import { StatusBadge } from '../components/status-badge.js';
 import { ToastContainer, useToast } from '../components/toast.js';
+import { useAuth } from '../contexts/auth-context.js';
 import { formatRelativeDate } from '../lib/format.js';
 
 export function ReposPage() {
@@ -21,6 +22,10 @@ export function ReposPage() {
   const deleteRepo = useDeleteRepo();
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const { toast, messages, dismiss } = useToast();
+  const { maxRole, legacy } = useAuth();
+  // Use maxRole as the global gate; legacy mode grants all permissions.
+  const canEdit = legacy || maxRole === 'editor' || maxRole === 'admin';
+  const canAdmin = legacy || maxRole === 'admin';
 
   const columns: Column<RepoSummary>[] = [
     {
@@ -78,9 +83,10 @@ export function ReposPage() {
       render: (row) => (
         <button
           type="button"
+          disabled={!canEdit}
           onClick={(e) => {
             e.stopPropagation();
-            patchRepo.mutate({ id: row.id, body: { enabled: !row.enabled } });
+            if (canEdit) patchRepo.mutate({ id: row.id, body: { enabled: !row.enabled } });
           }}
           aria-label={
             row.enabled
@@ -97,6 +103,8 @@ export function ReposPage() {
             border: `1px solid ${row.enabled ? 'var(--moss)' : 'var(--hairline)'}`,
             borderRadius: 'var(--radius)',
             transition: 'all var(--transition-fast)',
+            opacity: canEdit ? 1 : 0.35,
+            cursor: canEdit ? 'pointer' : 'not-allowed',
           }}
         >
           {row.enabled ? t('common.on') : t('common.off')}
@@ -108,20 +116,21 @@ export function ReposPage() {
       header: '',
       width: '60px',
       align: 'right',
-      render: (row) => (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setPendingDeleteId(row.id);
-          }}
-          className="label-mono"
-          style={{ color: 'var(--graphite)', opacity: 0.4 }}
-          aria-label={t('pages.repos.deleteLabel', { name: row.name })}
-        >
-          {t('common.del')}
-        </button>
-      ),
+      render: (row) =>
+        canAdmin ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPendingDeleteId(row.id);
+            }}
+            className="label-mono"
+            style={{ color: 'var(--graphite)', opacity: 0.4 }}
+            aria-label={t('pages.repos.deleteLabel', { name: row.name })}
+          >
+            {t('common.del')}
+          </button>
+        ) : null,
     },
   ];
 
@@ -143,24 +152,26 @@ export function ReposPage() {
               title={t('pages.repos.title')}
               {...(repos ? { subtitle: t('pages.repos.subtitle', { count: repos.length }) } : {})}
             />
-            <Link
-              to="/repos/new"
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '0.6875rem',
-                fontWeight: 600,
-                letterSpacing: '0.08em',
-                color: 'var(--rust)',
-                border: '1px solid var(--rust)',
-                padding: '0.375rem 0.75rem',
-                borderRadius: 'var(--radius)',
-                whiteSpace: 'nowrap',
-                marginTop: '0.25rem',
-                display: 'inline-block',
-              }}
-            >
-              {t('common.addRepo')}
-            </Link>
+            {canAdmin && (
+              <Link
+                to="/repos/new"
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.6875rem',
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  color: 'var(--rust)',
+                  border: '1px solid var(--rust)',
+                  padding: '0.375rem 0.75rem',
+                  borderRadius: 'var(--radius)',
+                  whiteSpace: 'nowrap',
+                  marginTop: '0.25rem',
+                  display: 'inline-block',
+                }}
+              >
+                {t('common.addRepo')}
+              </Link>
+            )}
           </div>
         </StaggerItem>
 

@@ -1,3 +1,4 @@
+import { dashboardRoleSchema } from '@review-agent/core';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { auditExportCommand } from './commands/audit-export.js';
 import { auditPruneCommand } from './commands/audit-prune.js';
@@ -15,6 +16,14 @@ import { printSchemaCommand } from './commands/schema.js';
 import { setupWorkspaceCommand } from './commands/setup-workspace.js';
 import { suppressionListCommand } from './commands/suppression-list.js';
 import { suppressionRemoveCommand } from './commands/suppression-remove.js';
+import {
+  userCreateCommand,
+  userDeleteCommand,
+  userGrantCommand,
+  userListCommand,
+  userRevokeCommand,
+  userSetPasswordCommand,
+} from './commands/user.js';
 import { validateConfigCommand } from './commands/validate.js';
 import { defaultIo, type ProgramIo } from './io.js';
 
@@ -441,6 +450,118 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'config_error' ? 1 : 0);
     });
 
+  const user = program
+    .command('user')
+    .description('Dashboard user (operator principal) management (spec §18.x).');
+
+  user
+    .command('create')
+    .description('Create a new operator principal, optionally granting a membership.')
+    .requiredOption('--username <u>', 'login username')
+    .addOption(
+      new Option('--role <role>', 'membership role (default: viewer)').choices([
+        'viewer',
+        'editor',
+        'admin',
+      ]),
+    )
+    .option('--installation <id>', 'GitHub App installation ID to grant membership on')
+    .option('--password <p>', 'plain-text password (omit to prompt interactively)')
+    .option('--generate', 'generate a random password and print it once', false)
+    .action(async (opts: UserCreateCliOpts) => {
+      const parsed = opts.role !== undefined ? dashboardRoleSchema.safeParse(opts.role) : null;
+      const result = await userCreateCommand(io, {
+        username: opts.username,
+        ...(parsed?.success ? { role: parsed.data } : {}),
+        ...(opts.installation !== undefined ? { installation: opts.installation } : {}),
+        ...(opts.password !== undefined ? { password: opts.password } : {}),
+        generate: !!opts.generate,
+        env,
+      });
+      // exit-0 arm fires on 'ok'. The 'already_exists' / 'validation_error'
+      // / 'config_error' paths are tested directly on userCreateCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  user
+    .command('list')
+    .description('List all operator principals and their memberships.')
+    .action(async () => {
+      const result = await userListCommand(io, { env });
+      // exit-0 arm fires on 'ok'. Tested directly on userListCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  user
+    .command('set-password')
+    .description("Update a principal's password (invalidates existing sessions).")
+    .requiredOption('--username <u>', 'login username')
+    .option('--password <p>', 'new plain-text password (omit to prompt interactively)')
+    .option('--generate', 'generate a random password and print it once', false)
+    .action(async (opts: UserSetPasswordCliOpts) => {
+      const result = await userSetPasswordCommand(io, {
+        username: opts.username,
+        ...(opts.password !== undefined ? { password: opts.password } : {}),
+        generate: !!opts.generate,
+        env,
+      });
+      // exit-0 arm fires on 'ok'. Tested directly on userSetPasswordCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  user
+    .command('delete')
+    .description('Delete an operator principal (also removes memberships via FK cascade).')
+    .requiredOption('--username <u>', 'login username')
+    .action(async (opts: UserDeleteCliOpts) => {
+      const result = await userDeleteCommand(io, { username: opts.username, env });
+      // exit-0 arm fires on 'ok'. Tested directly on userDeleteCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  user
+    .command('grant')
+    .description('Grant (or update) a role for a principal on an installation.')
+    .requiredOption('--username <u>', 'login username')
+    .requiredOption('--installation <id>', 'GitHub App installation ID')
+    .addOption(
+      new Option('--role <role>', 'role to grant')
+        .choices(['viewer', 'editor', 'admin'])
+        .makeOptionMandatory(),
+    )
+    .action(async (opts: UserGrantCliOpts) => {
+      const parsedRole = dashboardRoleSchema.safeParse(opts.role);
+      const result = await userGrantCommand(io, {
+        username: opts.username,
+        installation: opts.installation,
+        role: parsedRole.success ? parsedRole.data : ('viewer' as const),
+        env,
+      });
+      // exit-0 arm fires on 'ok'. Tested directly on userGrantCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  user
+    .command('revoke')
+    .description("Revoke a principal's membership on an installation.")
+    .requiredOption('--username <u>', 'login username')
+    .requiredOption('--installation <id>', 'GitHub App installation ID')
+    .action(async (opts: UserRevokeCliOpts) => {
+      const result = await userRevokeCommand(io, {
+        username: opts.username,
+        installation: opts.installation,
+        env,
+      });
+      // exit-0 arm fires on 'ok'. Tested directly on userRevokeCommand.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
   program.exitOverride();
   return program;
 }
@@ -531,6 +652,35 @@ type SuppressionRemoveCliOpts = {
   installationId: bigint;
   repo: string;
   ruleId: bigint;
+};
+
+type UserCreateCliOpts = {
+  username: string;
+  role?: string;
+  installation?: string;
+  password?: string;
+  generate?: boolean;
+};
+
+type UserSetPasswordCliOpts = {
+  username: string;
+  password?: string;
+  generate?: boolean;
+};
+
+type UserDeleteCliOpts = {
+  username: string;
+};
+
+type UserGrantCliOpts = {
+  username: string;
+  installation: string;
+  role: string;
+};
+
+type UserRevokeCliOpts = {
+  username: string;
+  installation: string;
 };
 
 export type { ProgramIo } from './io.js';

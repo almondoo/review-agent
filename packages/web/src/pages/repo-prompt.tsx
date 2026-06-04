@@ -6,6 +6,7 @@ import { Hairline } from '../components/hairline.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { ToastContainer, useToast } from '../components/toast.js';
 import { UnsavedChangesDialog } from '../components/unsaved-changes-dialog.js';
+import { useAuth } from '../contexts/auth-context.js';
 import { useUnsavedChangesPrompt } from '../hooks/use-unsaved-changes-prompt.js';
 import { formatDateUtc, formatNumber } from '../lib/format.js';
 
@@ -16,6 +17,9 @@ export function RepoPromptPage() {
   const { id } = useParams<{ id: string }>();
   const safeId = id ?? '';
   const { toast, messages, dismiss } = useToast();
+  const { maxRole, legacy } = useAuth();
+  // Prompt editing requires editor or admin role.
+  const canEdit = legacy || maxRole === 'editor' || maxRole === 'admin';
 
   const { data: repo } = useRepoDetail(safeId);
   const { data: promptData, isLoading } = useRepoPrompt(safeId);
@@ -138,6 +142,8 @@ export function RepoPromptPage() {
             <textarea
               value={draft}
               onChange={handleChange}
+              disabled={!canEdit}
+              readOnly={!canEdit}
               placeholder={t('pages.repoPrompt.placeholder')}
               spellCheck={false}
               aria-label={t('pages.repoPrompt.editorLabel')}
@@ -150,12 +156,14 @@ export function RepoPromptPage() {
                 lineHeight: 1.7,
                 tabSize: 2,
                 color: 'var(--fg)',
-                backgroundColor: 'var(--bg-raised)',
+                backgroundColor: canEdit ? 'var(--bg-raised)' : 'var(--bg)',
                 border: `1px solid ${isDirty ? 'var(--rust)' : 'var(--hairline)'}`,
                 borderRadius: 'var(--radius)',
                 padding: '1rem',
-                resize: 'vertical',
+                resize: canEdit ? 'vertical' : 'none',
                 outline: 'none',
+                cursor: canEdit ? undefined : 'not-allowed',
+                opacity: canEdit ? 1 : 0.7,
                 transition: 'border-color var(--transition-fast)',
               }}
             />
@@ -182,7 +190,7 @@ export function RepoPromptPage() {
         <button
           type="button"
           onClick={handleSave}
-          disabled={putPrompt.isPending || !isDirty}
+          disabled={putPrompt.isPending || !isDirty || !canEdit}
           style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '0.6875rem',
@@ -190,11 +198,12 @@ export function RepoPromptPage() {
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
             color: 'var(--paper)',
-            backgroundColor: putPrompt.isPending || !isDirty ? 'var(--graphite)' : 'var(--rust)',
+            backgroundColor:
+              putPrompt.isPending || !isDirty || !canEdit ? 'var(--graphite)' : 'var(--rust)',
             border: 'none',
             padding: '0.5rem 1.25rem',
             borderRadius: 'var(--radius)',
-            cursor: putPrompt.isPending || !isDirty ? 'not-allowed' : 'pointer',
+            cursor: putPrompt.isPending || !isDirty || !canEdit ? 'not-allowed' : 'pointer',
             transition: 'background-color var(--transition-fast)',
           }}
         >
@@ -204,15 +213,15 @@ export function RepoPromptPage() {
         <button
           type="button"
           onClick={handleDiscard}
-          disabled={!isDirty}
+          disabled={!isDirty || !canEdit}
           style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '0.6875rem',
             letterSpacing: '0.08em',
             textTransform: 'uppercase',
             color: 'var(--graphite)',
-            opacity: isDirty ? 1 : 0.4,
-            cursor: isDirty ? 'pointer' : 'not-allowed',
+            opacity: isDirty && canEdit ? 1 : 0.4,
+            cursor: isDirty && canEdit ? 'pointer' : 'not-allowed',
             padding: '0.5rem 0',
           }}
         >

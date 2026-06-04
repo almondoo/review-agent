@@ -1,5 +1,43 @@
 export type Platform = 'github' | 'codecommit';
 
+// --- Auth types ---
+
+export type Role = 'viewer' | 'editor' | 'admin';
+
+export type Membership = {
+  installationId: string;
+  role: Role;
+};
+
+export type AuthPrincipal = {
+  id: string;
+  username: string;
+};
+
+export type AuthMeResponseSession = {
+  authenticated: true;
+  legacy: false;
+  principal: AuthPrincipal;
+  memberships: Membership[];
+};
+
+export type AuthMeResponseLegacy = {
+  authenticated: true;
+  legacy: true;
+};
+
+export type AuthMeResponse = AuthMeResponseSession | AuthMeResponseLegacy;
+
+export type LoginBody = {
+  username: string;
+  password: string;
+};
+
+export type LoginResponse = {
+  token: string;
+  expiresIn: number;
+};
+
 export type Outcome = 'approved' | 'changes_requested' | 'commented' | 'failed';
 
 export type RepoSummary = {

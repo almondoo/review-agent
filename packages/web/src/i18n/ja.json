@@ -58,9 +58,24 @@
     "light": "[ライト]",
     "langJa": "日本語",
     "langEn": "英語",
-    "switchLang": "言語を切り替え"
+    "switchLang": "言語を切り替え",
+    "logout": "ログアウト",
+    "logoutLabel": "[ログアウト]",
+    "loggedInAs": "{{username}} でログイン中"
   },
   "pages": {
+    "login": {
+      "title": "ログイン",
+      "subtitle": "review-agent ダッシュボード",
+      "labelUsername": "ユーザー名",
+      "placeholderUsername": "ユーザー名を入力",
+      "labelPassword": "パスワード",
+      "placeholderPassword": "パスワードを入力",
+      "submit": "[ログイン]",
+      "submitting": "[ログイン中...]",
+      "errorInvalidCredentials": "ユーザー名またはパスワードが正しくありません。",
+      "errorLegacyMode": "このデプロイは per-user ログインを無効化しています。"
+    },
     "overview": {
       "title": "概要",
       "subtitle": "ダッシュボード — 現在の状態",
@@ -355,6 +370,12 @@
       "confirm": "[削除]",
       "cancel": "[キャンセル]"
     }
+  },
+  "auth": {
+    "roleViewer": "閲覧者",
+    "roleEditor": "編集者",
+    "roleAdmin": "管理者",
+    "noPermission": "[権限なし]"
   },
   "platforms": {
     "github": "[GH] GitHub",

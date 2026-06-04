@@ -257,6 +257,53 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
   // BYOK KMS key ID: caller may supply via deps.api.kmsKeyId, otherwise fall back to env.
   const kmsKeyId = deps.api?.kmsKeyId ?? process.env.REVIEW_AGENT_BYOK_KMS_KEY_ID;
 
+  // -------------------------------------------------------------------------
+  // AUTH_MODE / SESSION_SECRET / SESSION_TTL_SECONDS resolution (issue #161).
+  //
+  // Caller (deps.api.*) wins; env fallback applies when absent.
+  //
+  // Fail-closed: when AUTH_MODE is 'session' or 'both', SESSION_SECRET is
+  // required and must be at least 32 characters. Startup throws with a clear
+  // message if this is violated so the operator cannot accidentally ship an
+  // insecure deployment.
+  // -------------------------------------------------------------------------
+  const resolvedAuthMode = (() => {
+    const raw = deps.api?.authMode ?? process.env.REVIEW_AGENT_AUTH_MODE;
+    if (raw === undefined) return 'legacy' as const;
+    if (raw === 'legacy' || raw === 'session' || raw === 'both') return raw;
+    throw new Error(
+      `[review-agent] Invalid REVIEW_AGENT_AUTH_MODE value: "${raw}". ` +
+        'Allowed values: legacy | session | both',
+    );
+  })();
+
+  const resolvedSessionSecret = deps.api?.sessionSecret ?? process.env.REVIEW_AGENT_SESSION_SECRET;
+
+  if (resolvedAuthMode === 'session' || resolvedAuthMode === 'both') {
+    if (resolvedSessionSecret === undefined || resolvedSessionSecret.length < 32) {
+      throw new Error(
+        '[review-agent] REVIEW_AGENT_SESSION_SECRET must be set and at least 32 characters ' +
+          `when REVIEW_AGENT_AUTH_MODE is "${resolvedAuthMode}". ` +
+          'Set a strong random secret (e.g. openssl rand -hex 32).',
+      );
+    }
+  }
+
+  const resolvedSessionTtlSeconds = (() => {
+    const raw =
+      deps.api?.sessionTtlSeconds !== undefined
+        ? String(deps.api.sessionTtlSeconds)
+        : process.env.REVIEW_AGENT_SESSION_TTL_SECONDS;
+    if (raw === undefined) return 43200; // 12h default
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(
+        `[review-agent] REVIEW_AGENT_SESSION_TTL_SECONDS must be a positive integer (got "${raw}").`,
+      );
+    }
+    return n;
+  })();
+
   // GitHub App onboarding — mounted BEFORE /api and OUTSIDE the bearer-token guard.
   // spec §8.2.2: /github/* uses CSRF state cookie as the sole auth mechanism.
   const githubAppSlug = deps.githubAppSlug ?? process.env.GITHUB_APP_SLUG;
@@ -294,6 +341,10 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
       ...(deps.auditAppender !== undefined ? { auditAppender: deps.auditAppender } : {}),
       ...(kmsKeyId !== undefined && kmsKeyId.length > 0 ? { kmsKeyId } : {}),
+      // Auth mode and session config (issue #161).
+      authMode: resolvedAuthMode,
+      ...(resolvedSessionSecret !== undefined ? { sessionSecret: resolvedSessionSecret } : {}),
+      sessionTtlSeconds: resolvedSessionTtlSeconds,
     }),
   );
 

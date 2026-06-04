@@ -1,7 +1,37 @@
+/**
+ * /api/repos — repository CRUD, prompt management, review history.
+ *
+ * Authorization (issue #161 §F, corrected):
+ *
+ * Session mode (principal present):
+ *   GET list / single / prompt / reviews / metrics → viewer
+ *     - List filtered to repos whose installation_id is in caller's memberships
+ *       OR installation_id IS NULL (manually registered repos).
+ *     - Single: if repo.installationId is non-null and caller has no membership
+ *       for that installation → 404 (enumeration resistance).
+ *   POST (create)             → admin
+ *   PATCH (enable/disable)    → admin
+ *   DELETE (soft delete)      → admin
+ *   PUT /:id/prompt           → editor
+ *
+ *   Role resolution per operation:
+ *     - repo.installationId non-null  → getMembership for that installation.
+ *       No membership → 404. Role insufficient → 403.
+ *     - repo.installationId null      → derive maxRole from
+ *       getMembershipsByPrincipal. No memberships at all → 403 for mutations,
+ *       200 (visible) for GET. maxRole < required → 403.
+ *
+ * Legacy mode (no principal):
+ *   ALL routes pass through unchanged — no filtering, no role check.
+ *   This is the single-operator trust model and must remain 100% unbroken.
+ */
+import { type DashboardRole, roleSatisfies } from '@review-agent/core';
 import { repos, reviewEvalEvent } from '@review-agent/core/db';
 import type { DbClient } from '@review-agent/db';
 import { and, avg, count, desc, eq, gte, inArray, isNull, lt, or, sum } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { getMembershipsByPrincipal, type MembershipEntry } from '../auth/principal-store.js';
+import type { AuthEnv } from '../auth/types.js';
 import { decodeCursor, encodeCursor } from './cursor.js';
 import type {
   PromptResponse,
@@ -32,22 +62,102 @@ function isPromptPresent(v: string | null | undefined): boolean {
   return v !== null && v !== undefined && v.trim().length > 0;
 }
 
+// ---------------------------------------------------------------------------
+// Membership helpers (used only in session mode; never called in legacy path)
+// ---------------------------------------------------------------------------
+
+/** ROLE_RANK mirrors dashboard-roles.ts — duplicated here to stay zero-import from core logic. */
+const ROLE_RANK: Record<DashboardRole, number> = { viewer: 0, editor: 1, admin: 2 };
+
+/** Derive the highest role across all memberships. Returns null when there are none. */
+function maxRole(memberships: ReadonlyArray<MembershipEntry>): DashboardRole | null {
+  let best: DashboardRole | null = null;
+  for (const m of memberships) {
+    if (best === null || ROLE_RANK[m.role] > ROLE_RANK[best]) {
+      best = m.role;
+    }
+  }
+  return best;
+}
+
+/** Build a Set of installationId strings the caller is a member of. */
+function memberInstallationSet(memberships: ReadonlyArray<MembershipEntry>): Set<string> {
+  return new Set(memberships.map((m) => m.installationId));
+}
+
+/**
+ * Resolve authorization for a per-repo operation given the repo's installationId.
+ *
+ * Returns:
+ *   { ok: true }              — caller is authorized
+ *   { ok: false, status: 404 } — no membership for the installation (enumeration resistance)
+ *   { ok: false, status: 403 } — membership exists but role is insufficient
+ *
+ * repoInstallationId: the repo's installation_id (bigint or null).
+ * memberships: all memberships for the caller.
+ * required: minimum required DashboardRole.
+ */
+function checkRepoAccess(
+  repoInstallationId: bigint | null,
+  memberships: ReadonlyArray<MembershipEntry>,
+  required: DashboardRole,
+): { ok: true } | { ok: false; status: 403 | 404 } {
+  if (repoInstallationId !== null) {
+    // Repo belongs to a specific installation — find the caller's membership.
+    const idStr = String(repoInstallationId);
+    const m = memberships.find((x) => x.installationId === idStr);
+    if (m === undefined) {
+      return { ok: false, status: 404 }; // no membership = caller cannot see this repo
+    }
+    if (!roleSatisfies(m.role, required)) {
+      return { ok: false, status: 403 };
+    }
+    return { ok: true };
+  }
+
+  // Repo has no installation (manually registered).
+  // Use the caller's highest role across all memberships.
+  const mx = maxRole(memberships);
+  if (mx === null) {
+    // No memberships at all → cannot perform mutations; GETs are allowed (visible).
+    return required === 'viewer' ? { ok: true } : { ok: false, status: 403 };
+  }
+  if (!roleSatisfies(mx, required)) {
+    return { ok: false, status: 403 };
+  }
+  return { ok: true };
+}
+
 export function createReposRouter(deps: ReposDeps): Hono {
-  const app = new Hono();
+  const app = new Hono<AuthEnv>();
   const generateId = deps.generateId ?? defaultId;
 
-  // GET /repos — list active repos with last-review metadata
+  // ---------------------------------------------------------------------------
+  // GET /repos — list active repos
+  // ---------------------------------------------------------------------------
   app.get('/', async (c) => {
-    const activeRepos = await deps.db
+    const principal = c.get('principal');
+
+    const allActive = await deps.db
       .select()
       .from(repos)
       .where(isNull(repos.deletedAt))
       .orderBy(repos.name);
 
-    // Fetch the most-recent review event for every repo in a single query,
-    // then pick the latest per repo in-memory. This reduces the previous
-    // N+1 (one query per repo) to exactly 2 queries regardless of repo count.
-    const repoNames = activeRepos.map((r) => r.name);
+    let filteredRepos = allActive;
+
+    if (principal !== undefined) {
+      // Session mode: filter to repos the caller can see.
+      // Visible = installation_id IS NULL  OR  installation_id ∈ caller's memberships.
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const memberSet = memberInstallationSet(memberships);
+      filteredRepos = allActive.filter(
+        (r) => r.installationId === null || memberSet.has(String(r.installationId)),
+      );
+    }
+    // Legacy (principal === undefined): return all repos unchanged.
+
+    const repoNames = filteredRepos.map((r) => r.name);
     const recentEvents =
       repoNames.length > 0
         ? await deps.db
@@ -61,8 +171,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
             .orderBy(desc(reviewEvalEvent.createdAt))
         : [];
 
-    // Index the latest event per repo name (first occurrence is the latest
-    // because of the DESC ordering applied above).
     const latestByRepo = new Map<string, { createdAt: Date; abortReason: string | null }>();
     for (const ev of recentEvents) {
       if (!latestByRepo.has(ev.repo)) {
@@ -70,7 +178,7 @@ export function createReposRouter(deps: ReposDeps): Hono {
       }
     }
 
-    const summaries: RepoSummary[] = activeRepos.map((r) => {
+    const summaries: RepoSummary[] = filteredRepos.map((r) => {
       const last = latestByRepo.get(r.name);
       return {
         id: r.id,
@@ -85,9 +193,13 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(summaries, 200);
   });
 
+  // ---------------------------------------------------------------------------
   // GET /repos/:id — single repo detail
+  // ---------------------------------------------------------------------------
   app.get('/:id', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
+
     const rows = await deps.db
       .select()
       .from(repos)
@@ -99,7 +211,14 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
-    // Fetch last review event
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(row.installationId ?? null, memberships, 'viewer');
+      if (!check.ok) {
+        return c.json({ error: 'not_found' }, 404); // always 404 for GETs (enumeration resistance)
+      }
+    }
+
     const lastEvents = await deps.db
       .select({
         createdAt: reviewEvalEvent.createdAt,
@@ -125,8 +244,12 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(detail, 200);
   });
 
-  // POST /repos — create a new repo entry
+  // ---------------------------------------------------------------------------
+  // POST /repos — create a new repo entry (admin)
+  // ---------------------------------------------------------------------------
   app.post('/', async (c) => {
+    const principal = c.get('principal');
+
     let body: unknown;
     try {
       body = await c.req.json();
@@ -137,6 +260,17 @@ export function createReposRouter(deps: ReposDeps): Hono {
     const parsed = createRepoBodySchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
+    }
+
+    if (principal !== undefined) {
+      // Authorise against the caller's memberships. POST /repos doesn't take
+      // an installationId in the body (installationId is set later via bulk-register
+      // or left null for manually-created repos). Treat as null-installation repo.
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(null, memberships, 'admin');
+      if (!check.ok) {
+        return c.json({ error: check.status === 404 ? 'not_found' : 'forbidden' }, check.status);
+      }
     }
 
     const { platform, name } = parsed.data;
@@ -158,9 +292,12 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(created, 201);
   });
 
-  // PATCH /repos/:id — update enabled flag
+  // ---------------------------------------------------------------------------
+  // PATCH /repos/:id — update enabled flag (admin)
+  // ---------------------------------------------------------------------------
   app.patch('/:id', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
 
     let body: unknown;
     try {
@@ -174,7 +311,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
     }
 
-    // Nothing to update — still return the current row (idempotent)
     const existing = await deps.db
       .select()
       .from(repos)
@@ -186,6 +322,14 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(row.installationId ?? null, memberships, 'admin');
+      if (!check.ok) {
+        return c.json({ error: check.status === 404 ? 'not_found' : 'forbidden' }, check.status);
+      }
+    }
+
     const { enabled } = parsed.data;
     const now = (deps.now ?? (() => new Date()))();
 
@@ -193,8 +337,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
       await deps.db.update(repos).set({ enabled, updatedAt: now }).where(eq(repos.id, id));
     }
 
-    // Re-fetch to return the current state (include deletedAt check to guard
-    // against a concurrent soft-delete racing with this PATCH).
     const updated = await deps.db
       .select()
       .from(repos)
@@ -206,7 +348,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
-    // Fetch the most-recent review so lastReviewAt / lastOutcome are accurate.
     const lastEvents = await deps.db
       .select({
         createdAt: reviewEvalEvent.createdAt,
@@ -229,18 +370,30 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(summary, 200);
   });
 
-  // DELETE /repos/:id — soft delete
+  // ---------------------------------------------------------------------------
+  // DELETE /repos/:id — soft delete (admin)
+  // ---------------------------------------------------------------------------
   app.delete('/:id', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
 
     const existing = await deps.db
-      .select({ id: repos.id })
+      .select()
       .from(repos)
       .where(and(eq(repos.id, id), isNull(repos.deletedAt)))
       .limit(1);
 
-    if (existing[0] === undefined) {
+    const row = existing[0];
+    if (row === undefined) {
       return c.json({ error: 'not_found' }, 404);
+    }
+
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(row.installationId ?? null, memberships, 'admin');
+      if (!check.ok) {
+        return c.json({ error: check.status === 404 ? 'not_found' : 'forbidden' }, check.status);
+      }
     }
 
     const now = (deps.now ?? (() => new Date()))();
@@ -249,13 +402,18 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return new Response(null, { status: 204 });
   });
 
-  // GET /repos/:id/prompt — fetch system prompt
+  // ---------------------------------------------------------------------------
+  // GET /repos/:id/prompt — fetch system prompt (viewer)
+  // ---------------------------------------------------------------------------
   app.get('/:id/prompt', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
+
     const rows = await deps.db
       .select({
         systemPrompt: repos.systemPrompt,
         systemPromptUpdatedAt: repos.systemPromptUpdatedAt,
+        installationId: repos.installationId,
       })
       .from(repos)
       .where(and(eq(repos.id, id), isNull(repos.deletedAt)))
@@ -266,6 +424,14 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(row.installationId ?? null, memberships, 'viewer');
+      if (!check.ok) {
+        return c.json({ error: 'not_found' }, 404);
+      }
+    }
+
     const response: PromptResponse = {
       systemPrompt: row.systemPrompt ?? '',
       updatedAt: row.systemPromptUpdatedAt?.toISOString() ?? null,
@@ -273,19 +439,30 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(response, 200);
   });
 
-  // PUT /repos/:id/prompt — upsert system prompt
+  // ---------------------------------------------------------------------------
+  // PUT /repos/:id/prompt — upsert system prompt (editor)
+  // ---------------------------------------------------------------------------
   app.put('/:id/prompt', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
 
-    // Check repo exists and is not soft-deleted first
     const existing = await deps.db
-      .select({ id: repos.id })
+      .select({ id: repos.id, installationId: repos.installationId })
       .from(repos)
       .where(and(eq(repos.id, id), isNull(repos.deletedAt)))
       .limit(1);
 
-    if (existing[0] === undefined) {
+    const repoRow = existing[0];
+    if (repoRow === undefined) {
       return c.json({ error: 'not_found' }, 404);
+    }
+
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(repoRow.installationId ?? null, memberships, 'editor');
+      if (!check.ok) {
+        return c.json({ error: check.status === 404 ? 'not_found' : 'forbidden' }, check.status);
+      }
     }
 
     let body: unknown;
@@ -303,7 +480,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
     const { systemPrompt } = parsed.data;
     const now = (deps.now ?? (() => new Date()))();
 
-    // Treat empty / whitespace-only as NULL (inherits default prompt)
     const storedPrompt = systemPrompt.trim().length > 0 ? systemPrompt : null;
 
     await deps.db
@@ -322,13 +498,15 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(response, 200);
   });
 
-  // GET /repos/:id/reviews — paginated reviews for a single repo
+  // ---------------------------------------------------------------------------
+  // GET /repos/:id/reviews — paginated reviews for a single repo (viewer)
+  // ---------------------------------------------------------------------------
   app.get('/:id/reviews', async (c) => {
     const id = c.req.param('id');
+    const principal = c.get('principal');
 
-    // Verify repo exists
     const repoRows = await deps.db
-      .select({ name: repos.name, platform: repos.platform })
+      .select({ name: repos.name, platform: repos.platform, installationId: repos.installationId })
       .from(repos)
       .where(and(eq(repos.id, id), isNull(repos.deletedAt)))
       .limit(1);
@@ -336,6 +514,14 @@ export function createReposRouter(deps: ReposDeps): Hono {
     const repoRow = repoRows[0];
     if (repoRow === undefined) {
       return c.json({ error: 'not_found' }, 404);
+    }
+
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(repoRow.installationId ?? null, memberships, 'viewer');
+      if (!check.ok) {
+        return c.json({ error: 'not_found' }, 404);
+      }
     }
 
     const queryRaw = {
@@ -382,9 +568,6 @@ export function createReposRouter(deps: ReposDeps): Hono {
         cursorDate !== undefined && cursorId !== undefined
           ? and(
               eq(reviewEvalEvent.repo, repoRow.name),
-              // Tie-break: when multiple rows share the same createdAt at the
-              // cursor boundary, include only those with id < cursorId to
-              // prevent duplicate or skipped items across pages.
               or(
                 lt(reviewEvalEvent.createdAt, cursorDate),
                 and(eq(reviewEvalEvent.createdAt, cursorDate), lt(reviewEvalEvent.id, cursorId)),
@@ -420,14 +603,16 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json({ items, nextCursor }, 200);
   });
 
-  // GET /repos/:id/metrics
+  // ---------------------------------------------------------------------------
+  // GET /repos/:id/metrics (viewer)
+  // ---------------------------------------------------------------------------
   app.get('/:id/metrics', async (c) => {
     const id = c.req.param('id');
     const now = (deps.now ?? (() => new Date()))();
+    const principal = c.get('principal');
 
-    // Verify repo exists
     const repoRows = await deps.db
-      .select({ name: repos.name })
+      .select({ name: repos.name, installationId: repos.installationId })
       .from(repos)
       .where(and(eq(repos.id, id), isNull(repos.deletedAt)))
       .limit(1);
@@ -437,9 +622,16 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      const check = checkRepoAccess(repoRow.installationId ?? null, memberships, 'viewer');
+      if (!check.ok) {
+        return c.json({ error: 'not_found' }, 404);
+      }
+    }
+
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // Aggregate stats from review_eval_event
     const allTimeRows = await deps.db
       .select({
         totalReviews: count(),
@@ -474,5 +666,5 @@ export function createReposRouter(deps: ReposDeps): Hono {
     return c.json(metrics, 200);
   });
 
-  return app;
+  return app as unknown as Hono;
 }

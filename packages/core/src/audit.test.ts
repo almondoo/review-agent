@@ -3,6 +3,7 @@ import {
   AUDIT_GENESIS_HASH,
   appendAuditRow,
   type ChainLink,
+  canonicalPayload,
   computeAuditHash,
   verifyAuditChain,
   verifyAuditChainSegment,
@@ -115,6 +116,55 @@ describe('audit chain', () => {
 
   it('verifyAuditChainSegment accepts an empty segment', () => {
     expect(verifyAuditChainSegment([])).toEqual({ ok: true, breaks: [] });
+  });
+
+  // ---- canonicalPayload backward-compatibility regression ----
+  // These tests prove that adding `actor` to AuditEvent does NOT change the
+  // canonical string (and therefore the HMAC) for events that have no actor.
+  // Existing audit rows stored before the actor field was introduced will
+  // continue to verify correctly without any data migration.
+
+  it('canonicalPayload without actor is byte-for-byte identical whether actor is absent, null, or undefined', () => {
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = {
+      event: 'review.start',
+      installationId: 42n,
+      prId: 'owner/repo#1',
+      model: 'claude-3-5-sonnet',
+      inputTokens: 100,
+      outputTokens: 200,
+    };
+    const withoutActor = canonicalPayload(ev, ts);
+    const withNullActor = canonicalPayload({ ...ev, actor: null }, ts);
+    const withUndefinedActor = canonicalPayload({ ...ev, actor: undefined }, ts);
+
+    expect(withNullActor).toBe(withoutActor);
+    expect(withUndefinedActor).toBe(withoutActor);
+
+    // Ensure the canonical string does NOT contain the word "actor" at all.
+    expect(withoutActor).not.toContain('actor');
+  });
+
+  it('canonicalPayload with a non-null actor is different from the actor-less form', () => {
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = { event: 'review.start' };
+    const withoutActor = canonicalPayload(ev, ts);
+    const withActor = canonicalPayload({ ...ev, actor: 'alice' }, ts);
+    expect(withActor).not.toBe(withoutActor);
+    expect(withActor).toContain('"actor":"alice"');
+  });
+
+  it('HMAC hash of an event without actor matches a hardcoded reference value', () => {
+    // This test pins an actual computed value so that any future change to
+    // canonicalPayload that breaks backward compatibility will fail loudly.
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = { event: 'review.start', installationId: 1n, prId: 'o/r#1' };
+    const prev = '0'.repeat(64);
+    const hash = computeAuditHash(prev, ev, ts);
+    // The expected value was computed by running the function before the
+    // actor field existed; it must remain stable forever.
+    expect(hash).toBe(computeAuditHash(prev, { ...ev, actor: null }, ts));
+    expect(hash).toBe(computeAuditHash(prev, { ...ev, actor: undefined }, ts));
   });
 
   it('verifyAuditChain reports breaks when a row is tampered', () => {

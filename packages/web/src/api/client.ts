@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { clearSessionToken, getSessionToken } from '../lib/session-token.js';
 import {
   addMockRepo,
   bulkCreateMockRepos,
@@ -20,6 +21,7 @@ import {
   upsertMockLlmKey,
 } from './mocks.js';
 import type {
+  AuthMeResponse,
   BulkCreateRepoBody,
   BulkCreateRepoResponse,
   CreateRepoBody,
@@ -28,6 +30,8 @@ import type {
   InstallationReposResponse,
   IntegrationsStatus,
   LlmKeysResponse,
+  LoginBody,
+  LoginResponse,
   OverviewMetrics,
   PatchRepoBody,
   PutPromptBody,
@@ -45,20 +49,80 @@ import type {
   UpsertLlmKeyResponse,
 } from './types.js';
 
-const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+export const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+
+// Module-level unauthorized callback — set by the app bootstrap to navigate to /login.
+let _onUnauthorized: (() => void) | null = null;
+
+export function registerOnUnauthorized(cb: () => void): void {
+  _onUnauthorized = cb;
+}
+
+/** Paths that must NOT send an Authorization header. */
+const NO_AUTH_PATHS = new Set(['/api/auth/login']);
+
+export class UnauthorizedError extends Error {
+  readonly status = 401;
+  constructor() {
+    super('Unauthorized');
+  }
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const sessionToken = getSessionToken();
   const dashboardToken = import.meta.env.VITE_REVIEW_AGENT_DASHBOARD_TOKEN as string | undefined;
+
+  // Precedence: (1) session JWT, (2) legacy dashboard token — but never on login path.
+  const authToken = NO_AUTH_PATHS.has(path)
+    ? undefined
+    : (sessionToken ?? dashboardToken ?? undefined);
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(dashboardToken ? { Authorization: `Bearer ${dashboardToken}` } : {}),
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...(init?.headers as Record<string, string> | undefined),
   };
   const res = await fetch(path, { ...init, headers });
+  if (res.status === 401 && !NO_AUTH_PATHS.has(path)) {
+    clearSessionToken();
+    _onUnauthorized?.();
+    throw new UnauthorizedError();
+  }
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+// --- Auth ---
+
+export async function apiLogin(body: LoginBody): Promise<LoginResponse> {
+  return apiFetch<LoginResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function apiFetchMe(): Promise<AuthMeResponse> {
+  return apiFetch<AuthMeResponse>('/api/auth/me');
+}
+
+export async function apiLogout(): Promise<void> {
+  clearSessionToken();
+  try {
+    await apiFetch<void>('/api/auth/logout', { method: 'POST' });
+  } catch {
+    // Logout is best-effort; server is stateless. Token is already cleared.
+  }
+}
+
+export function useAuthMe() {
+  return useQuery({
+    queryKey: ['auth-me'],
+    queryFn: apiFetchMe,
+    retry: false,
+    staleTime: 60_000,
+  });
 }
 
 // --- Overview ---

@@ -10,6 +10,13 @@ export type AuditEvent = {
   readonly model?: string | null;
   readonly inputTokens?: number | null;
   readonly outputTokens?: number | null;
+  /**
+   * Optional identity of the operator or system process that triggered this
+   * event (e.g. a principal username or service identifier). Omitting or
+   * passing `null`/`undefined` is equivalent — see canonicalPayload for the
+   * backward-compatibility guarantee.
+   */
+  readonly actor?: string | null;
 };
 
 export type AuditRow = AuditEvent & {
@@ -19,7 +26,12 @@ export type AuditRow = AuditEvent & {
 };
 
 export function canonicalPayload(ev: AuditEvent, ts: Date): string {
-  const ordered = {
+  // BACKWARD-COMPAT NOTE: The `actor` field is appended to the canonical
+  // object ONLY when it is a non-null, non-undefined string. Events without
+  // an actor produce a JSON string byte-for-byte identical to events produced
+  // before `actor` was introduced, so existing stored HMAC hashes remain
+  // valid and re-verification succeeds without any data migration.
+  const ordered: Record<string, string | number | null> = {
     ts: ts.toISOString(),
     installationId: ev.installationId != null ? String(ev.installationId) : null,
     prId: ev.prId ?? null,
@@ -28,6 +40,9 @@ export function canonicalPayload(ev: AuditEvent, ts: Date): string {
     inputTokens: ev.inputTokens ?? null,
     outputTokens: ev.outputTokens ?? null,
   };
+  if (ev.actor != null) {
+    ordered.actor = ev.actor;
+  }
   return JSON.stringify(ordered);
 }
 
@@ -46,6 +61,8 @@ export type ChainLink = {
   readonly model: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
+  /** Present when the audit row was written after the actor field was added. */
+  readonly actor?: string | null;
 };
 
 export type ChainBreak = {

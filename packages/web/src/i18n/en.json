@@ -58,9 +58,24 @@
     "light": "[LIGHT]",
     "langJa": "日本語",
     "langEn": "English",
-    "switchLang": "Switch language"
+    "switchLang": "Switch language",
+    "logout": "Log out",
+    "logoutLabel": "[LOGOUT]",
+    "loggedInAs": "Logged in as {{username}}"
   },
   "pages": {
+    "login": {
+      "title": "Log in",
+      "subtitle": "review-agent dashboard",
+      "labelUsername": "Username",
+      "placeholderUsername": "Enter your username",
+      "labelPassword": "Password",
+      "placeholderPassword": "Enter your password",
+      "submit": "[LOG IN]",
+      "submitting": "[LOGGING IN...]",
+      "errorInvalidCredentials": "Incorrect username or password.",
+      "errorLegacyMode": "This deployment has per-user login disabled."
+    },
     "overview": {
       "title": "Overview",
       "subtitle": "Dashboard — current state",
@@ -355,6 +370,12 @@
       "confirm": "[REMOVE]",
       "cancel": "[CANCEL]"
     }
+  },
+  "auth": {
+    "roleViewer": "Viewer",
+    "roleEditor": "Editor",
+    "roleAdmin": "Admin",
+    "noPermission": "[NO PERMISSION]"
   },
   "platforms": {
     "github": "[GH] GitHub",
