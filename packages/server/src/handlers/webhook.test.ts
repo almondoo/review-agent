@@ -1531,10 +1531,12 @@ describe('handleWebhook — conversation reply (#149)', () => {
     const { queue } = makeQueue();
     const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
     const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
     const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
       queue,
       checkAuthz,
       handleConversation,
+      getBotLogin,
     });
     expect(r.kind).toBe('conversation_reply');
     if (r.kind === 'conversation_reply') {
@@ -1595,10 +1597,12 @@ describe('handleWebhook — conversation reply (#149)', () => {
     const { queue } = makeQueue();
     const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
     const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
     const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
       queue,
       checkAuthz,
       handleConversation,
+      getBotLogin,
     });
     expect(r.kind).toBe('conversation_reply');
     if (r.kind === 'conversation_reply') {
@@ -1693,5 +1697,68 @@ describe('handleWebhook — conversation reply (#149)', () => {
     });
     expect(r.kind).toBe('ignored');
     expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #149 / security: fail-closed self-reply guard
+  // ---------------------------------------------------------------------------
+
+  it('fail-closed: returns ignored and does NOT dispatch when getBotLogin is absent', async () => {
+    // handleConversation is wired but getBotLogin is not — we cannot verify
+    // bot identity, so the guard must refuse dispatch rather than risk a loop.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    // No getBotLogin in deps
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      // getBotLogin intentionally omitted
+    });
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') {
+      expect(r.reason).toContain('getBotLogin not wired');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: returns ignored and does NOT dispatch when getBotLogin returns empty string', async () => {
+    // getBotLogin resolves to '' (e.g. env var not set, API returned blank) —
+    // cannot verify identity, must fail-closed.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') {
+      expect(r.reason).toContain('getBotLogin returned empty');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: dispatches when getBotLogin is wired, returns non-empty, and sender is not the bot', async () => {
+    // Positive control: getBotLogin wired with a real login, sender is a human.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
   });
 });

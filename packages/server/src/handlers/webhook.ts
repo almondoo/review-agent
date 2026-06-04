@@ -59,8 +59,11 @@ export type WebhookHandlerDeps = {
   /**
    * Returns the bot's own GitHub login (e.g. `review-agent[bot]`). Used
    * by the self-reply guard to block the agent from replying to itself.
-   * When absent the self-reply guard is disabled (fail-open — may produce
-   * reply loops in misconfigured deployments; operators should wire this).
+   *
+   * **Fail-closed**: when absent, or when it resolves to an empty string,
+   * the conversation reply path refuses to dispatch and returns
+   * `{ kind: 'ignored' }`. This prevents reply loops in misconfigured
+   * deployments. Operators MUST wire this for conversation replies to work.
    */
   readonly getBotLogin?: () => Promise<string>;
   /**
@@ -408,16 +411,31 @@ export async function handleWebhook(
       }
 
       // Self-reply guard: never reply to our own comments.
-      if (deps.getBotLogin) {
-        const botLogin = await deps.getBotLogin();
-        if (sender === botLogin) {
-          return {
-            kind: 'conversation_reply',
-            outcome: 'self_reply',
-            commentId: replyCommentId,
-            prNumber,
-          };
-        }
+      //
+      // Fail-closed: if getBotLogin is absent or returns an empty string we
+      // cannot verify the sender's identity, so we refuse to dispatch rather
+      // than risk a reply loop. Only proceed when getBotLogin is wired AND
+      // returns a non-empty login that does not match the sender.
+      if (!deps.getBotLogin) {
+        return {
+          kind: 'ignored',
+          reason: 'conversation reply: getBotLogin not wired (fail-closed)',
+        };
+      }
+      const botLogin = await deps.getBotLogin();
+      if (!botLogin) {
+        return {
+          kind: 'ignored',
+          reason: 'conversation reply: getBotLogin returned empty (fail-closed)',
+        };
+      }
+      if (sender === botLogin) {
+        return {
+          kind: 'conversation_reply',
+          outcome: 'self_reply',
+          commentId: replyCommentId,
+          prNumber,
+        };
       }
 
       // Authorization: reuse the same write-permission check as commands.
