@@ -202,6 +202,8 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
         return t !== undefined ? { dashboardToken: t } : {};
       })(),
       requireDashboardAuth: deps.api?.requireDashboardAuth ?? process.env.NODE_ENV === 'production',
+      // REVIEW_AGENT_MULTI_TENANT: caller wins; env fallback handled inside createApi.
+      ...(deps.api?.multiTenant !== undefined ? { multiTenant: deps.api.multiTenant } : {}),
       // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
       // /integrations/llm-keys routes can wrap/unwrap data keys per request.
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
