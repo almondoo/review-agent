@@ -130,6 +130,11 @@ export async function runAction(
     changedPaths: diff.files.map((f) => f.path),
   });
 
+  // Load external SARIF tool contents. Each configured tool's sarif_path is read
+  // from the Action workspace (same cwd as the diff). Missing/unreadable files
+  // are warned and skipped — the review continues without that tool's findings.
+  const externalTools = await loadExternalToolContents(config.external_tools.tools, readFn, log);
+
   const reviewJob: Parameters<typeof runReview>[0] = {
     jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
     workspaceDir,
@@ -176,13 +181,14 @@ export async function runAction(
       owner: ctx.ref.owner,
       repo: ctx.ref.repo,
     },
+    ...(externalTools.length > 0 ? { externalTools } : {}),
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;
     (reviewJob as { incrementalSinceSha?: string }).incrementalSinceSha = strategy.since;
   }
 
-  const result = await runReview(reviewJob, provider);
+  const result = await runReview(reviewJob, provider, { logger: log });
 
   await postOrUpdate(vcs, ctx.ref, pr, result, previousState, {
     stateWriteRetries: inputs.stateWriteRetries,
@@ -274,6 +280,39 @@ function inferGithubHost(env: NodeJS.ProcessEnv): string {
   } catch {
     return 'github.com';
   }
+}
+
+/**
+ * Load SARIF file contents for each configured external tool.
+ * Unreadable paths are warned and skipped (review continues without them).
+ */
+async function loadExternalToolContents(
+  tools: ReadonlyArray<{
+    readonly name: string;
+    readonly sarif_path: string;
+    readonly merge_policy: 'tool_wins' | 'annotate' | 'ai_wins';
+  }>,
+  readFn: (p: string, enc: 'utf8') => Promise<string>,
+  log: (msg: string, meta?: Record<string, unknown>) => void,
+): Promise<
+  Array<{ name: string; mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins'; sarif: string }>
+> {
+  const result: Array<{
+    name: string;
+    mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    sarif: string;
+  }> = [];
+  for (const tool of tools) {
+    try {
+      const content = await readFn(tool.sarif_path, 'utf8');
+      result.push({ name: tool.name, mergePolicy: tool.merge_policy, sarif: content });
+    } catch {
+      log(
+        `external_tools: sarif_path '${tool.sarif_path}' for tool '${tool.name}' not found or unreadable — skipping`,
+      );
+    }
+  }
+  return result;
 }
 
 function defaultLogger(msg: string, meta?: Record<string, unknown>): void {

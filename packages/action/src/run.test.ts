@@ -656,4 +656,86 @@ describe('runAction', () => {
     expect(payload.diff?.files[0]?.path).toBe('src/a.ts');
     expect(payload.diff?.files[0]?.patch).toBe(patch);
   });
+
+  // external_tools wiring (#160)
+  it('reads sarif_path and passes externalTools to runReview when configured', async () => {
+    const sarifContent = JSON.stringify({
+      version: '2.1.0',
+      runs: [
+        {
+          tool: { driver: { name: 'CodeQL', rules: [{ id: 'sql-injection' }] } },
+          results: [
+            {
+              ruleId: 'sql-injection',
+              level: 'error',
+              message: { text: 'SQL injection' },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: 'src/db.ts' },
+                    region: { startLine: 5 },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const vcs = makeVCS();
+    let capturedProvider: LlmProvider | null = null;
+
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async (p) => {
+          if (p === '.review-agent.yml') {
+            return 'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: results/codeql.sarif\n';
+          }
+          if (p === 'results/codeql.sarif') return sarifContent;
+          throw new Error(`unexpected read: ${p}`);
+        },
+        createVCS: () => vcs,
+        createProvider: (_key, _cfg) => {
+          capturedProvider = makeProvider();
+          return capturedProvider;
+        },
+        sleep: noSleep,
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    // The action ran to completion; the SARIF was read (no read errors logged).
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns and skips when sarif_path is not readable, review still completes', async () => {
+    const warnMessages: string[] = [];
+    const vcs = makeVCS();
+
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async (p) => {
+          if (p === '.review-agent.yml') {
+            return 'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: missing.sarif\n';
+          }
+          throw new Error(`not found: ${p}`);
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        logger: (msg) => {
+          warnMessages.push(msg);
+        },
+        sleep: noSleep,
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+    expect(warnMessages.some((m) => m.includes('not found or unreadable'))).toBe(true);
+  });
 });

@@ -166,6 +166,19 @@ Controls how the runner handles PRs that exceed the `reviews.max_files` or
 
 ---
 
+## `external_tools`
+
+Ingest SARIF 2.1.0 output from CI static-analysis tools and merge findings with
+the AI review. See [external-tools.md](./external-tools.md) for full details.
+
+| Key | Type | Default | Scope | Description |
+|---|---|---|---|---|
+| `external_tools.tools[].name` | string | — | repo | Display name for the tool (required). |
+| `external_tools.tools[].sarif_path` | string | — | repo | Filesystem path to the tool's SARIF output file (required). |
+| `external_tools.tools[].merge_policy` | `tool_wins` \| `ai_wins` \| `annotate` | `tool_wins` | How to resolve fingerprint conflicts between external and AI findings. |
+
+---
+
 ## Effective-config resolution log
 
 Since issue #146, every run emits a `ConfigResolutionLog` that records which

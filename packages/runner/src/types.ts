@@ -300,6 +300,21 @@ export type ReviewJob = {
     readonly maxChunks: number;
     readonly prioritization: ReadonlyArray<'path_instructions' | 'diff_size' | 'alphabetical'>;
   };
+  /**
+   * External static-analysis tool findings to merge with the AI review (#160).
+   * Each entry carries the SARIF file content (as a string) already read by
+   * the entry point (action / cli). The runner normalises the SARIF, assigns
+   * fingerprints, applies the same dedup / ruleset / suppression filters as AI
+   * findings, and merges via `mergePolicy`.
+   *
+   * Optional for back-compat — absent (or empty array) keeps the existing
+   * behaviour: only AI findings are posted (zero external injection).
+   */
+  readonly externalTools?: ReadonlyArray<{
+    readonly name: string;
+    readonly mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    readonly sarif: string;
+  }>;
 };
 
 export type FinalizedComment = InlineComment & {
@@ -482,6 +497,13 @@ export type RunReviewDeps = {
    * logger, test spy, etc.).
    */
   readonly onConfigResolution?: (log: ConfigResolutionLog) => void;
+  /**
+   * General-purpose warn/info log sink. Used by the SARIF ingestion path
+   * (#160) to surface skip/parse warnings (e.g. malformed SARIF, results
+   * missing location) without writing to stdout/stderr directly. Optional
+   * for back-compat — absent means SARIF warnings are silently discarded.
+   */
+  readonly logger?: (msg: string) => void;
   readonly fileReader?: (path: string) => Promise<string>;
   readonly fingerprintComment?: (c: {
     readonly path: string;

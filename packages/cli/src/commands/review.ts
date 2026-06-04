@@ -132,6 +132,13 @@ export async function runReviewCommand(
     changedPaths: diff.files.map((f) => f.path),
   });
 
+  // Load external SARIF tool contents (back-compat: no-op when tools list is empty).
+  const externalTools = await loadExternalToolContents(
+    config.external_tools.tools,
+    readFile,
+    (msg) => io.stderr(`${msg}\n`),
+  );
+
   const result = await runReview(
     {
       jobId: `${ref.owner}/${ref.repo}#${ref.number}`,
@@ -178,12 +185,14 @@ export async function runReviewCommand(
       // Pass resolution provenance so the onConfigResolution hook below
       // can log it at the start of the review (issue #146 AC2).
       resolutionLog,
+      ...(externalTools.length > 0 ? { externalTools } : {}),
     },
     provider,
     {
       onConfigResolution: (log) => {
         io.stderr(formatResolutionLog(log));
       },
+      logger: (msg) => io.stderr(`${msg}\n`),
     },
   );
 
@@ -326,6 +335,39 @@ function defaultReadFile(p: string, enc: 'utf8'): Promise<string> {
   /* v8 ignore start */
   return fsReadFile(p, enc as BufferEncoding).then(String);
   /* v8 ignore stop */
+}
+
+/**
+ * Load SARIF file contents for each configured external tool.
+ * Unreadable paths are warned and skipped (review continues without them).
+ */
+async function loadExternalToolContents(
+  tools: ReadonlyArray<{
+    readonly name: string;
+    readonly sarif_path: string;
+    readonly merge_policy: 'tool_wins' | 'annotate' | 'ai_wins';
+  }>,
+  readFile: (p: string, enc: 'utf8') => Promise<string>,
+  warn: (msg: string) => void,
+): Promise<
+  Array<{ name: string; mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins'; sarif: string }>
+> {
+  const result: Array<{
+    name: string;
+    mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    sarif: string;
+  }> = [];
+  for (const tool of tools) {
+    try {
+      const content = await readFile(tool.sarif_path, 'utf8');
+      result.push({ name: tool.name, mergePolicy: tool.merge_policy, sarif: content });
+    } catch {
+      warn(
+        `external_tools: sarif_path '${tool.sarif_path}' for tool '${tool.name}' not found or unreadable — skipping`,
+      );
+    }
+  }
+  return result;
 }
 
 /**

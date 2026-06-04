@@ -798,4 +798,65 @@ describe('loadConfigFromYaml — large_pr (#158)', () => {
   it('rejects non-positive max_chunks', () => {
     expect(() => loadConfigFromYaml('large_pr:\n  max_chunks: 0\n')).toThrow(ConfigError);
   });
+
+  // external_tools (#160)
+  it('defaults external_tools to empty tools list', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.external_tools.tools).toEqual([]);
+  });
+
+  it('parses external_tools.tools with single tool and default merge_policy', () => {
+    const cfg = loadConfigFromYaml(
+      'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: results/codeql.sarif\n',
+    );
+    expect(cfg.external_tools.tools).toHaveLength(1);
+    expect(cfg.external_tools.tools[0]?.name).toBe('codeql');
+    expect(cfg.external_tools.tools[0]?.sarif_path).toBe('results/codeql.sarif');
+    expect(cfg.external_tools.tools[0]?.merge_policy).toBe('tool_wins');
+  });
+
+  it('parses external_tools.tools with explicit merge_policy values', () => {
+    const yaml = [
+      'external_tools:',
+      '  tools:',
+      '    - name: semgrep',
+      '      sarif_path: semgrep.sarif',
+      '      merge_policy: ai_wins',
+      '    - name: eslint',
+      '      sarif_path: eslint.sarif',
+      '      merge_policy: annotate',
+    ].join('\n');
+    const cfg = loadConfigFromYaml(yaml);
+    expect(cfg.external_tools.tools).toHaveLength(2);
+    expect(cfg.external_tools.tools[0]?.merge_policy).toBe('ai_wins');
+    expect(cfg.external_tools.tools[1]?.merge_policy).toBe('annotate');
+  });
+
+  it('rejects an unknown merge_policy value', () => {
+    expect(() =>
+      loadConfigFromYaml(
+        'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: x.sarif\n      merge_policy: first_wins\n',
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects an external_tools.tools entry with empty name', () => {
+    expect(() =>
+      loadConfigFromYaml('external_tools:\n  tools:\n    - name: ""\n      sarif_path: x.sarif\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects an external_tools.tools entry with empty sarif_path', () => {
+    expect(() =>
+      loadConfigFromYaml('external_tools:\n  tools:\n    - name: codeql\n      sarif_path: ""\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects extra keys in an external_tools.tools entry (strict)', () => {
+    expect(() =>
+      loadConfigFromYaml(
+        'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: x.sarif\n      unknown_field: true\n',
+      ),
+    ).toThrow(ConfigError);
+  });
 });

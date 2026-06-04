@@ -5,6 +5,7 @@ import {
   CostExceededError,
   computeReviewEvent,
   createReviewOutputSchema,
+  fingerprint as defaultFingerprint,
   globToRegExp,
   SchemaValidationError,
   SEVERITY_RANK,
@@ -38,6 +39,7 @@ import {
 } from './middleware/index.js';
 import { composeSystemPrompt, MAX_LEARNED_FACTS } from './prompts/system-prompt.js';
 import { wrapUntrusted } from './prompts/untrusted.js';
+import { parseSarif } from './sarif.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
 import type {
   ExcludedFile,
@@ -246,6 +248,110 @@ function applyRulesetFilter(
     kept.push(comment);
   }
   return { kept, dropped };
+}
+
+/**
+ * Ingest external SARIF tool findings, apply dedup/ruleset/suppression filters
+ * (same pipeline as AI findings), then merge with the AI comment list using
+ * the per-tool `mergePolicy` (#160).
+ *
+ * Merge policy semantics (applied per-tool, in order):
+ *   - `tool_wins`:  fingerprint collision → keep external, drop AI duplicate.
+ *   - `ai_wins`:    fingerprint collision → keep AI, drop external duplicate.
+ *   - `annotate`:   fingerprint collision → keep AI, append annotation to its
+ *                   body; drop external duplicate. Non-conflicting external
+ *                   findings are added.
+ *
+ * `previousFingerprints` is the set of fingerprints from *prior reviews*
+ * (previousState.commentFingerprints). External findings already posted in a
+ * previous review are dedup'd out. The *current-run* AI fingerprints are NOT
+ * in this set — those are handled via merge-policy conflict resolution, not
+ * dedup, so external findings matching current-run AI findings reach the policy
+ * logic rather than being silently dropped.
+ *
+ * When `job.externalTools` is absent/empty the function returns `aiComments`
+ * unchanged (zero overhead, complete back-compat).
+ */
+function mergeExternalFindings(
+  job: ReviewJob,
+  aiComments: ReadonlyArray<import('@review-agent/core').InlineComment>,
+  previousFingerprints: ReadonlySet<string>,
+  rejectedFingerprints: ReadonlyArray<string>,
+  suppressedFingerprints: ReadonlyArray<string>,
+  warnLog: (msg: string) => void,
+): ReadonlyArray<import('@review-agent/core').InlineComment> {
+  if (!job.externalTools || job.externalTools.length === 0) return aiComments;
+
+  const rejected = new Set(rejectedFingerprints);
+  const suppressed = new Set(suppressedFingerprints);
+
+  // Start with a mutable copy of the AI comment list.
+  const merged: Array<import('@review-agent/core').InlineComment> = [...aiComments];
+
+  for (const toolConfig of job.externalTools) {
+    const { name, mergePolicy, findings, warnings } = parseSarif(
+      toolConfig.name,
+      toolConfig.mergePolicy,
+      toolConfig.sarif,
+    );
+
+    for (const w of warnings) warnLog(w);
+
+    // Assign fingerprints to external findings and apply dedup/ruleset/suppression.
+    const fingerprintedFindings: Array<import('@review-agent/core').InlineComment> = [];
+    for (const finding of findings) {
+      const fp = defaultFingerprint({
+        path: finding.path,
+        line: finding.line,
+        ruleId: finding.ruleId ?? finding.severity,
+        suggestionType: 'comment',
+      });
+
+      // Skip if already posted in a previous review or rejected by feedback.
+      // Do NOT skip on current-run AI fingerprints — those are handled below
+      // via merge-policy conflict resolution.
+      if (rejected.has(fp) || previousFingerprints.has(fp)) continue;
+
+      fingerprintedFindings.push({ ...finding, fingerprint: fp });
+    }
+
+    // Apply ruleset filter.
+    const rulesetResult = applyRulesetFilter(fingerprintedFindings, job.ruleset);
+
+    // Apply suppression filter.
+    const afterSuppression =
+      suppressed.size === 0
+        ? rulesetResult.kept
+        : rulesetResult.kept.filter((c) => !suppressed.has(c.fingerprint));
+
+    // Apply merge policy.
+    for (const extFinding of afterSuppression) {
+      const fp = extFinding.fingerprint;
+      const aiConflictIdx = merged.findIndex((c) => c.fingerprint === fp);
+
+      if (aiConflictIdx === -1) {
+        // No conflict: add external finding unconditionally.
+        merged.push(extFinding);
+      } else if (mergePolicy === 'tool_wins') {
+        // Replace AI duplicate with external finding.
+        merged.splice(aiConflictIdx, 1, extFinding);
+      } else if (mergePolicy === 'ai_wins') {
+        // Keep AI; drop external duplicate (do nothing).
+      } else {
+        // annotate: append note to AI comment body, drop external duplicate.
+        const ai = merged[aiConflictIdx];
+        if (ai) {
+          const ruleNote = extFinding.ruleId ? ` (\`${extFinding.ruleId}\`)` : '';
+          merged[aiConflictIdx] = {
+            ...ai,
+            body: `${ai.body}\n\n_Also flagged by ${name}${ruleNote}_`,
+          };
+        }
+      }
+    }
+  }
+
+  return merged;
 }
 
 async function runReviewInner(
@@ -762,17 +868,33 @@ async function runReviewInner(
     }
 
     // Cross-chunk dedup seenFingerprints for single-pass: start from previousState.
-    const seenFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
+    // Capture the pre-AI set so mergeExternalFindings can dedup against prior
+    // reviews without also deduping against current-run AI findings (those are
+    // handled via merge-policy conflict resolution, not blanket dedup).
+    const previousFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
+    const seenFp = new Set<string>(previousFp);
     const filtered = applyPostLlmFilters(result, seenFp);
 
-    const reviewEvent = computeReviewEvent(filtered.comments, job.requestChangesOn ?? 'critical');
+    // Merge external SARIF findings (back-compat: no-op when externalTools absent).
+    const finalComments = mergeExternalFindings(
+      job,
+      filtered.comments,
+      previousFp,
+      rejectedFingerprints,
+      suppressedFingerprints,
+      (msg) => {
+        /* v8 ignore next */ deps.logger?.(msg);
+      },
+    );
+
+    const reviewEvent = computeReviewEvent(finalComments, job.requestChangesOn ?? 'critical');
     const exclusionReport: ExclusionReport | undefined =
       pathFilterExclusions.length > 0
         ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
         : undefined;
 
     return {
-      comments: filtered.comments,
+      comments: finalComments,
       summary: filtered.summary,
       costUsd: costState.totalCostUsd,
       tokensUsed: { input: result.tokensUsed.input, output: result.tokensUsed.output },
@@ -825,7 +947,11 @@ async function runReviewInner(
   }
 
   // Cross-chunk dedup: accumulate fingerprints from previousState + each chunk.
-  const seenFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
+  // `previousFp` is frozen at the pre-AI snapshot for use in mergeExternalFindings
+  // (external findings matching prior-review fingerprints are dedup'd; those
+  // matching current-run AI findings reach merge-policy conflict resolution).
+  const previousFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
+  const seenFp = new Set<string>(previousFp);
 
   // Accumulated results across chunks.
   const allComments: Array<import('@review-agent/core').InlineComment> = [];
@@ -936,10 +1062,22 @@ async function runReviewInner(
       ? { excludedFiles: allExclusionFiles, capsApplied }
       : undefined;
 
-  const reviewEvent = computeReviewEvent(allComments, job.requestChangesOn ?? 'critical');
+  // Merge external SARIF findings after all chunks (back-compat: no-op when absent).
+  const finalAllComments = mergeExternalFindings(
+    job,
+    allComments,
+    previousFp,
+    rejectedFingerprints,
+    suppressedFingerprints,
+    (msg) => {
+      /* v8 ignore next */ deps.logger?.(msg);
+    },
+  );
+
+  const reviewEvent = computeReviewEvent(finalAllComments, job.requestChangesOn ?? 'critical');
 
   return {
-    comments: allComments,
+    comments: finalAllComments,
     summary: mergedSummary,
     costUsd: costState.totalCostUsd,
     tokensUsed: { input: totalInputTokens, output: totalOutputTokens },

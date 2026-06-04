@@ -1045,6 +1045,36 @@ RUN curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAK
 
 Hash is updated only via reviewed PR. Renovate config pins the version.
 
+### 7.4.1 External static-analysis tool ingestion (#160)
+
+Beyond gitleaks (secret scanning), operators can configure CI-generated SARIF
+2.1.0 files from arbitrary static-analysis tools (CodeQL, Semgrep, ESLint SARIF
+formatter, etc.). The agent **reads** these files; it does not execute the tools.
+
+**Pipeline:**
+
+1. At entry-point time (action / cli), each `external_tools.tools[].sarif_path`
+   file is read from the workspace. Unreadable paths emit a warning and are
+   skipped; the review continues with AI findings only.
+2. The runner calls `parseSarif()` on each file's content (pure, no I/O). The
+   SARIF parser normalises results to `ReviewOutputComment`-compatible findings.
+   Malformed SARIF or invalid JSON emits a warning and returns no findings.
+3. Each external finding is fingerprinted via `fingerprint(path:line:ruleId:comment)`.
+4. Findings already posted in a previous review (matching `previousState.commentFingerprints`)
+   or muted by a suppression rule are excluded.
+5. Per-tool `ruleset` (category enable / `min_severity`) filters are applied.
+6. The merge-policy resolves fingerprint conflicts between AI and external findings:
+   - `tool_wins` (default) — external finding replaces the AI duplicate; non-conflicting
+     findings from both sides are kept.
+   - `ai_wins` — AI finding is kept; external duplicate dropped; non-conflicting external
+     findings added.
+   - `annotate` — AI body gains `_Also flagged by <name> (`<ruleId>`)_`; external
+     duplicate dropped; non-conflicting external findings added.
+7. The merged comment list (AI ∪ external, deduplicated) is passed to `postReview`.
+
+**Out of scope (explicit):** URL/stdin SARIF input; tool-native non-SARIF JSON
+formats; server-mode operator filesystem reads (seam exists, not wired).
+
 **Telemetry redaction.** The Pino logger has a redaction plugin that strips
 matches against gitleaks' rule set from any log object before serialization.
 Same applies to OTel span attributes via a custom processor.

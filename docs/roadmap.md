@@ -612,12 +612,31 @@ maintainer 判断で**見送り → #164** に分割、multi-line range（start_
 - **docs/spec**: `docs/configuration/large-pr.md` + config-reference、spec §10.4「Chunked multi-pass review」追記。
 - **既知の限界**: chunk はファイル独立（cross-chunk の diff context は read_file/glob/grep tools で補完）。
 
+### [A5] external static-analysis tool ingestion — #160 landed (develop, 2026-06-04)
+
+CI 等が生成した SARIF 2.1.0 を取り込み AI findings と正規化・統合・dedup（gitleaks 統合の一般化）。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#160](https://github.com/almondoo/review-agent/issues/160) | external tool ingestion (SARIF / lint / SAST) | ✅ landed (develop) |
+
+主な変更:
+- **config**: `external_tools.tools[].{name, sarif_path, merge_policy(tool_wins|annotate|ai_wins, 既定 tool_wins)}`。
+- **runner**: pure SARIF 2.1.0 パーサ（level→severity / ruleId 解決 / location 欠落 skip / 壊れ JSON は空+warn）+
+  正規化（InlineComment, side=RIGHT, confidence=high, category 推論）+ `mergeExternalFindings`（fingerprint で
+  AI と衝突解決、previousState/rejected dedup・ruleset/suppression 適用）。chunk merge 後・postReview 前に注入。
+- **入力は SARIF ファイルパスのみ**（agent はツールを実行しない＝§1.2 / sandbox 整合）。URL/stdin・tool 固有 JSON は scope 外。
+- **配線**: action / cli(review, dry-run) が sarif_path を読み job.externalTools へ（欠落は warn+skip）。server は queue seam。
+- gitleaks(#8/#58) 不変、`external_tools` 無しは完全 back-compat。
+- **docs/spec**: `docs/configuration/external-tools.md` + config-reference、spec §7.4.1「External static-analysis tool ingestion」追記。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
 #142 quality metrics / #150 onboarding & docs system /
 #153 one-command start /
-#160 external-tool ingestion (lint/types/SAST) / #162 platform 拡張 (GitLab/GHES)。
+#162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック
 

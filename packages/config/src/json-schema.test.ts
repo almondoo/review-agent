@@ -43,6 +43,7 @@ describe('generateJsonSchema', () => {
       'ruleset',
       'suggestions',
       'large_pr',
+      'external_tools',
     ]) {
       expect(props[required], `expected '${required}' in JSON Schema properties`).toBeDefined();
     }
