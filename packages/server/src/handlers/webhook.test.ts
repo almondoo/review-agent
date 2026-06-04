@@ -1,7 +1,55 @@
+import type { DbClient } from '@review-agent/db';
 import type { Context } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { _resetMetricsForTest } from '../metrics.js';
 import { handleWebhook, recordFeedbackCommandOutcome } from './webhook.js';
+
+// ---------------------------------------------------------------------------
+// Module-level mock for @review-agent/db
+//
+// withTenant is replaced with a thin wrapper that calls fn(tx) where tx is
+// the return value of db.transaction (i.e. the same tx the fakeDb exposes).
+// This lets us assert on the insert/update/delete calls captured by the fake
+// db without a live Postgres connection.
+// ---------------------------------------------------------------------------
+vi.mock('@review-agent/db', async () => {
+  const actual = await vi.importActual<typeof import('@review-agent/db')>('@review-agent/db');
+  return {
+    ...actual,
+    withTenant: async (
+      db: { transaction: (fn: (tx: unknown) => Promise<unknown>) => Promise<unknown> },
+      _installationId: unknown,
+      fn: (tx: unknown) => Promise<unknown>,
+    ) => db.transaction(fn),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Fake DbClient whose query-builder methods are vi.fn() spies.
+// The transaction callback receives the same `tx` spy object so callers
+// that call `tx.insert(...)` are captured.
+// ---------------------------------------------------------------------------
+function makeDb() {
+  const insertResult = { onConflictDoUpdate: vi.fn().mockResolvedValue([]) };
+  const updateResult = { set: vi.fn() };
+  const updateSetResult = { where: vi.fn().mockResolvedValue([]) };
+  updateResult.set.mockReturnValue(updateSetResult);
+
+  const deleteResult = { where: vi.fn().mockResolvedValue([]) };
+
+  const tx = {
+    insert: vi.fn().mockReturnValue({ values: vi.fn().mockReturnValue(insertResult) }),
+    update: vi.fn().mockReturnValue(updateResult),
+    delete: vi.fn().mockReturnValue(deleteResult),
+    execute: vi.fn().mockResolvedValue([{ tenant: '99' }]),
+  };
+
+  const db = {
+    transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
+  } as unknown as DbClient;
+
+  return { db, tx, insertResult, updateResult, updateSetResult, deleteResult };
+}
 
 afterEach(() => {
   _resetMetricsForTest();
@@ -441,6 +489,158 @@ describe('handleWebhook', () => {
     // Falls through to the comment-command parser, which sees no
     // `comment.body` and treats it as 'ignored'.
     expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// installation event persistence (#126)
+// ---------------------------------------------------------------------------
+
+const installationPayload = {
+  installation: {
+    id: 99,
+    app_id: 42,
+    account: { login: 'acme-org', type: 'Organization' },
+  },
+};
+
+describe('handleWebhook — installation events with db', () => {
+  it('installation.created upserts a row and returns kind:installation', async () => {
+    const { queue } = makeQueue();
+    const { db, tx, insertResult } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'created', ...installationPayload },
+      { queue, db, now: () => new Date('2026-06-04T00:00:00Z') },
+    );
+    expect(r).toEqual({ kind: 'installation', action: 'created', installationId: 99 });
+    expect(tx.insert).toHaveBeenCalledOnce();
+    // Verify the .values() argument contains the correct fields.
+    const valuesInsertResult = tx.insert.mock.results[0]?.value as {
+      values: ReturnType<typeof vi.fn>;
+    };
+    const valuesArg = valuesInsertResult.values.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(valuesArg.installationId).toEqual(BigInt(99));
+    expect(valuesArg.appId).toEqual(BigInt(42));
+    expect(valuesArg.accountLogin).toBe('acme-org');
+    expect(valuesArg.accountType).toBe('Organization');
+    expect(valuesArg.setupAction).toBe('install');
+    expect(valuesArg.suspendedAt).toBeNull();
+    // Verify the .onConflictDoUpdate().set branch also clears suspendedAt
+    // (this is the code path that runs for an already-existing row).
+    const conflictArg = insertResult.onConflictDoUpdate.mock.calls[0]?.[0] as {
+      set: Record<string, unknown>;
+    };
+    expect(conflictArg.set.suspendedAt).toBeNull();
+  });
+
+  it('installation.unsuspend upserts with suspendedAt:null', async () => {
+    const { queue } = makeQueue();
+    const { db, tx, insertResult } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'unsuspend', ...installationPayload },
+      { queue, db, now: () => new Date('2026-06-04T00:00:00Z') },
+    );
+    expect(r).toEqual({ kind: 'installation', action: 'unsuspend', installationId: 99 });
+    expect(tx.insert).toHaveBeenCalledOnce();
+    // Verify suspendedAt is set to null in both the .values() and .onConflictDoUpdate() calls.
+    const valuesCall = tx.insert.mock.results[0]?.value as {
+      values: ReturnType<typeof vi.fn>;
+    };
+    const valuesArg = valuesCall.values.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(valuesArg.suspendedAt).toBeNull();
+    // Also assert the conflict-update branch (the realistic path for an already-existing row).
+    const conflictArg = insertResult.onConflictDoUpdate.mock.calls[0]?.[0] as {
+      set: Record<string, unknown>;
+    };
+    expect(conflictArg.set.suspendedAt).toBeNull();
+  });
+
+  it('installation.suspend updates suspendedAt and returns kind:installation', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'suspend', ...installationPayload },
+      { queue, db, now: () => new Date('2026-06-04T00:00:00Z') },
+    );
+    expect(r).toEqual({ kind: 'installation', action: 'suspend', installationId: 99 });
+    expect(tx.update).toHaveBeenCalledOnce();
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('installation.deleted physically deletes the row and returns kind:installation', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'deleted', ...installationPayload },
+      { queue, db, now: () => new Date('2026-06-04T00:00:00Z') },
+    );
+    expect(r).toEqual({ kind: 'installation', action: 'deleted', installationId: 99 });
+    expect(tx.delete).toHaveBeenCalledOnce();
+    expect(tx.insert).not.toHaveBeenCalled();
+    expect(tx.update).not.toHaveBeenCalled();
+  });
+
+  it('installation event with unknown action returns noop without DB write', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'new_permissions_accepted', ...installationPayload },
+      { queue, db },
+    );
+    expect(r.kind).toBe('noop');
+    expect(tx.insert).not.toHaveBeenCalled();
+    expect(tx.update).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
+  });
+
+  it('installation event with no db falls back to noop (db-not-injected path)', async () => {
+    const { queue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'created', ...installationPayload },
+      { queue },
+    );
+    expect(r.kind).toBe('noop');
+  });
+
+  it('installation.created missing account fields returns ignored without DB write', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const r = await handleWebhook(
+      ctx,
+      'installation',
+      { action: 'created', installation: { id: 99, app_id: 42 } },
+      { queue, db },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('installation event missing installation.id returns ignored', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const r = await handleWebhook(ctx, 'installation', { action: 'created' }, { queue, db });
+    expect(r.kind).toBe('ignored');
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('installation_repositories continues to be a no-op', async () => {
+    const { queue, enqueue } = makeQueue();
+    const { db } = makeDb();
+    const r = await handleWebhook(ctx, 'installation_repositories', {}, { queue, db });
+    expect(r.kind).toBe('noop');
     expect(enqueue).not.toHaveBeenCalled();
   });
 });
