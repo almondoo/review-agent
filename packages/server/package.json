@@ -44,9 +44,11 @@
     "@opentelemetry/sdk-node": "0.55.0",
     "@opentelemetry/sdk-trace-base": "1.28.0",
     "@opentelemetry/semantic-conventions": "1.28.0",
+    "@octokit/rest": "21.0.2",
     "@review-agent/core": "workspace:*",
     "@review-agent/db": "workspace:*",
     "@review-agent/platform-codecommit": "workspace:*",
+    "@review-agent/platform-github": "workspace:*",
     "drizzle-orm": "0.45.2",
     "hono": "4.12.16",
     "zod": "3.25.76"

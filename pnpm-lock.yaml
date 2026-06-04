@@ -454,6 +454,9 @@ importers:
       '@hono/node-server':
         specifier: 1.19.14
         version: 1.19.14(hono@4.12.16)
+      '@octokit/rest':
+        specifier: 21.0.2
+        version: 21.0.2
       '@opentelemetry/api':
         specifier: 1.9.0
         version: 1.9.0
@@ -481,6 +484,9 @@ importers:
       '@review-agent/platform-codecommit':
         specifier: workspace:*
         version: link:../platform-codecommit
+      '@review-agent/platform-github':
+        specifier: workspace:*
+        version: link:../platform-github
       drizzle-orm:
         specifier: '>=0.45.2'
         version: 0.45.2(@opentelemetry/api@1.9.0)(better-sqlite3@11.10.0)(postgres@3.4.5)
