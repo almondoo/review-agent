@@ -71,6 +71,13 @@
       "when": 1748995200000,
       "tag": "0009_review_state_paused",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1749081600000,
+      "tag": "0010_conversation_threads",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,23 @@ import {
   parseSlashCommand,
 } from '../utils/parse-command.js';
 
+export type ConversationHandlerInput = {
+  readonly installationId: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  /** Root comment id (the `in_reply_to_id` from the reply event). */
+  readonly rootCommentId: number;
+  /** The id of the reply comment that triggered this event. */
+  readonly replyCommentId: number;
+  /** The comment body text containing the `@review-agent` mention. */
+  readonly body: string;
+  /** Diff hunk the original finding is anchored to, from the event payload. */
+  readonly diffHunk?: string;
+  /** Login of the user who sent the reply. */
+  readonly sender: string;
+};
+
 export type WebhookHandlerDeps = {
   readonly queue: QueueClient;
   readonly now?: () => Date;
@@ -25,6 +42,27 @@ export type WebhookHandlerDeps = {
    * because no authz wiring is provided (fail-closed).
    */
   readonly checkAuthz?: (input: Omit<GithubAuthzInput, 'octokit'>) => Promise<FeedbackAuthzResult>;
+  /**
+   * Optional handler for `@review-agent` mentions in inline reply threads
+   * (#149 conversation feature). When provided, `pull_request_review_comment`
+   * events that are thread replies containing `@review-agent` are routed here
+   * instead of (or before) the legacy `@review-agent review` command path.
+   *
+   * The handler is responsible for async dispatch (e.g., enqueuing to SQS)
+   * and returns a `ConversationReplyOutcome`. When absent, thread reply
+   * mentions fall through to the legacy command parser (which will
+   * treat `@review-agent <word>` as a command).
+   */
+  readonly handleConversation?: (
+    input: ConversationHandlerInput,
+  ) => Promise<ConversationReplyOutcome>;
+  /**
+   * Returns the bot's own GitHub login (e.g. `review-agent[bot]`). Used
+   * by the self-reply guard to block the agent from replying to itself.
+   * When absent the self-reply guard is disabled (fail-open — may produce
+   * reply loops in misconfigured deployments; operators should wire this).
+   */
+  readonly getBotLogin?: () => Promise<string>;
   /**
    * Postgres client for persisting `installation` lifecycle events into
    * `github_installations` and for reading/writing `review_state` (pause
@@ -107,12 +145,33 @@ type PrEventBody = {
 };
 
 type CommentEventBody = PrEventBody & {
-  comment?: { body?: string; user?: { login?: string } };
+  comment?: {
+    body?: string;
+    user?: { login?: string };
+    id?: number;
+    in_reply_to_id?: number;
+    diff_hunk?: string;
+  };
   sender?: { login?: string };
   issue?: { pull_request?: object; number?: number };
 };
 
 export type FeedbackCommandOutcome = 'recorded' | 'unauthorized' | 'unresolved' | 'rate_limited';
+
+/**
+ * Outcome of routing a `pull_request_review_comment` reply that contains a
+ * `@review-agent` mention (#149).
+ *
+ * The webhook handler itself does NOT execute the LLM call — it hands off to
+ * `deps.handleConversation` (injected by the server layer) so the actual LLM
+ * invocation can happen asynchronously (SQS / Lambda) without blocking the
+ * webhook response.
+ *
+ * `dispatched` — the conversation handler was invoked and accepted the event.
+ * `unauthorized` — the commenter lacks write permission; silently ignored.
+ * `self_reply` — the sender is the bot itself; guard fired, no action.
+ */
+export type ConversationReplyOutcome = 'dispatched' | 'unauthorized' | 'self_reply';
 
 export type WebhookResult =
   | { kind: 'ignored'; reason: string }
@@ -129,6 +188,12 @@ export type WebhookResult =
       signal: 'thumbs_up' | 'thumbs_down' | 'dismissed';
       outcome: FeedbackCommandOutcome;
       fpPrefix?: string;
+      prNumber: number;
+    }
+  | {
+      kind: 'conversation_reply';
+      outcome: ConversationReplyOutcome;
+      commentId: number;
       prNumber: number;
     };
 
@@ -287,6 +352,103 @@ export async function handleWebhook(
       return { kind: 'ignored', reason: 'issue comment, not PR' };
     }
     const commentText = ce.comment?.body ?? '';
+
+    // #149: Inline thread reply conversation routing.
+    //
+    // When a `pull_request_review_comment` event is a reply
+    // (`comment.in_reply_to_id` is set) and the body mentions
+    // `@review-agent`, route to the conversation handler BEFORE the
+    // feedback/slash/legacy command parsers. This is the primary path
+    // for the conversational-reply feature. If no `handleConversation`
+    // is wired, fall through to the legacy command parser so existing
+    // `@review-agent review` commands in review-comment bodies still work.
+    if (
+      event === 'pull_request_review_comment' &&
+      deps.handleConversation &&
+      typeof ce.comment?.in_reply_to_id === 'number'
+    ) {
+      const prBody = body as {
+        action?: string;
+        comment?: {
+          id?: number;
+          in_reply_to_id?: number;
+          body?: string;
+          diff_hunk?: string;
+        };
+        sender?: { login?: string };
+        installation?: { id?: number };
+        repository?: { owner?: { login?: string }; name?: string };
+        pull_request?: { number?: number };
+      };
+      // Only process `created` actions (not `edited` / `deleted`).
+      if (prBody.action !== 'created') {
+        return { kind: 'ignored', reason: 'pull_request_review_comment action is not created' };
+      }
+      const mention = (prBody.comment?.body ?? '').toLowerCase();
+      if (!mention.includes('@review-agent')) {
+        return { kind: 'ignored', reason: 'no @review-agent mention in reply' };
+      }
+      const installationId = prBody.installation?.id;
+      const owner = prBody.repository?.owner?.login;
+      const repo = prBody.repository?.name;
+      const prNumber = prBody.pull_request?.number;
+      const sender = prBody.sender?.login ?? '';
+      const replyCommentId = prBody.comment?.id;
+      const rootCommentId = prBody.comment?.in_reply_to_id;
+
+      if (
+        typeof installationId !== 'number' ||
+        !owner ||
+        !repo ||
+        typeof prNumber !== 'number' ||
+        typeof replyCommentId !== 'number' ||
+        typeof rootCommentId !== 'number'
+      ) {
+        return { kind: 'ignored', reason: 'conversation reply: missing required fields' };
+      }
+
+      // Self-reply guard: never reply to our own comments.
+      if (deps.getBotLogin) {
+        const botLogin = await deps.getBotLogin();
+        if (sender === botLogin) {
+          return {
+            kind: 'conversation_reply',
+            outcome: 'self_reply',
+            commentId: replyCommentId,
+            prNumber,
+          };
+        }
+      }
+
+      // Authorization: reuse the same write-permission check as commands.
+      const authz = await checkCommandAuthz(ce, deps);
+      if (!authz.allowed) {
+        return {
+          kind: 'conversation_reply',
+          outcome: 'unauthorized',
+          commentId: replyCommentId,
+          prNumber,
+        };
+      }
+
+      const outcome = await deps.handleConversation({
+        installationId,
+        owner,
+        repo,
+        prNumber,
+        rootCommentId,
+        replyCommentId,
+        body: prBody.comment?.body ?? '',
+        ...(prBody.comment?.diff_hunk !== undefined ? { diffHunk: prBody.comment.diff_hunk } : {}),
+        sender,
+      });
+      return {
+        kind: 'conversation_reply',
+        outcome,
+        commentId: replyCommentId,
+        prNumber,
+      };
+    }
 
     // v1.2 #95: recognise `/feedback ...` *before* the legacy
     // `@review-agent <cmd>` parser so the feedback path is the

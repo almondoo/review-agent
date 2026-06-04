@@ -1507,3 +1507,191 @@ describe('handleWebhook — installation events with db', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #149 conversation reply routing
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — conversation reply (#149)', () => {
+  const baseConversationBody = {
+    action: 'created',
+    installation: { id: 11 },
+    repository: { owner: { login: 'o' }, name: 'r' },
+    pull_request: { number: 42 },
+    sender: { login: 'alice' },
+    comment: {
+      id: 200,
+      in_reply_to_id: 100,
+      body: 'Hey @review-agent, is this actually a bug?',
+      diff_hunk: '@@ -1,3 +1,4 @@\n+code here',
+    },
+  };
+
+  it('happy path: routes to handleConversation and returns conversation_reply dispatched', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+      expect(r.commentId).toBe(200);
+      expect(r.prNumber).toBe(42);
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
+    const callArg = handleConversation.mock.calls[0]?.[0];
+    expect(callArg.installationId).toBe(11);
+    expect(callArg.owner).toBe('o');
+    expect(callArg.repo).toBe('r');
+    expect(callArg.prNumber).toBe(42);
+    expect(callArg.rootCommentId).toBe(100);
+    expect(callArg.replyCommentId).toBe(200);
+    expect(callArg.sender).toBe('alice');
+    expect(callArg.diffHunk).toBe('@@ -1,3 +1,4 @@\n+code here');
+  });
+
+  it('self-reply guard: returns self_reply when sender matches bot login', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const body = { ...baseConversationBody, sender: { login: 'review-agent[bot]' } };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('self_reply');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('self-reply guard: passes through when sender does not match bot login', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
+  });
+
+  it('unauthorized: returns unauthorized outcome when checkAuthz denies', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('unauthorized');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('ignores when no @review-agent mention in reply body', async () => {
+    const { queue } = makeQueue();
+    const handleConversation = vi.fn();
+    const body = {
+      ...baseConversationBody,
+      comment: { ...baseConversationBody.comment, body: 'looks good to me' },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('ignores when event action is not created (e.g. edited)', async () => {
+    const { queue } = makeQueue();
+    const handleConversation = vi.fn();
+    const body = { ...baseConversationBody, action: 'edited' };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('falls through to legacy command parser when no in_reply_to_id (top-level review comment)', async () => {
+    // A top-level pull_request_review_comment (not a reply) should NOT
+    // be treated as a conversation event — fall through to legacy @review-agent parsing.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn();
+    const body = {
+      action: 'created',
+      installation: { id: 11 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 42 },
+      sender: { login: 'alice' },
+      // No in_reply_to_id — this is a top-level review comment
+      comment: { id: 300, body: '@review-agent review', user: { login: 'alice' } },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    // Falls through to legacy @review-agent review command → enqueued
+    expect(r.kind).toBe('enqueued');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('falls through to feedback/slash/legacy parser when handleConversation not wired', async () => {
+    // Without handleConversation wired, even an inline reply should fall
+    // through to the existing command parsers.
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    // No handleConversation in deps
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+    });
+    // Falls through to legacy parser: '@review-agent' + random word → ignored/noop
+    expect(['ignored', 'noop'].includes(r.kind)).toBe(true);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores when missing required fields (no installation id)', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn();
+    const body = {
+      action: 'created',
+      // no installation
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 42 },
+      sender: { login: 'alice' },
+      comment: { id: 200, in_reply_to_id: 100, body: '@review-agent explain this' },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+});

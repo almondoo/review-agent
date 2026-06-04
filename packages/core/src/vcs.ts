@@ -109,6 +109,17 @@ export type VcsCapabilities = {
   readonly approvalEvent: 'github' | 'codecommit' | 'none';
   /** `pr.commitMessages` is populated. False on CodeCommit (no per-PR commit-listing API). */
   readonly commitMessages: boolean;
+  /**
+   * Whether the adapter supports posting a threaded reply to an existing
+   * inline review comment (#149 conversational replies).
+   *
+   * - `true`  — `postReply` will call the platform's reply-to-comment API
+   *             (GitHub: `pulls.createReplyForReviewComment`).
+   * - `false` — `postReply` is a no-op; the platform does not have a
+   *             native thread-reply mechanism (CodeCommit). Callers should
+   *             guard on this capability before invoking `postReply`.
+   */
+  readonly conversationReply: boolean;
 };
 
 /**
@@ -125,13 +136,26 @@ export type VcsReader = {
 };
 
 /**
- * Write surface: post the review (inline comments + event) and the
- * summary comment. Separated so tests can stub posts without
- * implementing reads.
+ * Write surface: post the review (inline comments + event), the
+ * summary comment, and threaded inline-comment replies (#149).
+ * Separated so tests can stub posts without implementing reads.
  */
 export type VcsWriter = {
   postReview(ref: PRRef, review: ReviewPayload): Promise<void>;
   postSummary(ref: PRRef, body: string): Promise<{ commentId: string }>;
+  /**
+   * Post a reply into an existing inline review comment thread (#149).
+   *
+   * `commentId` is the id of the root comment the user is replying to
+   * (GitHub: `pull_request_review_comment.id`). The body is posted as a
+   * child reply in the same thread.
+   *
+   * Adapters that do not support threaded replies (CodeCommit) advertise
+   * `capabilities.conversationReply = false` and may return immediately
+   * without any API call. Callers SHOULD check the capability flag before
+   * invoking this method to avoid silent no-ops.
+   */
+  postReply(ref: PRRef, commentId: string | number, body: string): Promise<void>;
 };
 
 /**

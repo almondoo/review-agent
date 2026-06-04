@@ -2,6 +2,7 @@ import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import { auditLog } from '../audit-log.js';
 import { installationSecrets } from '../byok-store.js';
+import { conversationThreads } from '../conversation-state.js';
 import { costLedger, installationCostDaily } from '../cost-ledger.js';
 import { githubInstallations } from '../github-installations.js';
 import { installationTokens } from '../installation-tokens.js';
@@ -183,6 +184,34 @@ describe('db schema shape', () => {
     }
   });
 
+  it('conversation_threads has required columns and unique natural key constraint', () => {
+    const cfg = getTableConfig(conversationThreads);
+    expect(cfg.name).toBe('conversation_threads');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'id',
+      'installation_id',
+      'repo',
+      'pr_number',
+      'root_comment_id',
+      'turn_count',
+      'last_turn_at',
+      'created_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+    // turn_count defaults to 0 and is NOT NULL
+    const turnCountCol = cfg.columns.find((c) => c.name === 'turn_count');
+    expect(turnCountCol?.notNull).toBe(true);
+    expect(turnCountCol?.hasDefault).toBe(true);
+    // Unique constraint on natural key
+    const uniq = cfg.uniqueConstraints.find((u) => u.name === 'conversation_threads_key_uniq');
+    expect(uniq, 'conversation_threads_key_uniq unique constraint must exist').toBeDefined();
+    expect(uniq?.columns.map((c) => c.name).sort()).toEqual(
+      ['installation_id', 'pr_number', 'repo', 'root_comment_id'].sort(),
+    );
+  });
+
   const tenantScoped = [
     ['review_state', reviewState],
     ['review_history', reviewHistory],
@@ -193,6 +222,7 @@ describe('db schema shape', () => {
     ['installation_secrets', installationSecrets],
     ['review_eval_event', reviewEvalEvent],
     ['github_installations', githubInstallations],
+    ['conversation_threads', conversationThreads],
   ] as const;
 
   for (const [name, table] of tenantScoped) {

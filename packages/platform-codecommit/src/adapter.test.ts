@@ -670,13 +670,14 @@ describe('createCodecommitVCS — exposed metadata', () => {
     expect(vcs.platform).toBe('codecommit');
   });
 
-  it('declares CodeCommit-specific capabilities (no clone, postgres-only state, codecommit approval, no commit msgs)', () => {
+  it('declares CodeCommit-specific capabilities (no clone, postgres-only state, codecommit approval, no commit msgs, no conversationReply)', () => {
     const vcs = createCodecommitVCS({ client: fakeClient({}) });
     expect(vcs.capabilities).toEqual({
       clone: false,
       stateComment: 'postgres-only',
       approvalEvent: 'codecommit',
       commitMessages: false,
+      conversationReply: false,
     });
   });
 });
