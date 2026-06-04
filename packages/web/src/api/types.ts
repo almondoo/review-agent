@@ -33,6 +33,7 @@ export type OverviewMetrics = {
 export type GithubIntegration = {
   configured: boolean;
   appId: string | null;
+  appSlug: string | null;
   installationCount: number;
 };
 
@@ -117,6 +118,30 @@ export type ReviewEventDetail = ReviewEvent & {
   provider: { name: string; model: string };
   systemPromptAtReview: string | null;
   externalUrl: string | null;
+};
+
+// --- GitHub App onboarding ---
+
+export type InstallationRepo = {
+  id: number;
+  fullName: string;
+  private: boolean;
+  registered: boolean;
+};
+
+export type InstallationReposResponse = {
+  repos: InstallationRepo[];
+};
+
+export type BulkCreateRepoBody = {
+  installationId: number;
+  names: string[];
+};
+
+export type BulkCreateRepoResponse = {
+  created: string[];
+  alreadyExists: string[];
+  errors: { name: string; message: string }[];
 };
 
 // --- BYOK LLM keys ---
