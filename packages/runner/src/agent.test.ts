@@ -820,7 +820,16 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
       { path: 'src/b.ts', patch: TINY_ADD },
       { path: 'src/c.ts', patch: TINY_ADD },
     ]);
-    const result = await runReview({ ...baseJob, diffText, maxFiles: 2 }, provider);
+    // `largePr.enabled: false` opts into the legacy cap-skip path (no chunking).
+    const result = await runReview(
+      {
+        ...baseJob,
+        diffText,
+        maxFiles: 2,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
+      provider,
+    );
     expect(result.aborted?.reason).toBe('max_files_exceeded');
     expect(result.summary).toBe(
       'Review skipped: PR exceeds the max_files cap (3 files > limit 2). Adjust reviews.max_files in .review-agent.yml or reduce PR scope.',
@@ -842,7 +851,16 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
       { path: 'src/a.ts', patch: '@@ -1 +1 @@\n+a\n+b' },
       { path: 'src/b.ts', patch: '@@ -1 +1 @@\n+c\n+d' },
     ]);
-    const result = await runReview({ ...baseJob, diffText, maxDiffLines: 3 }, provider);
+    // `largePr.enabled: false` opts into the legacy cap-skip path (no chunking).
+    const result = await runReview(
+      {
+        ...baseJob,
+        diffText,
+        maxDiffLines: 3,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
+      provider,
+    );
     expect(result.aborted?.reason).toBe('max_diff_lines_exceeded');
     expect(result.summary).toBe(
       'Review skipped: PR exceeds the max_diff_lines cap (4 lines > limit 3). Adjust reviews.max_diff_lines in .review-agent.yml or reduce PR scope.',
@@ -913,6 +931,7 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
     // Both caps would fire. The order is documented: max_files first,
     // then max_diff_lines. Pinning here so a future refactor cannot
     // silently swap the priority and emit a confusing summary.
+    // `largePr.enabled: false` opts into the legacy cap-skip path.
     const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
     const provider = makeProvider({ generateReview });
     const diffText = buildDiff([
@@ -920,7 +939,13 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
       { path: 'src/b.ts', patch: '@@ -1 +1 @@\n+d\n+e\n+f' },
     ]);
     const result = await runReview(
-      { ...baseJob, diffText, maxFiles: 1, maxDiffLines: 1 },
+      {
+        ...baseJob,
+        diffText,
+        maxFiles: 1,
+        maxDiffLines: 1,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
       provider,
     );
     expect(result.aborted?.reason).toBe('max_files_exceeded');
@@ -934,6 +959,8 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
     // skip — NOT a thrown error. Operators get a single,
     // actionable signal ("PR too big") instead of a stack trace
     // for a finding they opted out of acting on by setting the cap.
+    // `largePr.enabled: false` opts into the legacy cap-skip path where
+    // caps fire before any scanning (spec §10 — cost-guard alignment).
     const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
     const provider = makeProvider({ generateReview });
     const diffText = buildDiff([
@@ -941,7 +968,15 @@ describe('runReview — reviews.{path_filters,max_files,max_diff_lines} caps (#8
       { path: 'src/b.ts', patch: TINY_ADD },
       { path: 'src/c.ts', patch: TINY_ADD },
     ]);
-    const result = await runReview({ ...baseJob, diffText, maxFiles: 2 }, provider);
+    const result = await runReview(
+      {
+        ...baseJob,
+        diffText,
+        maxFiles: 2,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
+      provider,
+    );
     expect(result.aborted?.reason).toBe('max_files_exceeded');
     expect(generateReview).not.toHaveBeenCalled();
   });
@@ -1287,11 +1322,21 @@ describe('runReview — eval recorder integration (#91 / spec v1.2 Phase 2)', ()
     const evalRecorder = vi.fn(async () => undefined);
     // Two-file diff that exceeds the maxFiles=1 cap and triggers
     // the `max_files_exceeded` short-circuit before the LLM call.
+    // `largePr.enabled: false` opts into the legacy cap-skip path.
     const diffText = ['--- a.ts\n@@ -1 +1 @@\n+a', '--- b.ts\n@@ -1 +1 @@\n+b'].join('\n');
-    await runReview({ ...baseJob, maxFiles: 1, diffText }, provider, {
-      evalRecorder,
-      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
-    });
+    await runReview(
+      {
+        ...baseJob,
+        maxFiles: 1,
+        diffText,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
+      provider,
+      {
+        evalRecorder,
+        evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      },
+    );
     const event = evalRecorder.mock.calls[0]?.[0];
     expect(event?.abortReason).toBe('max_files_exceeded');
     expect(event?.commentCount).toBe(0);
@@ -1966,5 +2011,263 @@ describe('runReview — suggestion secret scan (#152)', () => {
     expect(c?.body).toBe('Clean body.');
     // Suggestion should have the secret redacted
     expect(c?.suggestion).toBe('const v = "[REDACTED:custom-0]";');
+  });
+});
+
+describe('runReview — large_pr chunked review (#158)', () => {
+  // Helper: build a `--- ${path}\n${patch}` joined-by-`\n` diff payload.
+  function buildDiff(
+    files: ReadonlyArray<{ readonly path: string; readonly patch: string }>,
+  ): string {
+    return files.map((f) => `--- ${f.path}\n${f.patch}`).join('\n');
+  }
+
+  const TINY_ADD = '@@ -1 +1 @@\n+line';
+
+  // Base job with tight caps so a 3-file diff triggers chunking
+  const chunkBaseJob: ReviewJob = {
+    ...baseJob,
+    maxFiles: 2,
+    maxDiffLines: 10,
+    // largePr defaults to enabled=true so chunk path activates.
+  };
+
+  it('single-pass path: caps within bounds proceeds normally (back-compat)', async () => {
+    // A 2-file diff with maxFiles=2 is exactly at the cap boundary.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...chunkBaseJob, diffText }, provider);
+    expect(result.aborted).toBeUndefined();
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    expect(result.exclusionReport).toBeUndefined();
+  });
+
+  it('chunk path: 3-file diff with maxFiles=2 reviews first 2 files then 1 file', async () => {
+    // maxFiles=2, 3 files → chunk 1 has [a.ts, b.ts], chunk 2 has [c.ts].
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...chunkBaseJob, diffText }, provider);
+    expect(result.aborted).toBeUndefined();
+    // Both chunks reviewed → 2 LLM calls (one per chunk)
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    // Comments from both chunks merged; cross-chunk dedup removes exact duplicates.
+    // validOutput has 2 unique comments (different paths) so both appear.
+    expect(result.comments).toHaveLength(2);
+    // Summary contains coverage report
+    expect(result.summary).toContain('Large-PR review');
+  });
+
+  it('cross-chunk dedup: identical findings emitted by two chunks are deduplicated to one', async () => {
+    // Both chunks produce the same comment (same path/line/severity).
+    // The cross-chunk seenFingerprints Set should drop the duplicate.
+    const sameComment: ReviewOutput = {
+      summary: 'Duplicate.',
+      comments: [
+        { path: 'src/a.ts', line: 1, side: 'RIGHT', body: 'Fix this.', severity: 'minor' },
+      ],
+      tokensUsed: { input: 100, output: 20 },
+      costUsd: 0.001,
+    };
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => sameComment);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...chunkBaseJob, diffText }, provider);
+    // Even though both chunks emit the same comment, dedup keeps only one.
+    expect(result.comments).toHaveLength(1);
+    expect(result.droppedDuplicates).toBe(1);
+  });
+
+  it('max_chunks: files in chunks beyond max_chunks are max_chunks_exceeded', async () => {
+    // 6 files, maxFiles=2 → 3 chunks needed. max_chunks=1 → only 1 chunk reviewed,
+    // 4 files in chunks 2-3 recorded as max_chunks_exceeded.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+      { path: 'src/d.ts', patch: TINY_ADD },
+      { path: 'src/e.ts', patch: TINY_ADD },
+      { path: 'src/f.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      {
+        ...chunkBaseJob,
+        diffText,
+        largePr: { enabled: true, maxChunks: 1, prioritization: ['diff_size'] },
+      },
+      provider,
+    );
+    expect(generateReview).toHaveBeenCalledTimes(1); // only 1 chunk reviewed
+    const maxChunksExcluded = result.exclusionReport?.excludedFiles.filter(
+      (f) => f.reason === 'max_chunks_exceeded',
+    );
+    expect(maxChunksExcluded).toHaveLength(4); // 4 files in skipped chunks
+    expect(result.exclusionReport?.capsApplied).toContain('max_chunks');
+    // Coverage summary includes max_chunks_exceeded message
+    expect(result.summary).toContain('max_chunks_exceeded');
+  });
+
+  it('budget_exhausted: cost cap mid-review records remaining files as budget_exhausted', async () => {
+    // First chunk succeeds; second chunk throws CostExceededError.
+    let callCount = 0;
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => {
+      callCount += 1;
+      if (callCount > 1) throw new CostExceededError(1.0, 1.5);
+      return validOutput;
+    });
+    const provider = makeProvider({
+      generateReview,
+      // estimateCost must not fire CostExceededError — the guard fires after.
+      estimateCost: vi.fn(async () => ({ inputTokens: 100, estimatedUsd: 0.0001 })),
+    });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...chunkBaseJob, diffText }, provider);
+    const budgetExcluded = result.exclusionReport?.excludedFiles.filter(
+      (f) => f.reason === 'budget_exhausted',
+    );
+    // src/c.ts was in the second chunk which hit the cost cap
+    expect(budgetExcluded?.length).toBeGreaterThan(0);
+    expect(result.exclusionReport?.capsApplied).toContain('budget_exhausted');
+    expect(result.summary).toContain('budget_exhausted');
+  });
+
+  it('largePr.enabled=false: legacy skip when caps exceeded (back-compat)', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      {
+        ...chunkBaseJob,
+        diffText,
+        largePr: { enabled: false, maxChunks: 5, prioritization: [] },
+      },
+      provider,
+    );
+    expect(result.aborted?.reason).toBe('max_files_exceeded');
+    expect(generateReview).not.toHaveBeenCalled();
+  });
+
+  it('CostState is shared across chunks (totalCostUsd accumulates across all chunks)', async () => {
+    // Each chunk costs 0.0045. Two chunks → total cost should be 0.009.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => ({
+      ...validOutput,
+      costUsd: 0.0045,
+    }));
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview({ ...chunkBaseJob, diffText }, provider);
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    // costUsd reflects both chunks: cost-guard state accumulates across chunks.
+    expect(result.costUsd).toBeCloseTo(0.009);
+  });
+
+  it('prioritization: path_instructions matched files are reviewed first', async () => {
+    // tests/x.test.ts matches path_instructions glob → should be in chunk 1 (highest priority).
+    const callOrder: string[] = [];
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async (_input: ReviewInput) => {
+      callOrder.push(_input.diffText.includes('tests/x.test.ts') ? 'test' : 'other');
+      return validOutput;
+    });
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'tests/x.test.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      {
+        ...chunkBaseJob,
+        diffText,
+        pathInstructions: [{ pattern: 'tests/**', text: 'focus on test quality' }],
+        largePr: {
+          enabled: true,
+          maxChunks: 5,
+          prioritization: ['path_instructions', 'diff_size'],
+        },
+      },
+      provider,
+    );
+    expect(result.aborted).toBeUndefined();
+    // First call should contain tests/x.test.ts (it was prioritized first).
+    expect(callOrder[0]).toBe('test');
+  });
+
+  it('chunk path: no exclusionReport when all files fit in chunks (no skipped files)', async () => {
+    // 3 files, maxFiles=2 → 2 chunks. All files reviewed, no exclusions.
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      {
+        ...chunkBaseJob,
+        diffText,
+        largePr: { enabled: true, maxChunks: 10, prioritization: ['diff_size'] },
+      },
+      provider,
+    );
+    // exclusionReport may be set (capsApplied from max_files cap) but has no excluded files
+    // from max_chunks or budget_exhausted. All files reviewed.
+    expect(generateReview).toHaveBeenCalledTimes(2);
+    expect(result.aborted).toBeUndefined();
+    // No path_filter, no max_chunks, no budget_exhausted exclusions.
+    const nonCapExclusions = result.exclusionReport?.excludedFiles ?? [];
+    expect(nonCapExclusions.filter((f) => f.reason !== 'max_files_cap')).toHaveLength(0);
+  });
+
+  it('coverage summary: exclusionReport captures path_filter exclusions alongside chunk exclusions', async () => {
+    // path_filter removes vendor/lib.js; remaining 3 files trigger chunking (maxFiles=2).
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    const diffText = buildDiff([
+      { path: 'src/a.ts', patch: TINY_ADD },
+      { path: 'src/b.ts', patch: TINY_ADD },
+      { path: 'src/c.ts', patch: TINY_ADD },
+      { path: 'vendor/lib.js', patch: TINY_ADD },
+    ]);
+    const result = await runReview(
+      {
+        ...chunkBaseJob,
+        diffText,
+        pathFilters: ['vendor/**'],
+        largePr: { enabled: true, maxChunks: 5, prioritization: ['diff_size'] },
+      },
+      provider,
+    );
+    const pathFiltered = result.exclusionReport?.excludedFiles.filter(
+      (f) => f.reason === 'path_filter',
+    );
+    expect(pathFiltered?.map((f) => f.path)).toContain('vendor/lib.js');
+    // All 3 remaining files reviewed (fit in 2 chunks with maxFiles=2)
+    expect(generateReview).toHaveBeenCalledTimes(2);
   });
 });

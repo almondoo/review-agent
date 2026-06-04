@@ -2,6 +2,7 @@ import {
   type Category,
   CONFIDENCES,
   type Confidence,
+  CostExceededError,
   computeReviewEvent,
   createReviewOutputSchema,
   globToRegExp,
@@ -16,8 +17,11 @@ import { collectAutoFetchContext } from './auto-fetch.js';
 import {
   applyPathFilters,
   countDiffLines,
+  type ParsedDiff,
   parseDiffByFile,
   reassembleDiff,
+  sortByPrioritization,
+  splitIntoChunks,
 } from './diff-filter.js';
 import {
   applyRedactions,
@@ -131,6 +135,51 @@ function buildCapSkipResult(
     aborted: { reason, internalIssues: [] },
     exclusionReport,
   };
+}
+
+/**
+ * Build the operator-facing coverage summary for chunked large-PR reviews
+ * (#158). Describes how many files were reviewed, in how many chunks, and
+ * which files were skipped and why. Posted as part of the PR summary so
+ * operators know the review was partial (AC#3: no silent truncation).
+ *
+ * Only non-empty exclusion groups are included in the message so the
+ * output reads cleanly for the common case where only one skip reason applies.
+ */
+function buildChunkCoverageSummary(
+  reviewedCount: number,
+  chunkCount: number,
+  excludedFiles: ReadonlyArray<ExcludedFile>,
+): string {
+  const maxChunksFiles = excludedFiles
+    .filter((f) => f.reason === 'max_chunks_exceeded')
+    .map((f) => f.path);
+  const budgetFiles = excludedFiles
+    .filter((f) => f.reason === 'budget_exhausted')
+    .map((f) => f.path);
+  const pathFilterFiles = excludedFiles
+    .filter((f) => f.reason === 'path_filter')
+    .map((f) => f.path);
+
+  const parts: string[] = [
+    `Large-PR review: reviewed ${reviewedCount} file${reviewedCount !== 1 ? 's' : ''} across ${chunkCount} chunk${chunkCount !== 1 ? 's' : ''}.`,
+  ];
+  if (maxChunksFiles.length > 0) {
+    parts.push(
+      `Skipped ${maxChunksFiles.length} file${maxChunksFiles.length !== 1 ? 's' : ''} (max_chunks_exceeded — increase large_pr.max_chunks to review more).`,
+    );
+  }
+  if (budgetFiles.length > 0) {
+    parts.push(
+      `Skipped ${budgetFiles.length} file${budgetFiles.length !== 1 ? 's' : ''} (budget_exhausted — cost cap reached mid-review).`,
+    );
+  }
+  if (pathFilterFiles.length > 0) {
+    parts.push(
+      `Skipped ${pathFilterFiles.length} file${pathFilterFiles.length !== 1 ? 's' : ''} (path_filter).`,
+    );
+  }
+  return parts.join(' ');
 }
 
 /**
@@ -355,26 +404,37 @@ async function runReviewInner(
           .map((f) => ({ path: f.path, reason: 'path_filter' as const }))
       : [];
 
-  if (filteredDiff.files.length > job.maxFiles) {
-    // All remaining files (post-filter) are "excluded" by the cap.
-    const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
-      path: f.path,
-      reason: 'max_files_cap' as const,
-    }));
-    const exclusionReport: ExclusionReport = {
-      excludedFiles: [...pathFilterExclusions, ...capExclusions],
-      capsApplied: ['max_files'],
-    };
-    return buildCapSkipResult(
-      provider,
-      'max_files_exceeded',
-      maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
-      exclusionReport,
-    );
-  }
+  // large_pr defaults: enabled=true, max_chunks=5, prioritization=['path_instructions','diff_size']
+  const largePrConfig = job.largePr ?? {
+    enabled: true,
+    maxChunks: 5,
+    prioritization: ['path_instructions', 'diff_size'] as const,
+  };
+
+  const exceedsFiles = filteredDiff.files.length > job.maxFiles;
   const diffLineCount = countDiffLines(filteredDiff);
-  if (diffLineCount > job.maxDiffLines) {
-    // All remaining files (post-filter) are "excluded" by the cap.
+  const exceedsLines = diffLineCount > job.maxDiffLines;
+  const capsExceeded = exceedsFiles || exceedsLines;
+
+  // Legacy skip path: largePr.enabled === false (or caps not exceeded).
+  if (capsExceeded && !largePrConfig.enabled) {
+    if (exceedsFiles) {
+      const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
+        path: f.path,
+        reason: 'max_files_cap' as const,
+      }));
+      const exclusionReport: ExclusionReport = {
+        excludedFiles: [...pathFilterExclusions, ...capExclusions],
+        capsApplied: ['max_files'],
+      };
+      return buildCapSkipResult(
+        provider,
+        'max_files_exceeded',
+        maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
+        exclusionReport,
+      );
+    }
+    // exceedsLines must be true here.
     const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
       path: f.path,
       reason: 'max_diff_lines_cap' as const,
@@ -390,38 +450,14 @@ async function runReviewInner(
       exclusionReport,
     );
   }
-  const filtersApplied = filteredDiff !== parsedDiff;
-  const effectiveDiffText = filtersApplied ? reassembleDiff(filteredDiff) : job.diffText;
-  const effectiveChangedPaths = filtersApplied
-    ? filteredDiff.files.map((f) => f.path)
-    : (job.changedPaths ?? []);
 
-  const diffFindings = [...scanContent(effectiveDiffText)];
-  const diffDecision = shouldAbortReview(diffFindings);
-  if (diffDecision.abort) {
-    throw new SecretLeakAbortedError(
-      'diff',
-      diffFindings.length,
-      uniqueRuleIds(diffFindings),
-      diffDecision.reason ?? 'unknown',
-    );
-  }
+  // Shared per-job cost state — created before any chunk iteration so the
+  // cost guard accumulates across all chunks and enforces max_usd_per_pr
+  // as a PR-level cap (not a per-chunk cap).
+  const costState: CostState = { totalCostUsd: 0 };
 
-  // Compile operator-supplied glob deny paths once per review.
-  // Built-in `DENY_PATTERNS` are unioned in by the dispatcher
-  // (spec §7.4 "extend, not relax"); we only need to forward the
-  // operator-extended layer here. The YAML schema rejects invalid
-  // entries up front via `z.string().min(1).refine(isValidGlob)`
-  // on `PrivacySchema.deny_paths`, so a `globToRegExp` throw here
-  // would indicate a programmer error upstream (e.g. a caller
-  // bypassing the schema) and should fail loudly, not be swallowed.
+  // Compile deny patterns and create the toolset once — reused across chunks.
   const denyPatterns: ReadonlyArray<RegExp> = job.privacy.denyPaths.map((g) => globToRegExp(g));
-
-  // Counter shared with the AI-SDK tool wrappers so we can attribute
-  // tool calls to the agent step that initiated them. The provider
-  // also reports `toolCalls` derived from the AI-SDK step results;
-  // we take the larger of the two so refused-before-dispatch calls
-  // still show up in the cost-guard accounting.
   let toolCallCounter = 0;
   const tools = createAiSdkToolset({
     workspace: job.workspaceDir,
@@ -431,281 +467,491 @@ async function runReviewInner(
     },
   });
 
-  // Auto-fetch related files (per path_instructions[*].autoFetch)
-  // before the LLM call so the model has the test / type / sibling
-  // context inline without spending a tool-call round-trip on each.
-  // No-op when `workspaceDir` is empty (Server mode with
-  // `workspace_strategy: 'none'`) or no instruction has autoFetch
-  // enabled. Bounded by `DEFAULT_AUTO_FETCH_BUDGET` (5 files /
-  // 50 KB each / 250 KB total).
-  //
-  // The fetched files MUST be passed into `wrapUntrusted` as a
-  // child element of `<untrusted>` rather than appended after the
-  // envelope — auto-fetched bytes are author-controlled (a prior
-  // PR could have planted a prompt-injection prelude in the test
-  // companion) and the system prompt's "treat <untrusted> content
-  // as data" rule must cover them. Reviewer flagged this on the
-  // original #70 commit as I-1; the fix moves the rendering into
-  // the wrapper.
-  const autoFetch = await collectAutoFetchContext({
-    changedPaths: effectiveChangedPaths,
-    pathInstructions: job.pathInstructions,
-    workspaceDir: job.workspaceDir,
-    // Same compiled `denyPatterns` instance the dispatcher uses, so
-    // auto-fetched companion files honor `privacy.deny_paths`. Built-in
-    // `DENY_PATTERNS` are unioned in by `createTools` regardless;
-    // this just closes the operator-extended layer (spec §7.4).
-    denyPatterns,
-  });
-  const wrappedMetadata = wrapUntrusted(job.prMetadata, {
-    files: autoFetch.files,
-    hitBudgetLimit: autoFetch.hitBudgetLimit,
-    totalBytes: autoFetch.totalBytes,
-  });
-  const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
-
-  // Use job.maxSteps when explicitly set (operator-configured via YAML or
-  // env REVIEW_AGENT_MAX_STEPS); fall back to the hard-coded MAX_TOOL_CALLS
-  // constant (20) for back-compat with callers that pre-date #156.
-  const effectiveMaxSteps = job.maxSteps ?? MAX_TOOL_CALLS;
-
-  const baseInput: ReviewInput = {
-    systemPrompt,
-    diffText: diffPayload,
-    prMetadata: job.prMetadata,
-    fileReader,
-    language: job.language,
-    tools,
-    maxToolCalls: effectiveMaxSteps,
-  };
-
-  const costState: CostState = { totalCostUsd: 0 };
-  const middlewares: ReadonlyArray<Middleware> = [
-    createInjectionGuard(),
-    createCostGuard({ state: costState }),
-  ];
-
-  // Build the per-job factory schema once and reuse for both the
-  // first attempt and the retry. `prRepo` / `privacy.allowedUrlPrefixes`
-  // are wired by T3 through ReviewJob; no env lookup happens here.
+  // Build the per-job factory schema once — reused for both attempts of each chunk.
   const outputSchema = createReviewOutputSchema({
     allowedUrlPrefixes: job.privacy.allowedUrlPrefixes,
     prRepo: job.prRepo,
   });
 
-  const ctx: MiddlewareCtx = { job, input: baseInput, provider };
-  const main = async (): Promise<ReviewOutput> => {
-    try {
-      const out = await provider.generateReview(ctx.input);
-      validateOutput(outputSchema, out);
-      return out;
-    } catch (err) {
-      if (!(err instanceof SchemaValidationError)) throw err;
-      const retried = await provider.generateReview({
-        ...ctx.input,
-        systemPrompt: ctx.input.systemPrompt + RETRY_PROMPT_SUFFIX,
-      });
-      validateOutput(outputSchema, retried);
-      return retried;
-    }
+  const effectiveMaxSteps = job.maxSteps ?? MAX_TOOL_CALLS;
+
+  /**
+   * Run a single diff payload through the LLM pipeline. Used by both the
+   * single-pass path (no chunking) and each iteration of the chunk loop.
+   *
+   * Takes a pre-assembled `diffPayload` string (wrappedMetadata + diffText)
+   * and returns the raw `ReviewOutput` from the provider, after gitleaks
+   * diff pre-scan. The caller is responsible for dedup / filters / post-scan.
+   *
+   * The `costState` is shared across all invocations so cost accumulates
+   * correctly across chunks.
+   */
+  const runSinglePass = async (diffPayload: string): Promise<ReviewOutput> => {
+    const middlewares: ReadonlyArray<Middleware> = [
+      createInjectionGuard(),
+      createCostGuard({ state: costState }),
+    ];
+
+    const baseInput: ReviewInput = {
+      systemPrompt,
+      diffText: diffPayload,
+      prMetadata: job.prMetadata,
+      fileReader,
+      language: job.language,
+      tools,
+      maxToolCalls: effectiveMaxSteps,
+    };
+
+    const ctx: MiddlewareCtx = { job, input: baseInput, provider };
+    const main = async (): Promise<ReviewOutput> => {
+      try {
+        const out = await provider.generateReview(ctx.input);
+        validateOutput(outputSchema, out);
+        return out;
+      } catch (err) {
+        if (!(err instanceof SchemaValidationError)) throw err;
+        const retried = await provider.generateReview({
+          ...ctx.input,
+          systemPrompt: ctx.input.systemPrompt + RETRY_PROMPT_SUFFIX,
+        });
+        validateOutput(outputSchema, retried);
+        return retried;
+      }
+    };
+
+    return compose(middlewares, ctx, main);
   };
 
-  // Graceful abort path (spec §7.3 #4): when the second attempt also
-  // fails schema validation we DO NOT throw — surfacing the abort as
-  // an exception would crash the Action / CLI and leave the PR
-  // without any signal. Instead we collapse to an empty-comments
-  // RunnerResult whose `summary` is the operator-facing notice and
-  // whose `aborted.reason` discriminates URL allowlist vs other
-  // schema failures. Cost accounting is preserved (the cost-guard
-  // middleware has already accumulated both attempts into
-  // `costState`).
-  let result: ReviewOutput;
-  try {
-    result = await compose(middlewares, ctx, main);
-  } catch (err) {
-    if (err instanceof SchemaValidationError) {
-      const { reason, summary } = classifyAbort(err);
-      const abortExclusionReport: ExclusionReport | undefined =
-        pathFilterExclusions.length > 0
-          ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
-          : undefined;
-      return {
-        comments: [],
-        // The summary is the ONLY string that will reach a public
-        // surface (PR comment via vcs.postReview). It's a generic
-        // notice with no URL substring — see `classifyAbort` and the
-        // `*_ABORT_SUMMARY` constants. The raw Zod issues (which
-        // contain the rejected URL, potentially with attacker-
-        // injected secrets in the query string) go on
-        // `aborted.internalIssues` strictly for audit / telemetry.
-        summary,
-        costUsd: costState.totalCostUsd,
-        tokensUsed: { input: 0, output: 0 },
-        model: provider.model,
-        provider: provider.name,
-        droppedDuplicates: 0,
-        droppedByRuleset: 0,
-        toolCalls: toolCallCounter,
-        reviewEvent: 'COMMENT',
-        aborted: {
-          reason,
-          internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
-        },
-        ...(abortExclusionReport !== undefined ? { exclusionReport: abortExclusionReport } : {}),
-      };
+  /**
+   * Assemble a `diffPayload` string (wrappedMetadata + diffText) for a given
+   * chunk (ParsedDiff). Runs auto-fetch for the chunk's changed paths.
+   */
+  const buildDiffPayload = async (
+    chunkDiff: ParsedDiff,
+  ): Promise<{
+    readonly diffPayload: string;
+    readonly changedPaths: ReadonlyArray<string>;
+  }> => {
+    const chunkDiffText = reassembleDiff(chunkDiff);
+    const chunkChangedPaths = chunkDiff.files.map((f) => f.path);
+
+    const diffFindings = [...scanContent(chunkDiffText)];
+    const diffDecision = shouldAbortReview(diffFindings);
+    if (diffDecision.abort) {
+      throw new SecretLeakAbortedError(
+        'diff',
+        diffFindings.length,
+        uniqueRuleIds(diffFindings),
+        diffDecision.reason ?? 'unknown',
+      );
     }
-    throw err;
-  }
-  const dedup = dedupComments(result, {
-    previousState: job.previousState,
-    rejectedFingerprints,
-  });
 
-  // Apply the operator-configured confidence floor *after* dedup so the
-  // fingerprint set on the kept list is still well-formed; comments
-  // dropped here do not contribute to the next review's state (i.e. we
-  // do not "remember" we suppressed them, by design — operator wants
-  // them silent, not memoized).
-  const minConfidence = job.minConfidence ?? 'low';
-  const afterConfidence = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+    const autoFetch = await collectAutoFetchContext({
+      changedPaths: chunkChangedPaths,
+      pathInstructions: job.pathInstructions,
+      workspaceDir: job.workspaceDir,
+      denyPatterns,
+    });
+    const wrappedMetadata = wrapUntrusted(job.prMetadata, {
+      files: autoFetch.files,
+      hitBudgetLimit: autoFetch.hitBudgetLimit,
+      totalBytes: autoFetch.totalBytes,
+    });
+    return {
+      diffPayload: `${wrappedMetadata}\n\n${chunkDiffText}`,
+      changedPaths: chunkChangedPaths,
+    };
+  };
 
-  // Apply the operator-configured ruleset filter *after* the confidence
-  // filter. The ruleset is the §10.1 category/severity enforcement layer:
-  //   1. Findings with no `category` get DEFAULT_RULESET_CATEGORY ('bug').
-  //   2. Findings in a disabled category are suppressed.
-  //   3. Findings below the category's `min_severity` floor are suppressed.
-  const rulesetResult = applyRulesetFilter(afterConfidence, job.ruleset);
+  /**
+   * Apply post-LLM filters (dedup, confidence, ruleset, suppression,
+   * suggestion gating, secret scan) to a raw `ReviewOutput` and return the
+   * final comment list + summary + per-pass accounting.
+   *
+   * `seenFingerprints` is a mutable Set that accumulates across chunks for
+   * cross-chunk dedup. On entry it contains previous-state fingerprints +
+   * all fingerprints emitted by earlier chunks. On return the set has been
+   * extended with the fingerprints of comments kept in this pass.
+   */
+  const applyPostLlmFilters = (
+    result: ReviewOutput,
+    seenFingerprints: Set<string>,
+  ): {
+    readonly comments: ReadonlyArray<import('@review-agent/core').InlineComment>;
+    readonly summary: string;
+    readonly droppedDuplicates: number;
+    readonly droppedByFeedback: number;
+    readonly droppedByRuleset: number;
+    readonly droppedBySuppression: number;
+    readonly toolCalls: number;
+  } => {
+    const dedup = dedupComments(result, {
+      // Pass a synthetic previousState whose commentFingerprints is the
+      // cross-chunk accumulated set so subsequent chunks don't re-emit
+      // findings already emitted in earlier chunks.
+      previousState: {
+        schemaVersion: 1,
+        lastReviewedSha: '',
+        baseSha: '',
+        reviewedAt: '',
+        modelUsed: '',
+        totalTokens: 0,
+        totalCostUsd: 0,
+        commentFingerprints: [...seenFingerprints],
+      },
+      rejectedFingerprints,
+    });
 
-  // #155 false-positive suppression: drop findings whose fingerprint matches
-  // an active suppression_rule. Applied after all other filters so the
-  // suppression count reflects exactly what the user would have seen without
-  // it. The suppressed set is post-dedup/confidence/ruleset — this is the
-  // final gate before secret scanning.
-  const suppressionSet = new Set(suppressedFingerprints);
-  let droppedBySuppression = 0;
-  const afterSuppression =
-    suppressionSet.size === 0
-      ? rulesetResult.kept
-      : rulesetResult.kept.filter((c) => {
-          if (suppressionSet.has(c.fingerprint)) {
-            droppedBySuppression += 1;
-            return false;
-          }
-          return true;
-        });
-  const filteredKept = afterSuppression;
+    // Extend the shared set with this chunk's kept fingerprints.
+    for (const c of dedup.kept) seenFingerprints.add(c.fingerprint);
 
-  // #152: apply suggestions config gating BEFORE secret scanning so the
-  // scan operates on the final comment shape (same fields that will be
-  // posted to the VCS).
+    const minConfidence = job.minConfidence ?? 'low';
+    const afterConfidence = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+
+    const rulesetResult = applyRulesetFilter(afterConfidence, job.ruleset);
+
+    const suppressionSet = new Set(suppressedFingerprints);
+    let droppedBySuppression = 0;
+    const afterSuppression =
+      suppressionSet.size === 0
+        ? rulesetResult.kept
+        : rulesetResult.kept.filter((c) => {
+            if (suppressionSet.has(c.fingerprint)) {
+              droppedBySuppression += 1;
+              return false;
+            }
+            return true;
+          });
+
+    const jobSuggestions = job.suggestions;
+    const afterSuggestionGating =
+      jobSuggestions === undefined
+        ? afterSuppression
+        : afterSuppression.map((c) => {
+            if (!c.suggestion) return c;
+            if (!jobSuggestions.enabled) {
+              const { suggestion: _s, ...rest } = c;
+              return rest as import('@review-agent/core').InlineComment;
+            }
+            if (c.category !== undefined && !jobSuggestions.categories.includes(c.category)) {
+              const { suggestion: _s, ...rest } = c;
+              return rest as import('@review-agent/core').InlineComment;
+            }
+            return c;
+          });
+
+    const scannedTexts: string[] = [result.summary];
+    for (const c of afterSuggestionGating) {
+      scannedTexts.push(c.body);
+      if (c.suggestion) scannedTexts.push(c.suggestion);
+    }
+    const scannedText = scannedTexts.join('\n\n');
+    const outputFindings = [...scanContent(scannedText)];
+    const outputDecision = shouldAbortReview(outputFindings);
+    if (outputDecision.abort) {
+      throw new SecretLeakAbortedError(
+        'output',
+        outputFindings.length,
+        uniqueRuleIds(outputFindings),
+        outputDecision.reason ?? 'unknown',
+      );
+    }
+
+    const summary =
+      outputFindings.length === 0
+        ? result.summary
+        : applyRedactions(result.summary, outputFindings);
+    const comments =
+      outputFindings.length === 0
+        ? afterSuggestionGating
+        : afterSuggestionGating.map((c) => ({
+            ...c,
+            body: applyRedactions(c.body, outputFindings),
+            ...(c.suggestion !== undefined
+              ? { suggestion: applyRedactions(c.suggestion, outputFindings) }
+              : {}),
+          }));
+
+    const providerToolCalls = result.toolCalls ?? 0;
+    const toolCalls = Math.max(providerToolCalls, toolCallCounter);
+
+    return {
+      comments,
+      summary,
+      droppedDuplicates: dedup.droppedCount,
+      droppedByFeedback: dedup.droppedByFeedback,
+      droppedByRuleset: rulesetResult.dropped,
+      droppedBySuppression,
+      toolCalls,
+    };
+  };
+
+  // -------------------------------------------------------------------
+  // Determine which diff to review.
   //
-  // Gating rules (when `job.suggestions` is present):
-  //   1. `enabled: false` → strip suggestion from every comment.
-  //   2. `enabled: true, categories: [...]` → strip suggestion from
-  //      comments whose `category` is NOT in the list. Comments with no
-  //      `category` field always keep their suggestion (no category to
-  //      match against means no category restriction applies).
-  const jobSuggestions = job.suggestions;
-  const afterSuggestionGating =
-    jobSuggestions === undefined
-      ? filteredKept
-      : filteredKept.map((c) => {
-          if (!c.suggestion) return c;
-          if (!jobSuggestions.enabled) {
-            const { suggestion: _s, ...rest } = c;
-            return rest as import('@review-agent/core').InlineComment;
-          }
-          if (c.category !== undefined && !jobSuggestions.categories.includes(c.category)) {
-            const { suggestion: _s, ...rest } = c;
-            return rest as import('@review-agent/core').InlineComment;
-          }
-          return c;
-        });
+  // Single-pass path: caps not exceeded → review the full filtered diff
+  // as before (complete back-compat — same code path as pre-#158).
+  //
+  // Chunk path: caps exceeded AND largePr.enabled=true → sort files by
+  // prioritization, split into chunks, review each chunk in sequence.
+  // -------------------------------------------------------------------
 
-  // #152: include suggestion fields in the output secret scan.
-  // GitHub's "Apply suggestion" button copies the suggestion body verbatim
-  // into the repository; an LLM-emitted secret in a suggestion would
-  // persist in source history if applied. Scanning both body and suggestion
-  // closes that path. The existing scan already covers `suggestion` in
-  // `createReviewOutputSchema` (URL allowlist); this gitleaks scan adds the
-  // runtime secret-pattern check for the post-LLM output pass.
-  const scannedTexts: string[] = [result.summary];
-  for (const c of afterSuggestionGating) {
-    scannedTexts.push(c.body);
-    if (c.suggestion) scannedTexts.push(c.suggestion);
+  if (!capsExceeded) {
+    // ----- Single-pass path (caps within bounds) -----
+    const filtersApplied = filteredDiff !== parsedDiff;
+    const effectiveDiffText = filtersApplied ? reassembleDiff(filteredDiff) : job.diffText;
+
+    const diffFindings = [...scanContent(effectiveDiffText)];
+    const diffDecision = shouldAbortReview(diffFindings);
+    if (diffDecision.abort) {
+      throw new SecretLeakAbortedError(
+        'diff',
+        diffFindings.length,
+        uniqueRuleIds(diffFindings),
+        diffDecision.reason ?? 'unknown',
+      );
+    }
+
+    const effectiveChangedPaths = filtersApplied
+      ? filteredDiff.files.map((f) => f.path)
+      : (job.changedPaths ?? []);
+
+    const autoFetch = await collectAutoFetchContext({
+      changedPaths: effectiveChangedPaths,
+      pathInstructions: job.pathInstructions,
+      workspaceDir: job.workspaceDir,
+      denyPatterns,
+    });
+    const wrappedMetadata = wrapUntrusted(job.prMetadata, {
+      files: autoFetch.files,
+      hitBudgetLimit: autoFetch.hitBudgetLimit,
+      totalBytes: autoFetch.totalBytes,
+    });
+    const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
+
+    // Graceful abort path (spec §7.3 #4).
+    let result: ReviewOutput;
+    try {
+      result = await runSinglePass(diffPayload);
+    } catch (err) {
+      if (err instanceof SchemaValidationError) {
+        const { reason, summary } = classifyAbort(err);
+        const abortExclusionReport: ExclusionReport | undefined =
+          pathFilterExclusions.length > 0
+            ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+            : undefined;
+        return {
+          comments: [],
+          summary,
+          costUsd: costState.totalCostUsd,
+          tokensUsed: { input: 0, output: 0 },
+          model: provider.model,
+          provider: provider.name,
+          droppedDuplicates: 0,
+          droppedByRuleset: 0,
+          toolCalls: toolCallCounter,
+          reviewEvent: 'COMMENT',
+          aborted: {
+            reason,
+            internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
+          },
+          ...(abortExclusionReport !== undefined ? { exclusionReport: abortExclusionReport } : {}),
+        };
+      }
+      throw err;
+    }
+
+    // Cross-chunk dedup seenFingerprints for single-pass: start from previousState.
+    const seenFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
+    const filtered = applyPostLlmFilters(result, seenFp);
+
+    const reviewEvent = computeReviewEvent(filtered.comments, job.requestChangesOn ?? 'critical');
+    const exclusionReport: ExclusionReport | undefined =
+      pathFilterExclusions.length > 0
+        ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+        : undefined;
+
+    return {
+      comments: filtered.comments,
+      summary: filtered.summary,
+      costUsd: costState.totalCostUsd,
+      tokensUsed: { input: result.tokensUsed.input, output: result.tokensUsed.output },
+      model: provider.model,
+      provider: provider.name,
+      droppedDuplicates: filtered.droppedDuplicates,
+      droppedByFeedback: filtered.droppedByFeedback,
+      droppedByRuleset: filtered.droppedByRuleset,
+      ...(deps.suppressionLoader !== undefined
+        ? { droppedBySuppression: filtered.droppedBySuppression }
+        : {}),
+      toolCalls: filtered.toolCalls,
+      reviewEvent,
+      ...(exclusionReport !== undefined ? { exclusionReport } : {}),
+    };
   }
-  const scannedText = scannedTexts.join('\n\n');
-  const outputFindings = [...scanContent(scannedText)];
-  const outputDecision = shouldAbortReview(outputFindings);
-  if (outputDecision.abort) {
-    throw new SecretLeakAbortedError(
-      'output',
-      outputFindings.length,
-      uniqueRuleIds(outputFindings),
-      outputDecision.reason ?? 'unknown',
-    );
+
+  // ----- Chunk path: capsExceeded && largePr.enabled === true -----
+  //
+  // 1. Sort files by prioritization criteria.
+  // 2. Split sorted files into chunks respecting per-chunk max_files/max_diff_lines.
+  // 3. Review at most `max_chunks` chunks.
+  // 4. Track cross-chunk dedup via a shared seenFingerprints Set.
+  // 5. On CostExceededError mid-review: record remaining files as budget_exhausted.
+  // 6. Files in chunks beyond max_chunks: record as max_chunks_exceeded.
+
+  const pathInstructionGlobs = job.pathInstructions.map((pi) => pi.pattern);
+  const sortedFiles = sortByPrioritization(
+    filteredDiff.files,
+    largePrConfig.prioritization,
+    pathInstructionGlobs,
+  );
+  const allChunks = splitIntoChunks(
+    sortedFiles,
+    filteredDiff.preamble,
+    job.maxFiles,
+    job.maxDiffLines,
+  );
+
+  const maxChunks = largePrConfig.maxChunks;
+  const chunksToReview = allChunks.slice(0, maxChunks);
+  const chunksExceeded = allChunks.slice(maxChunks);
+
+  // Files in chunks beyond max_chunks are recorded as max_chunks_exceeded.
+  const maxChunksExclusionFiles: Array<ExcludedFile> = [];
+  for (const chunk of chunksExceeded) {
+    for (const f of chunk.files) {
+      maxChunksExclusionFiles.push({ path: f.path, reason: 'max_chunks_exceeded' as const });
+    }
   }
 
-  const summary =
-    outputFindings.length === 0 ? result.summary : applyRedactions(result.summary, outputFindings);
-  const comments =
-    outputFindings.length === 0
-      ? afterSuggestionGating
-      : afterSuggestionGating.map((c) => ({
-          ...c,
-          body: applyRedactions(c.body, outputFindings),
-          ...(c.suggestion !== undefined
-            ? { suggestion: applyRedactions(c.suggestion, outputFindings) }
-            : {}),
-        }));
+  // Cross-chunk dedup: accumulate fingerprints from previousState + each chunk.
+  const seenFp = new Set<string>(job.previousState?.commentFingerprints ?? []);
 
-  // Take the larger of the two sources so refused-before-dispatch
-  // calls (counted locally) AND retry-path calls (counted on the
-  // SDK side only for the retry attempt) both show up in the
-  // cost-guard accounting. On the schema-retry path, `result` is
-  // the retried attempt — its `steps` cover only that attempt,
-  // while `toolCallCounter` accumulates across both. A ternary
-  // ("prefer provider when >0") collapses to the retry-only count
-  // and silently undercounts the main attempt's tool use; Math.max
-  // preserves both. SDK-recorded calls our `onCall` hook missed
-  // (arg-parse failures where `execute` never fires) are likewise
-  // covered when the provider count exceeds the local one.
-  const providerToolCalls = result.toolCalls ?? 0;
-  const toolCalls = Math.max(providerToolCalls, toolCallCounter);
+  // Accumulated results across chunks.
+  const allComments: Array<import('@review-agent/core').InlineComment> = [];
+  const allSummaries: Array<string> = [];
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalDroppedDuplicates = 0;
+  let totalDroppedByFeedback = 0;
+  let totalDroppedByRuleset = 0;
+  let totalDroppedBySuppression = 0;
+  let totalToolCalls = 0;
 
-  // Map severity → GitHub review event so a critical finding can
-  // drive `REQUEST_CHANGES` (and operators can wire that into a
-  // branch-protection rule). Computed against the *kept* comments
-  // (post-dedup, post-confidence-filter, post-redaction) so we don't
-  // request changes on findings that aren't actually being posted.
-  const reviewEvent = computeReviewEvent(comments, job.requestChangesOn ?? 'critical');
+  // Files not yet reviewed when cost cap fires.
+  const budgetExhaustedFiles: Array<ExcludedFile> = [];
+  let budgetExhausted = false;
 
-  // Build exclusionReport when path filters removed at least one file.
-  // For the successful (non-cap-skip) path, no cap fired so `capsApplied`
-  // is always empty; the report is omitted entirely when no files were
-  // excluded (the undefined-means-no-exclusions contract on RunnerResult).
+  for (let chunkIdx = 0; chunkIdx < chunksToReview.length; chunkIdx++) {
+    const chunk = chunksToReview[chunkIdx];
+    if (!chunk) continue;
+
+    if (budgetExhausted) {
+      // Cost cap already fired in a previous chunk: all remaining files are budget_exhausted.
+      for (const f of chunk.files) {
+        budgetExhaustedFiles.push({ path: f.path, reason: 'budget_exhausted' as const });
+      }
+      continue;
+    }
+
+    let chunkPayload: {
+      readonly diffPayload: string;
+      readonly changedPaths: ReadonlyArray<string>;
+    };
+    try {
+      chunkPayload = await buildDiffPayload(chunk);
+    } catch (err) {
+      if (err instanceof CostExceededError) {
+        budgetExhausted = true;
+        for (const f of chunk.files) {
+          budgetExhaustedFiles.push({ path: f.path, reason: 'budget_exhausted' as const });
+        }
+        continue;
+      }
+      throw err;
+    }
+
+    let chunkResult: ReviewOutput;
+    try {
+      chunkResult = await runSinglePass(chunkPayload.diffPayload);
+    } catch (err) {
+      if (err instanceof CostExceededError) {
+        budgetExhausted = true;
+        for (const f of chunk.files) {
+          budgetExhaustedFiles.push({ path: f.path, reason: 'budget_exhausted' as const });
+        }
+        continue;
+      }
+      if (err instanceof SchemaValidationError) {
+        // Graceful abort for this chunk: skip the chunk, continue to next.
+        // The abort is reflected in the summary but does not stop other chunks.
+        const { summary: abortSummary } = classifyAbort(err);
+        allSummaries.push(abortSummary);
+        continue;
+      }
+      throw err;
+    }
+
+    const filtered = applyPostLlmFilters(chunkResult, seenFp);
+    allComments.push(...filtered.comments);
+    if (chunkResult.summary) allSummaries.push(chunkResult.summary);
+    totalInputTokens += chunkResult.tokensUsed.input;
+    totalOutputTokens += chunkResult.tokensUsed.output;
+    totalDroppedDuplicates += filtered.droppedDuplicates;
+    totalDroppedByFeedback += filtered.droppedByFeedback;
+    totalDroppedByRuleset += filtered.droppedByRuleset;
+    totalDroppedBySuppression += filtered.droppedBySuppression;
+    totalToolCalls = Math.max(totalToolCalls, filtered.toolCalls);
+  }
+
+  // Build chunk summary: reviewed N files in M chunks, skipped files and reasons.
+  const reviewedFilePaths = chunksToReview
+    .flatMap((c) => (c ? c.files.map((f) => f.path) : []))
+    .filter((p) => !budgetExhaustedFiles.some((ef) => ef.path === p));
+  const skippedFilesMsg = buildChunkCoverageSummary(
+    reviewedFilePaths.length,
+    chunksToReview.length,
+    [...maxChunksExclusionFiles, ...budgetExhaustedFiles, ...pathFilterExclusions],
+  );
+
+  // Merge summaries from all chunks.
+  const mergedSummary =
+    allSummaries.length > 0
+      ? `${allSummaries.join('\n\n')}\n\n${skippedFilesMsg}`
+      : skippedFilesMsg;
+
+  const capsApplied: Array<'max_files' | 'max_diff_lines' | 'max_chunks' | 'budget_exhausted'> = [];
+  if (exceedsFiles) capsApplied.push('max_files');
+  if (exceedsLines) capsApplied.push('max_diff_lines');
+  if (maxChunksExclusionFiles.length > 0) capsApplied.push('max_chunks');
+  if (budgetExhaustedFiles.length > 0) capsApplied.push('budget_exhausted');
+
+  const allExclusionFiles: Array<ExcludedFile> = [
+    ...pathFilterExclusions,
+    ...maxChunksExclusionFiles,
+    ...budgetExhaustedFiles,
+  ];
   const exclusionReport: ExclusionReport | undefined =
-    pathFilterExclusions.length > 0
-      ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+    allExclusionFiles.length > 0 || capsApplied.length > 0
+      ? { excludedFiles: allExclusionFiles, capsApplied }
       : undefined;
 
+  const reviewEvent = computeReviewEvent(allComments, job.requestChangesOn ?? 'critical');
+
   return {
-    comments,
-    summary,
+    comments: allComments,
+    summary: mergedSummary,
     costUsd: costState.totalCostUsd,
-    tokensUsed: { input: result.tokensUsed.input, output: result.tokensUsed.output },
+    tokensUsed: { input: totalInputTokens, output: totalOutputTokens },
     model: provider.model,
     provider: provider.name,
-    droppedDuplicates: dedup.droppedCount,
-    droppedByFeedback: dedup.droppedByFeedback,
-    droppedByRuleset: rulesetResult.dropped,
-    // #155: only populate droppedBySuppression when the feature is active
-    // (suppressionLoader was wired) so callers can distinguish "off" from
-    // "on but 0 suppressed". When the suppressionLoader is absent,
-    // suppressedFingerprints is empty but we still leave the field undefined
-    // to honor the back-compat contract.
-    ...(deps.suppressionLoader !== undefined ? { droppedBySuppression } : {}),
-    toolCalls,
+    droppedDuplicates: totalDroppedDuplicates,
+    droppedByFeedback: totalDroppedByFeedback,
+    droppedByRuleset: totalDroppedByRuleset,
+    ...(deps.suppressionLoader !== undefined
+      ? { droppedBySuppression: totalDroppedBySuppression }
+      : {}),
+    toolCalls: totalToolCalls,
     reviewEvent,
     ...(exclusionReport !== undefined ? { exclusionReport } : {}),
   };

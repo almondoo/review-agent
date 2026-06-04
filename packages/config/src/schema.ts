@@ -259,6 +259,50 @@ const CoordinationSchema = z
   })
   .strict();
 
+// Large-PR / monorepo strategy (#158). Controls how the runner handles PRs
+// that exceed the `reviews.max_files` / `reviews.max_diff_lines` caps.
+//
+//   enabled (default true)     — when true and a PR exceeds the caps, the runner
+//                                splits the diff into chunks and reviews each chunk
+//                                in sequence (up to `max_chunks`). When false, the
+//                                runner uses the legacy skip behaviour (same as
+//                                before this feature).
+//
+//   max_chunks (default 5)     — maximum number of chunks to review per PR. Files
+//                                that would be in chunk N+1 are skipped and recorded
+//                                in the ExclusionReport with reason='max_chunks_exceeded'.
+//
+//   prioritization (default ['path_instructions','diff_size']) — ordered list of
+//                                criteria used to rank files before chunk assignment.
+//                                Supported values:
+//                                  'path_instructions' — files matching a
+//                                    path_instructions glob are ranked first.
+//                                  'diff_size'         — larger diffs (by added+deleted
+//                                    line count) are ranked earlier.
+//                                  'alphabetical'      — lexicographic tie-break
+//                                    (always applied last, implicit).
+//
+// Cost impact: with enabled=true, a large PR may trigger multiple LLM calls.
+// The PR-level cost cap (`cost.max_usd_per_pr`) applies across all chunks; if
+// the cap is hit mid-review the remaining files are recorded as budget_exhausted.
+const LARGE_PR_PRIORITIZATION_CRITERIA = [
+  'path_instructions',
+  'diff_size',
+  'alphabetical',
+] as const;
+
+export const LargePrSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    max_chunks: z.number().int().positive().default(5),
+    prioritization: z
+      .array(z.enum(LARGE_PR_PRIORITIZATION_CRITERIA))
+      .default(['path_instructions', 'diff_size']),
+  })
+  .strict();
+
+export type LargePr = z.infer<typeof LargePrSchema>;
+
 // Committable-suggestion gating (#152). Controls which categories of LLM
 // suggestions are rendered as GitHub ```suggestion blocks (or equivalent
 // informational code blocks on other platforms).
@@ -391,6 +435,10 @@ export const ConfigSchema = z
     // categories `suggestion` fields are rendered as platform suggestion blocks.
     // Absent `suggestions` key == defaults (enabled: true, all categories).
     suggestions: SuggestionsSchema.default(SuggestionsSchema.parse({})),
+    // Large-PR / monorepo strategy (#158): controls chunked multi-pass review
+    // for PRs that exceed max_files / max_diff_lines caps.
+    // Absent `large_pr` key == defaults (enabled: true, max_chunks: 5, ...).
+    large_pr: LargePrSchema.default(LargePrSchema.parse({})),
   })
   .strict();
 

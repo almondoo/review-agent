@@ -1657,9 +1657,57 @@ skills:
 incremental:
   enabled: true                        # default. Set false to always full-review.
 
+large_pr:                              # v1.2; chunked multi-pass review (#158)
+  enabled: true                        # default true; false = legacy skip behaviour
+  max_chunks: 5                        # maximum LLM passes per PR (default 5)
+  prioritization:                      # ordered criteria for file ranking before chunking
+    - path_instructions                # path_instructions-matched files first
+    - diff_size                        # larger diffs earlier (desc)
+    # alphabetical tiebreak is always applied last
+
 server:                                # v1.1; Server / CLI mode only
   workspace_strategy: none             # none | contents-api | sparse-clone (default: none)
 ```
+
+### 10.4 Chunked multi-pass review (large_pr, #158)
+
+When a PR exceeds the `reviews.max_files` or `reviews.max_diff_lines` caps and
+`large_pr.enabled: true` (the default), the runner splits the diff into chunks
+instead of refusing the review:
+
+**Prioritization** — before splitting, files are sorted by the criteria listed in
+`large_pr.prioritization` (applied in order, with alphabetical as the final
+tiebreak):
+
+- `path_instructions` — files matching any `reviews.path_instructions` glob come
+  first (most operator attention).
+- `diff_size` — larger diffs (additions + deletions) come earlier so high-churn
+  files are reviewed before low-churn ones.
+- `alphabetical` — lexicographic ascending fallback; always applied last.
+
+**Chunk splitting** — sorted files are greedily assigned to chunks that each
+respect the `max_files` and `max_diff_lines` per-chunk caps. A file that alone
+exceeds `max_diff_lines` is placed in its own single-file chunk (never silently
+dropped).
+
+**max_chunks limit** — at most `large_pr.max_chunks` chunks are reviewed. Files
+in chunks beyond this limit are recorded in `ExclusionReport` with reason
+`max_chunks_exceeded` and included in the PR summary.
+
+**Cost cap** — the `cost.max_usd_per_pr` cap applies across all chunks (shared
+`CostState`). If the cap is reached mid-review, remaining files are recorded as
+`budget_exhausted`.
+
+**Cross-chunk dedup** — fingerprints accumulate across chunks so an identical
+finding emitted by two chunks is deduplicated to one.
+
+**Coverage reporting** — the PR summary includes a `Large-PR review: reviewed N
+files across M chunks` line followed by skip counts and reasons. Silent truncation
+is forbidden (AC#3).
+
+**Back-compat** — set `large_pr.enabled: false` to restore the pre-v1.2 behavior
+where caps fire as hard skips (`aborted.reason: max_files_exceeded` /
+`max_diff_lines_exceeded`).
 
 ### 10.2 Precedence (highest → lowest)
 

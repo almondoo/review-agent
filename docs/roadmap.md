@@ -589,11 +589,34 @@ maintainer 判断で**見送り → #164** に分割、multi-line range（start_
 **分割した follow-up**: [#164](https://github.com/almondoo/review-agent/issues/164)（opt-in fix-commit、§1.2 緩和で要判断）/
 [#165](https://github.com/almondoo/review-agent/issues/165)（multi-line range start_line）。
 
+### [A4] large-PR / monorepo strategy — #158 landed (develop, 2026-06-04)
+
+単一パス上限超過 PR を「skip」から「chunk 分割による multi-pass レビュー」に置換。develop に landed
+（本セッションで自律実装）。統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。
+**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#158](https://github.com/almondoo/review-agent/issues/158) | large-PR / monorepo strategy（chunking / prioritization / token-budget） | ✅ landed (develop) |
+
+主な変更:
+- **config**: `large_pr.{enabled(既定 true), max_chunks(既定 5), prioritization(既定 [path_instructions, diff_size])}`。
+  chunk サイズは既存 `reviews.max_files/max_diff_lines` を per-chunk 上限として再利用。
+- **runner**: caps 超過時に prioritized ファイル順で chunk 分割し最大 max_chunks パスでレビュー、findings を
+  fingerprint で merge + cross-chunk dedup（dedup の previousState seam を再利用）。単一パス経路は完全 back-compat、
+  `enabled=false` で従来 skip。
+- **cost**: CostState を chunk ループで共有し `max_usd_per_pr` を PR 全体に適用。cost cap / max_chunks 到達で
+  打ち切り、未レビューファイルを coverage summary に `budget_exhausted` / `max_chunks_exceeded` 理由で報告
+  （無言 truncation 禁止）。`call_phase` は review_main に集約（DB 変更なし）。
+- **配線**: action / cli(review, dry-run)。server は queue JobHandler seam（既存方針）。
+- **docs/spec**: `docs/configuration/large-pr.md` + config-reference、spec §10.4「Chunked multi-pass review」追記。
+- **既知の限界**: chunk はファイル独立（cross-chunk の diff context は read_file/glob/grep tools で補完）。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
 #142 quality metrics / #150 onboarding & docs system /
-#153 one-command start / #158 large-PR/monorepo strategy /
+#153 one-command start /
 #160 external-tool ingestion (lint/types/SAST) / #162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック

@@ -281,6 +281,25 @@ export type ReviewJob = {
     readonly enabled: boolean;
     readonly categories: ReadonlyArray<(typeof CATEGORIES)[number]>;
   };
+  /**
+   * Large-PR / monorepo strategy (#158). Controls chunked multi-pass review
+   * for PRs that exceed `maxFiles` / `maxDiffLines` caps.
+   *
+   * - `enabled: true` (default) — split the diff into chunks and review each
+   *   chunk in sequence, up to `maxChunks`.
+   * - `enabled: false` — preserve legacy skip behaviour (cap exceeded = no LLM).
+   * - `maxChunks` — maximum number of chunks to review. Files that would fall
+   *   in chunk N+1 are recorded in ExclusionReport with reason='max_chunks_exceeded'.
+   * - `prioritization` — ordered criteria for ranking files before chunking.
+   *
+   * Optional for back-compat — absent is equivalent to `{ enabled: true, maxChunks: 5,
+   * prioritization: ['path_instructions', 'diff_size'] }`.
+   */
+  readonly largePr?: {
+    readonly enabled: boolean;
+    readonly maxChunks: number;
+    readonly prioritization: ReadonlyArray<'path_instructions' | 'diff_size' | 'alphabetical'>;
+  };
 };
 
 export type FinalizedComment = InlineComment & {
@@ -326,13 +345,23 @@ export type ExcludedFile = {
   readonly path: string;
   /**
    * Human-readable reason for the exclusion. One of:
-   * - `'path_filter'`       — matched a `reviews.path_filters` glob.
-   * - `'max_files_cap'`     — diff exceeded `reviews.max_files`; this
-   *                           file was part of the overflow.
-   * - `'max_diff_lines_cap'`— diff exceeded `reviews.max_diff_lines`;
-   *                           this file was part of the overflow.
+   * - `'path_filter'`         — matched a `reviews.path_filters` glob.
+   * - `'max_files_cap'`       — diff exceeded `reviews.max_files`; this
+   *                             file was part of the overflow.
+   * - `'max_diff_lines_cap'`  — diff exceeded `reviews.max_diff_lines`;
+   *                             this file was part of the overflow.
+   * - `'max_chunks_exceeded'` — large_pr chunk limit reached; file was
+   *                             in a chunk beyond `large_pr.max_chunks`.
+   * - `'budget_exhausted'`    — cost cap (`cost.max_usd_per_pr`) was
+   *                             reached mid-chunk-review; remaining files
+   *                             were not reviewed.
    */
-  readonly reason: 'path_filter' | 'max_files_cap' | 'max_diff_lines_cap';
+  readonly reason:
+    | 'path_filter'
+    | 'max_files_cap'
+    | 'max_diff_lines_cap'
+    | 'max_chunks_exceeded'
+    | 'budget_exhausted';
 };
 
 /**
@@ -342,13 +371,17 @@ export type ExcludedFile = {
  * back-compat — callers that pre-date #145 will not supply this field.
  *
  * The `capsApplied` field names which hard caps fired during this run:
- * - `max_files`      — the post-path-filter file count exceeded `maxFiles`.
- * - `max_diff_lines` — the post-path-filter line count exceeded `maxDiffLines`.
- * Both may be set simultaneously when both thresholds are exceeded.
+ * - `max_files`       — the post-path-filter file count exceeded `maxFiles`.
+ * - `max_diff_lines`  — the post-path-filter line count exceeded `maxDiffLines`.
+ * - `max_chunks`      — large_pr chunk limit was reached.
+ * - `budget_exhausted`— cost cap hit mid-chunk-review.
+ * Multiple caps may be set simultaneously.
  */
 export type ExclusionReport = {
   readonly excludedFiles: ReadonlyArray<ExcludedFile>;
-  readonly capsApplied: ReadonlyArray<'max_files' | 'max_diff_lines'>;
+  readonly capsApplied: ReadonlyArray<
+    'max_files' | 'max_diff_lines' | 'max_chunks' | 'budget_exhausted'
+  >;
 };
 
 export type RunnerResult = {

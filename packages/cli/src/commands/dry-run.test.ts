@@ -413,8 +413,9 @@ describe('runDryRunCommand — exclusion report (AC4)', () => {
 
   it('reports max_files cap exclusions when the file count exceeds the cap', async () => {
     const io = recordingIo();
-    // 3-file diff with max_files=1 → the 2 "overflow" files are reported
-    const yaml = 'reviews:\n  max_files: 1\n';
+    // 3-file diff with max_files=1 → the 2 "overflow" files are reported.
+    // large_pr.enabled: false opts into the legacy cap-skip path.
+    const yaml = 'reviews:\n  max_files: 1\nlarge_pr:\n  enabled: false\n';
     const vcs = fakeVcs({
       getDiff: async () => ({
         baseSha: 'b1',
@@ -447,7 +448,8 @@ describe('runDryRunCommand — exclusion report (AC4)', () => {
 
   it('reports max_diff_lines cap exclusions when the line count exceeds the cap', async () => {
     const io = recordingIo();
-    const yaml = 'reviews:\n  max_diff_lines: 1\n';
+    // large_pr.enabled: false opts into the legacy cap-skip path.
+    const yaml = 'reviews:\n  max_diff_lines: 1\nlarge_pr:\n  enabled: false\n';
     const vcs = fakeVcs({
       getDiff: async () => ({
         baseSha: 'b1',
@@ -476,9 +478,11 @@ describe('runDryRunCommand — exclusion report (AC4)', () => {
   });
 
   it('reports both path-filter and cap exclusions in the same run', async () => {
-    // 1 file excluded by path-filter, then 2 remaining files exceed max_files=1
+    // 1 file excluded by path-filter, then 2 remaining files exceed max_files=1.
+    // large_pr.enabled: false opts into the legacy cap-skip path.
     const io = recordingIo();
-    const yaml = 'reviews:\n  max_files: 1\n  path_filters:\n    - "vendor/**"\n';
+    const yaml =
+      'reviews:\n  max_files: 1\n  path_filters:\n    - "vendor/**"\nlarge_pr:\n  enabled: false\n';
     const vcs = fakeVcs({
       getDiff: async () => ({
         baseSha: 'b1',
@@ -612,6 +616,9 @@ describe('RunnerResult.exclusionReport field contract (runner side)', () => {
       maxDiffLines: 3000,
       privacy: { allowedUrlPrefixes: [], denyPaths: [], redactPatterns: [] },
       prRepo: { host: 'github.com', owner: 'o', repo: 'r' },
+      // Use legacy cap-skip path (largePr.enabled=false) so this test exercises
+      // the traditional max_files_exceeded abort path.
+      largePr: { enabled: false, maxChunks: 5, prioritization: [] as const },
     };
     const provider = {
       name: 'test',
@@ -653,6 +660,9 @@ describe('RunnerResult.exclusionReport field contract (runner side)', () => {
       maxDiffLines: 2,
       privacy: { allowedUrlPrefixes: [], denyPaths: [], redactPatterns: [] },
       prRepo: { host: 'github.com', owner: 'o', repo: 'r' },
+      // Use legacy cap-skip path (largePr.enabled=false) so this test exercises
+      // the traditional max_diff_lines_exceeded abort path.
+      largePr: { enabled: false, maxChunks: 5, prioritization: [] as const },
     };
     const provider = {
       name: 'test',

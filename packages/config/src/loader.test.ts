@@ -759,3 +759,43 @@ describe('mergeWithEnv', () => {
     expect(mergeWithEnv(base, {})).toEqual(base);
   });
 });
+
+describe('loadConfigFromYaml — large_pr (#158)', () => {
+  it('applies defaults when large_pr is absent', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.large_pr.enabled).toBe(true);
+    expect(cfg.large_pr.max_chunks).toBe(5);
+    expect(cfg.large_pr.prioritization).toEqual(['path_instructions', 'diff_size']);
+  });
+
+  it('parses explicit large_pr.enabled=false', () => {
+    const cfg = loadConfigFromYaml('large_pr:\n  enabled: false\n');
+    expect(cfg.large_pr.enabled).toBe(false);
+  });
+
+  it('parses explicit large_pr.max_chunks', () => {
+    const cfg = loadConfigFromYaml('large_pr:\n  max_chunks: 10\n');
+    expect(cfg.large_pr.max_chunks).toBe(10);
+  });
+
+  it('parses explicit large_pr.prioritization', () => {
+    const cfg = loadConfigFromYaml(
+      'large_pr:\n  prioritization:\n    - diff_size\n    - alphabetical\n',
+    );
+    expect(cfg.large_pr.prioritization).toEqual(['diff_size', 'alphabetical']);
+  });
+
+  it('rejects unknown keys in large_pr (strict)', () => {
+    expect(() => loadConfigFromYaml('large_pr:\n  unknown_key: true\n')).toThrow(ConfigError);
+  });
+
+  it('rejects invalid prioritization values', () => {
+    expect(() =>
+      loadConfigFromYaml('large_pr:\n  prioritization:\n    - unknown_criterion\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects non-positive max_chunks', () => {
+    expect(() => loadConfigFromYaml('large_pr:\n  max_chunks: 0\n')).toThrow(ConfigError);
+  });
+});

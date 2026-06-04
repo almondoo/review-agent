@@ -153,6 +153,19 @@ review comments. See [suggestions.md](./suggestions.md) for full details.
 
 ---
 
+## `large_pr`
+
+Controls how the runner handles PRs that exceed the `reviews.max_files` or
+`reviews.max_diff_lines` caps. See [large-pr.md](./large-pr.md) for full details.
+
+| Key | Type | Default | Scope | Description |
+|---|---|---|---|---|
+| `large_pr.enabled` | boolean | `true` | repo, org | When `true` (default), split the diff into chunks and review each chunk in sequence. When `false`, restore the pre-v1.2 hard-skip behaviour. |
+| `large_pr.max_chunks` | positive integer | `5` | repo, org | Maximum number of LLM passes per PR. Files in chunks beyond this limit are skipped and reported as `max_chunks_exceeded`. |
+| `large_pr.prioritization` | `('path_instructions' \| 'diff_size' \| 'alphabetical')[]` | `['path_instructions', 'diff_size']` | repo, org | Ordered criteria for ranking files before chunk assignment. Alphabetical is always the final tiebreak. |
+
+---
+
 ## Effective-config resolution log
 
 Since issue #146, every run emits a `ConfigResolutionLog` that records which
