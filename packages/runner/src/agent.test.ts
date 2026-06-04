@@ -1446,3 +1446,53 @@ describe('runReview — CodeCommit review_history repo normalization (#110)', ()
     expect(evalRecorder.mock.calls[0]?.[0]?.repo).toBe('test-owner/test-repo');
   });
 });
+
+describe('runReview — onConfigResolution hook (issue #146)', () => {
+  const resolutionLog = {
+    primarySource: 'repo-yaml' as const,
+    orgYamlLoaded: false,
+    envApplied: false,
+    sections: { language: 'repo-yaml' as const, cost: 'default' as const },
+  };
+
+  it('fires onConfigResolution when both resolutionLog and hook are present', async () => {
+    const provider = makeProvider();
+    const onConfigResolution = vi.fn();
+    const jobWithLog = { ...baseJob, resolutionLog };
+    await runReview(jobWithLog, provider, { onConfigResolution });
+    expect(onConfigResolution).toHaveBeenCalledTimes(1);
+    expect(onConfigResolution).toHaveBeenCalledWith(resolutionLog);
+  });
+
+  it('does NOT fire onConfigResolution when resolutionLog is absent from job', async () => {
+    const provider = makeProvider();
+    const onConfigResolution = vi.fn();
+    await runReview(baseJob, provider, { onConfigResolution });
+    expect(onConfigResolution).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire onConfigResolution when hook is absent (back-compat)', async () => {
+    const provider = makeProvider();
+    const jobWithLog = { ...baseJob, resolutionLog };
+    // Should complete without error even though no hook is wired.
+    const result = await runReview(jobWithLog, provider, {});
+    expect(result.comments).toHaveLength(2);
+  });
+
+  it('fires onConfigResolution before any LLM call', async () => {
+    const callOrder: string[] = [];
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => {
+        callOrder.push('llm');
+        return validOutput;
+      }),
+    });
+    const onConfigResolution = vi.fn(() => {
+      callOrder.push('hook');
+    });
+    const jobWithLog = { ...baseJob, resolutionLog };
+    await runReview(jobWithLog, provider, { onConfigResolution });
+    expect(callOrder[0]).toBe('hook');
+    expect(callOrder[1]).toBe('llm');
+  });
+});

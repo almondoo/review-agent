@@ -12,6 +12,22 @@ import {
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
 
+/**
+ * Mirrors `ConfigResolutionLog` from `@review-agent/config` (issue #146).
+ * Declared here so `@review-agent/runner` does not need to depend on the
+ * config package — TypeScript structural typing ensures the two types are
+ * assignment-compatible. The canonical definition (with full JSDoc) lives
+ * in `packages/config/src/loader.ts`.
+ */
+export type ConfigResolutionSource = 'repo-yaml' | 'org-yaml' | 'env' | 'default';
+
+export type ConfigResolutionLog = {
+  readonly primarySource: ConfigResolutionSource;
+  readonly orgYamlLoaded: boolean;
+  readonly envApplied: boolean;
+  readonly sections: Readonly<Record<string, ConfigResolutionSource>>;
+};
+
 export type ReviewJob = {
   readonly jobId: string;
   readonly workspaceDir: string;
@@ -199,6 +215,17 @@ export type ReviewJob = {
     readonly owner: string;
     readonly repo: string;
   };
+  /**
+   * Inspectable record of which config source (repo YAML, org YAML,
+   * env, or defaults) produced the effective config for this run.
+   * Optional for back-compat — callers that do not use
+   * `resolveEffectiveConfig` (issue #146) will not supply this field.
+   *
+   * When present, the runner fires `deps.onConfigResolution(log)` at
+   * the start of the review so operators can log or record the
+   * resolution for audit / reproducibility purposes.
+   */
+  readonly resolutionLog?: ConfigResolutionLog;
 };
 
 export type FinalizedComment = InlineComment & {
@@ -297,6 +324,16 @@ export type RunnerResult = {
 };
 
 export type RunReviewDeps = {
+  /**
+   * Fired when `job.resolutionLog` is present, at the very start of
+   * `runReview`, before any LLM call or gitleaks scan. Use this hook
+   * to log or persist the effective-config resolution for audit /
+   * reproducibility (issue #146 AC2). The runner does NOT call
+   * `console.log` directly — all structured output flows through this
+   * injected hook so callers control the destination (OTel, structured
+   * logger, test spy, etc.).
+   */
+  readonly onConfigResolution?: (log: ConfigResolutionLog) => void;
   readonly fileReader?: (path: string) => Promise<string>;
   readonly fingerprintComment?: (c: {
     readonly path: string;

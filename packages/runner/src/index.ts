@@ -113,6 +113,8 @@ export {
   type Tools,
 } from './tools.js';
 export type {
+  ConfigResolutionLog,
+  ConfigResolutionSource,
   Middleware,
   MiddlewareCtx,
   ReviewJob,

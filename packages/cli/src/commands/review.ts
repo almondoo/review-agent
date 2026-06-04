@@ -1,5 +1,10 @@
 import { readFile as fsReadFile } from 'node:fs/promises';
-import { type Config, defaultConfig, loadConfigFromYaml, mergeWithEnv } from '@review-agent/config';
+import {
+  type Config,
+  type ConfigResolutionLog,
+  mergeWithEnv,
+  resolveEffectiveConfig,
+} from '@review-agent/config';
 import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createCodecommitVCS } from '@review-agent/platform-codecommit';
@@ -64,7 +69,43 @@ export async function runReviewCommand(
 
   const ref = parseRef(platform, opts.repo, opts.pr);
   const readFile = opts.readFile ?? defaultReadFile;
-  const config = applyOverrides(await loadConfig(opts.configPath, readFile), opts);
+
+  // Load the raw YAML text (null when the file is absent or unreadable).
+  const repoYaml = await readYamlText(opts.configPath, readFile);
+
+  // Build env-var override bag from opts.env. resolveEffectiveConfig
+  // calls mergeWithEnv internally, so env is applied exactly once here.
+  // CLI-flag overrides (--lang, --profile, --cost-cap) are applied
+  // afterward via applyCliOverrides — they are the highest-priority
+  // layer (mirrors PR comment commands) and intentionally do not flow
+  // through resolveEffectiveConfig so the log accurately reports the
+  // YAML/env layer provenance before CLI flags are folded in.
+  //
+  // NOTE(#156): env-vs-config precedence (§10.2: config > env) is not
+  // yet corrected — env currently overrides YAML. When #156 lands,
+  // update the env application order inside resolveEffectiveConfig.
+  //
+  // TODO: action/server entry points should wire resolveEffectiveConfig
+  // similarly so every runtime surface emits a ConfigResolutionLog.
+  const envOverrides: Parameters<typeof resolveEffectiveConfig>[0]['env'] = {};
+  if (opts.env.REVIEW_AGENT_LANGUAGE)
+    envOverrides.REVIEW_AGENT_LANGUAGE = opts.env.REVIEW_AGENT_LANGUAGE;
+  if (opts.env.REVIEW_AGENT_PROVIDER)
+    envOverrides.REVIEW_AGENT_PROVIDER = opts.env.REVIEW_AGENT_PROVIDER;
+  if (opts.env.REVIEW_AGENT_MODEL) envOverrides.REVIEW_AGENT_MODEL = opts.env.REVIEW_AGENT_MODEL;
+  if (opts.env.REVIEW_AGENT_MAX_USD_PER_PR)
+    envOverrides.REVIEW_AGENT_MAX_USD_PER_PR = opts.env.REVIEW_AGENT_MAX_USD_PER_PR;
+
+  const { config: baseConfig, log: resolutionLog } = resolveEffectiveConfig({
+    repoYaml,
+    env: envOverrides,
+  });
+
+  // Apply highest-priority CLI flag overrides (--lang, --profile, etc.)
+  // after YAML+env resolution. These are not recorded in resolutionLog
+  // because they are equivalent to PR-comment-command overrides — ephemeral,
+  // not version-controlled, and always the caller's explicit intent.
+  const config = applyCliOverrides(baseConfig, opts);
 
   const vcs = (opts.createVCS ?? ((t, c) => defaultCreateVCS(platform, t, c)))(token, config);
   const pr = await vcs.getPR(ref);
@@ -124,8 +165,16 @@ export async function runReviewCommand(
         redactPatterns: config.privacy.redact_patterns,
       },
       prRepo: resolvePrRepo(platform, ref, opts.env),
+      // Pass resolution provenance so the onConfigResolution hook below
+      // can log it at the start of the review (issue #146 AC2).
+      resolutionLog,
     },
     provider,
+    {
+      onConfigResolution: (log) => {
+        io.stderr(formatResolutionLog(log));
+      },
+    },
   );
 
   printResultSummary(io, ref, pr, result);
@@ -187,38 +236,59 @@ function defaultCreateVCS(platform: ReviewPlatform, token: string | null, config
   /* v8 ignore stop */
 }
 
-async function loadConfig(
+/**
+ * Read the raw YAML text from the config file path.
+ * Returns null when the file is missing or unreadable (config falls back
+ * to org config or built-in defaults via resolveEffectiveConfig).
+ */
+async function readYamlText(
   configPath: string,
   readFile: (p: string, enc: 'utf8') => Promise<string>,
-): Promise<Config> {
+): Promise<string | null> {
   try {
-    const text = await readFile(configPath, 'utf8');
-    return loadConfigFromYaml(text);
+    return await readFile(configPath, 'utf8');
   } catch {
-    return defaultConfig();
+    return null;
   }
 }
 
-function applyOverrides(config: Config, opts: RunReviewOpts): Config {
-  const envOverrides: {
-    REVIEW_AGENT_LANGUAGE?: string;
-    REVIEW_AGENT_PROVIDER?: string;
-    REVIEW_AGENT_MODEL?: string;
-    REVIEW_AGENT_MAX_USD_PER_PR?: string;
-  } = {};
-  if (opts.env.REVIEW_AGENT_LANGUAGE)
-    envOverrides.REVIEW_AGENT_LANGUAGE = opts.env.REVIEW_AGENT_LANGUAGE;
-  if (opts.env.REVIEW_AGENT_PROVIDER)
-    envOverrides.REVIEW_AGENT_PROVIDER = opts.env.REVIEW_AGENT_PROVIDER;
-  if (opts.env.REVIEW_AGENT_MODEL) envOverrides.REVIEW_AGENT_MODEL = opts.env.REVIEW_AGENT_MODEL;
-  if (opts.env.REVIEW_AGENT_MAX_USD_PER_PR)
-    envOverrides.REVIEW_AGENT_MAX_USD_PER_PR = opts.env.REVIEW_AGENT_MAX_USD_PER_PR;
-  let next = mergeWithEnv(config, envOverrides);
-  if (opts.language) next = mergeWithEnv(next, { REVIEW_AGENT_LANGUAGE: opts.language });
+/**
+ * Apply highest-priority CLI flag overrides (--lang, --profile) on top of
+ * the already-resolved config. These are ephemeral caller overrides — not
+ * version-controlled — so they are folded in after resolveEffectiveConfig
+ * rather than inside it (mirrors "PR comment command" precedence, §10.2 #1).
+ * mergeWithEnv is used here exclusively for the --lang flag path because it
+ * already validates the language code; --profile is applied directly.
+ *
+ * NOTE: env vars are consumed once inside resolveEffectiveConfig. This
+ * function must NOT re-read them from opts.env to avoid double-application.
+ */
+function applyCliOverrides(config: Config, opts: RunReviewOpts): Config {
+  let next = config;
+  if (opts.language) {
+    // mergeWithEnv validates the language code via isSupportedLanguage and
+    // throws ConfigError on unsupported values — reuse for type-safe narrowing.
+    next = mergeWithEnv(next, { REVIEW_AGENT_LANGUAGE: opts.language });
+  }
   if (opts.profile === 'chill' || opts.profile === 'assertive') {
     next = { ...next, profile: opts.profile };
   }
   return next;
+}
+
+/**
+ * Format a ConfigResolutionLog as a concise single-line stderr message.
+ * Example:
+ *   config resolved: primary=repo-yaml org=false env=false sections=language:repo-yaml cost:default ...
+ *
+ * Callers (server, action) should wire their own formatters if they want
+ * structured JSON output. The CLI uses this human-readable form.
+ */
+function formatResolutionLog(log: ConfigResolutionLog): string {
+  const sectionSummary = Object.entries(log.sections)
+    .map(([k, v]) => `${k}:${v}`)
+    .join(' ');
+  return `config resolved: primary=${log.primarySource} org=${log.orgYamlLoaded} env=${log.envApplied} [${sectionSummary}]\n`;
 }
 
 function decideSkip(pr: PR, config: Config): string | null {

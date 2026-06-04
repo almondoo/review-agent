@@ -134,6 +134,16 @@ async function runReviewInner(
   provider: LlmProvider,
   deps: RunReviewDeps,
 ): Promise<RunnerResult> {
+  // Fire the config resolution hook before any LLM call or gitleaks
+  // scan. This gives callers (action, server, CLI) an opportunity to
+  // log the effective-config provenance per-run for audit and
+  // reproducibility (issue #146 AC2). The hook is optional — callers
+  // that do not supply `onConfigResolution` or do not pass
+  // `resolutionLog` on the job simply skip this block.
+  if (job.resolutionLog !== undefined && deps.onConfigResolution !== undefined) {
+    deps.onConfigResolution(job.resolutionLog);
+  }
+
   // Incremental review fields flow from the action / cli call site
   // (see packages/action/src/run.ts where computeDiffStrategy decides
   // sinceSha). When the diff is incremental, the system prompt warns

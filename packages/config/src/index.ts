@@ -6,10 +6,14 @@ export {
 } from './known-bots.js';
 export { isSupportedLanguage, SUPPORTED_LANGUAGES, type SupportedLanguage } from './languages.js';
 export {
+  type ConfigResolutionLog,
+  type ConfigResolutionSource,
   defaultConfig,
   type EnvOverrides,
   loadConfigFromYaml,
   mergeWithEnv,
+  type ResolveEffectiveConfigResult,
+  resolveEffectiveConfig,
 } from './loader.js';
 export {
   createOrgConfigCache,

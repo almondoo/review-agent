@@ -1,6 +1,11 @@
 import { ConfigError } from '@review-agent/core';
 import { describe, expect, it } from 'vitest';
-import { defaultConfig, loadConfigFromYaml, mergeWithEnv } from './loader.js';
+import {
+  defaultConfig,
+  loadConfigFromYaml,
+  mergeWithEnv,
+  resolveEffectiveConfig,
+} from './loader.js';
 
 describe('loadConfigFromYaml — defaults', () => {
   it('parses an empty YAML and applies defaults', () => {
@@ -237,6 +242,158 @@ describe('defaultConfig', () => {
     const cfg = defaultConfig();
     expect(cfg.language).toBe('en-US');
     expect(cfg.skills).toEqual([]);
+  });
+});
+
+describe('resolveEffectiveConfig', () => {
+  describe('precedence: repo > org > defaults', () => {
+    it('primarySource is "repo-yaml" when repo YAML is provided', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n' });
+      expect(log.primarySource).toBe('repo-yaml');
+    });
+
+    it('primarySource is "org-yaml" when only org YAML is provided', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: null, orgYaml: 'language: ja-JP\n' });
+      expect(log.primarySource).toBe('org-yaml');
+    });
+
+    it('primarySource is "default" when neither YAML is provided', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: null });
+      expect(log.primarySource).toBe('default');
+    });
+
+    it('repo YAML wins over org YAML (repo takes precedence)', () => {
+      // When repoYaml is present, it always has higher precedence.
+      // Even if orgYaml is also supplied, the repo is the primary source.
+      const { config, log } = resolveEffectiveConfig({
+        repoYaml: 'language: ja-JP\nprofile: assertive\n',
+        orgYaml: 'language: zh-CN\n',
+      });
+      expect(config.language).toBe('ja-JP');
+      expect(log.primarySource).toBe('repo-yaml');
+      expect(log.orgYamlLoaded).toBe(true);
+    });
+
+    it('org YAML is used when repo YAML is absent', () => {
+      const { config, log } = resolveEffectiveConfig({
+        repoYaml: null,
+        orgYaml: 'language: zh-CN\n',
+      });
+      expect(config.language).toBe('zh-CN');
+      expect(log.primarySource).toBe('org-yaml');
+      expect(log.orgYamlLoaded).toBe(true);
+    });
+
+    it('defaults apply when both YAML sources are absent', () => {
+      const { config, log } = resolveEffectiveConfig({ repoYaml: null });
+      expect(config.language).toBe('en-US');
+      expect(config.profile).toBe('chill');
+      expect(log.primarySource).toBe('default');
+      expect(log.orgYamlLoaded).toBe(false);
+    });
+  });
+
+  describe('ConfigResolutionLog — source recording', () => {
+    it('records orgYamlLoaded=false when orgYaml is not supplied', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n' });
+      expect(log.orgYamlLoaded).toBe(false);
+    });
+
+    it('records orgYamlLoaded=true when orgYaml is supplied alongside repoYaml', () => {
+      const { log } = resolveEffectiveConfig({
+        repoYaml: 'language: ja-JP\n',
+        orgYaml: 'language: zh-CN\n',
+      });
+      expect(log.orgYamlLoaded).toBe(true);
+    });
+
+    it('records envApplied=false when env is empty', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n', env: {} });
+      expect(log.envApplied).toBe(false);
+    });
+
+    it('records envApplied=false when env overrides are absent (no env arg)', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n' });
+      expect(log.envApplied).toBe(false);
+    });
+
+    it('records envApplied=true when at least one REVIEW_AGENT_* env var is set', () => {
+      const { log } = resolveEffectiveConfig({
+        repoYaml: 'language: ja-JP\n',
+        env: { REVIEW_AGENT_LANGUAGE: 'en-US' },
+      });
+      expect(log.envApplied).toBe(true);
+    });
+
+    it('applies env overrides to the final config (current §10.2 behaviour, see #156)', () => {
+      // NOTE(#156): env currently overrides config. Once #156 corrects
+      // §10.2 precedence (config > env), this test may be updated.
+      const { config } = resolveEffectiveConfig({
+        repoYaml: 'language: ja-JP\n',
+        env: { REVIEW_AGENT_LANGUAGE: 'en-US' },
+      });
+      expect(config.language).toBe('en-US');
+    });
+  });
+
+  describe('ConfigResolutionLog — sections map', () => {
+    it('marks language as repo-yaml when explicitly set in repo YAML', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n' });
+      expect(log.sections.language).toBe('repo-yaml');
+    });
+
+    it('marks language as default when only the Zod default is active', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: '' });
+      expect(log.sections.language).toBe('default');
+    });
+
+    it('marks provider as repo-yaml when set in repo YAML', () => {
+      const { log } = resolveEffectiveConfig({
+        repoYaml: 'provider:\n  type: anthropic\n  model: claude-sonnet-4-6\n',
+      });
+      expect(log.sections.provider).toBe('repo-yaml');
+    });
+
+    it('marks cost as default when cost section not in YAML', () => {
+      const { log } = resolveEffectiveConfig({ repoYaml: 'language: ja-JP\n' });
+      expect(log.sections.cost).toBe('default');
+    });
+
+    it('marks cost as repo-yaml when cost section is explicitly set', () => {
+      const { log } = resolveEffectiveConfig({
+        repoYaml: 'cost:\n  max_usd_per_pr: 2.0\n',
+      });
+      expect(log.sections.cost).toBe('repo-yaml');
+    });
+
+    it('marks org-yaml sections when orgYaml is the sole source', () => {
+      const { log } = resolveEffectiveConfig({
+        repoYaml: null,
+        orgYaml: 'language: zh-CN\n',
+      });
+      expect(log.sections.language).toBe('org-yaml');
+    });
+  });
+
+  describe('error propagation', () => {
+    it('propagates ConfigError for invalid repo YAML', () => {
+      expect(() => resolveEffectiveConfig({ repoYaml: 'language: xx-XX\n' })).toThrow(ConfigError);
+    });
+
+    it('propagates ConfigError for invalid org YAML', () => {
+      expect(() =>
+        resolveEffectiveConfig({ repoYaml: null, orgYaml: 'language: xx-XX\n' }),
+      ).toThrow(ConfigError);
+    });
+
+    it('propagates ConfigError for invalid env override', () => {
+      expect(() =>
+        resolveEffectiveConfig({
+          repoYaml: null,
+          env: { REVIEW_AGENT_LANGUAGE: 'xx-XX' },
+        }),
+      ).toThrow(ConfigError);
+    });
   });
 });
 
