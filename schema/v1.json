@@ -226,6 +226,12 @@
               "minimum": 1,
               "maximum": 50,
               "default": 20
+            },
+            "max_conversation_turns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5
             }
           },
           "additionalProperties": false,
@@ -381,6 +387,18 @@
           "propertyNames": {
             "enum": ["bug", "security", "performance", "maintainability", "style", "docs", "test"]
           },
+          "default": {}
+        },
+        "feedback": {
+          "type": "object",
+          "properties": {
+            "suppress_after": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          },
+          "additionalProperties": false,
           "default": {}
         }
       },

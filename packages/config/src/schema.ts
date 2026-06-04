@@ -124,6 +124,13 @@ const ReviewsSchema = z
     //   repo/org YAML > env REVIEW_AGENT_MAX_STEPS > built-in default
     // (see `loader.ts` `mergeWithEnvMaxSteps`).
     max_steps: z.number().int().min(1).max(50).default(20),
+    // Maximum back-and-forth conversation turns on a single inline-comment
+    // thread (#149) before the agent posts a single "conversation limit
+    // reached" note and stops replying. A "turn" is one agent reply to a
+    // human `@review-agent` mention on the agent's own finding. Bounded
+    // (1–50) and cost-capped (turns count against the PR cost ledger).
+    // Default 5 keeps threads bounded without feeling abrupt.
+    max_conversation_turns: z.number().int().min(1).max(50).default(5),
   })
   .strict();
 
@@ -252,6 +259,21 @@ const CoordinationSchema = z
   })
   .strict();
 
+// Feedback-loop tuning (#155). `suppress_after` is the number of distinct
+// 👎 / `/feedback reject` signals on the same finding fingerprint before a
+// persistent suppression rule is created (stored as a `suppression_rule`
+// row in `review_history`). Once suppressed, matching findings are dropped
+// from future reviews until an operator runs `review-agent suppression
+// remove`. Default 3 requires repeated rejection before muting, so a single
+// dismissal never permanently hides a class of finding.
+const FeedbackSchema = z
+  .object({
+    suppress_after: z.number().int().min(1).default(3),
+  })
+  .strict();
+
+export type Feedback = z.infer<typeof FeedbackSchema>;
+
 // Per-category ruleset entry. Each named category can be toggled on/off
 // and can enforce a minimum severity floor. Findings whose severity is
 // strictly below `min_severity` are suppressed for that category; findings
@@ -340,6 +362,10 @@ export const ConfigSchema = z
     // applies this filter after dedup and min_confidence. An absent `ruleset`
     // key is identical to `ruleset: {}` — no filtering.
     ruleset: RulesetSchema,
+    // Feedback-loop tuning (#155): `feedback.suppress_after` controls how many
+    // 👎/reject signals on a finding fingerprint trigger a persistent
+    // suppression rule. Absent `feedback` key == defaults (suppress_after: 3).
+    feedback: FeedbackSchema.default({}),
   })
   .strict();
 

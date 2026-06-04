@@ -555,6 +555,48 @@ describe('loadConfigFromYaml — reviews.max_steps (#156)', () => {
   });
 });
 
+describe('loadConfigFromYaml — reviews.max_conversation_turns (#149)', () => {
+  it('defaults reviews.max_conversation_turns to 5', () => {
+    expect(loadConfigFromYaml('').reviews.max_conversation_turns).toBe(5);
+  });
+
+  it('parses an explicit reviews.max_conversation_turns: 10', () => {
+    expect(
+      loadConfigFromYaml('reviews:\n  max_conversation_turns: 10\n').reviews.max_conversation_turns,
+    ).toBe(10);
+  });
+
+  it('rejects reviews.max_conversation_turns: 0 (below min)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_conversation_turns: 0\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects reviews.max_conversation_turns: 51 (above max)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_conversation_turns: 51\n')).toThrow(
+      ConfigError,
+    );
+  });
+});
+
+describe('loadConfigFromYaml — feedback block (#155)', () => {
+  it('defaults feedback.suppress_after to 3', () => {
+    expect(loadConfigFromYaml('').feedback.suppress_after).toBe(3);
+  });
+
+  it('parses an explicit feedback.suppress_after: 5', () => {
+    expect(loadConfigFromYaml('feedback:\n  suppress_after: 5\n').feedback.suppress_after).toBe(5);
+  });
+
+  it('rejects feedback.suppress_after: 0 (below min)', () => {
+    expect(() => loadConfigFromYaml('feedback:\n  suppress_after: 0\n')).toThrow(ConfigError);
+  });
+
+  it('rejects an unknown key inside feedback (strict)', () => {
+    expect(() => loadConfigFromYaml('feedback:\n  bogus: 1\n')).toThrow(ConfigError);
+  });
+});
+
 describe('resolveEffectiveConfig — max_steps precedence (config > env > default, #156)', () => {
   it('uses YAML max_steps when explicitly set — ignores env var (config wins over env)', () => {
     const { config } = resolveEffectiveConfig({

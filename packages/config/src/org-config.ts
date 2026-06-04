@@ -147,6 +147,8 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
       // max_steps: repo wins (scalar override, same rule as max_files /
       // max_diff_lines). Org sets a default; repo can tighten or widen it.
       max_steps: repoConfig.reviews.max_steps,
+      // max_conversation_turns: repo wins (scalar override, same rule).
+      max_conversation_turns: repoConfig.reviews.max_conversation_turns,
       ignore_authors: dedup([
         ...orgConfig.reviews.ignore_authors,
         ...repoConfig.reviews.ignore_authors,
@@ -173,6 +175,8 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     // in org are inherited; categories present in repo shadow the org
     // entry for that key entirely.
     ruleset: { ...orgConfig.ruleset, ...repoConfig.ruleset },
+    // Feedback tuning: object merge, repo wins (scalar suppress_after).
+    feedback: { ...orgConfig.feedback, ...repoConfig.feedback },
   };
   // Run through Zod again so the merged object is structurally valid
   // (in particular, lists of `path_instructions` are revalidated).

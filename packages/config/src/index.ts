@@ -37,6 +37,7 @@ export {
   type Config,
   type ConfigInput,
   ConfigSchema,
+  type Feedback,
   type Ruleset,
   type RulesetCategory,
   RulesetSchema,
