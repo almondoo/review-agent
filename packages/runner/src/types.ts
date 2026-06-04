@@ -358,6 +358,15 @@ export type RunnerResult = {
    */
   readonly droppedByRuleset: number;
   /**
+   * Comments skipped because their fingerprint matched an active
+   * `suppression_rule` row in `review_history` (#155). Reported in the
+   * run summary so operators can see the suppression effect. Optional
+   * for back-compat — callers that do not wire a `suppressionLoader`
+   * receive `undefined` rather than zero so eval recorders can tell
+   * "feature off" from "feature on, no suppressions".
+   */
+  readonly droppedBySuppression?: number;
+  /**
    * Number of tool calls (`read_file` / `glob` / `grep`) that the
    * LLM made during this review. Surfaced for cost-guard accounting
    * (§spec 6.2) and for the eval harness so regressions in tool use
@@ -489,6 +498,17 @@ export type RunReviewDeps = {
       readonly factText: string;
     }>
   >;
+  /**
+   * #155 false-positive suppression: loads active `suppression_rule` rows
+   * for the PR's repo. The runner extracts fingerprints from the `factText`
+   * values and drops any finding whose fingerprint matches, before the
+   * findings reach the output scan or `postReview`. When absent, suppression
+   * is disabled for this run (back-compat).
+   */
+  readonly suppressionLoader?: (q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+  }) => Promise<ReadonlyArray<{ readonly factText: string }>>;
 };
 
 export type Middleware = (

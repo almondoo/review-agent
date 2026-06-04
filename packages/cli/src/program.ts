@@ -13,6 +13,8 @@ import {
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
 import { setupWorkspaceCommand } from './commands/setup-workspace.js';
+import { suppressionListCommand } from './commands/suppression-list.js';
+import { suppressionRemoveCommand } from './commands/suppression-remove.js';
 import { validateConfigCommand } from './commands/validate.js';
 import { defaultIo, type ProgramIo } from './io.js';
 
@@ -378,6 +380,67 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'partial' ? 1 : 0);
     });
 
+  const suppression = program
+    .command('suppression')
+    .description(
+      'Inspect and manage false-positive suppression rules (#155). ' +
+        'Suppression rules are created automatically when the 👎 rejection threshold ' +
+        '(`feedback.suppress_after`, default 3) is crossed for a finding fingerprint. ' +
+        'Rules expire after 180 days (same TTL as all review_history rows).',
+    );
+
+  suppression
+    .command('list')
+    .description(
+      'List all non-expired suppression rules for a repo. ' +
+        'Each rule shows an ID, fingerprint, created date, and expiry date.',
+    )
+    .requiredOption(
+      '--installation-id <id>',
+      'GitHub App installation ID (or numeric account ID for CodeCommit)',
+      (v) => BigInt(v),
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .action(async (opts: SuppressionListCliOpts) => {
+      const result = await suppressionListCommand(io, {
+        installationId: opts.installationId,
+        repo: opts.repo,
+        env,
+      });
+      // exit-0 fires on 'ok' — both paths tested directly on
+      // suppressionListCommand; reaching them through parseAsync requires
+      // injecting createDb which the program-level surface does not expose.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  suppression
+    .command('remove')
+    .description(
+      'Remove a suppression rule by its ID (from `suppression list`). ' +
+        'The finding will reappear on the next review run.',
+    )
+    .requiredOption(
+      '--installation-id <id>',
+      'GitHub App installation ID (or numeric account ID for CodeCommit)',
+      (v) => BigInt(v),
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--rule-id <id>', 'review_history.id of the suppression rule', (v) => BigInt(v))
+    .action(async (opts: SuppressionRemoveCliOpts) => {
+      const result = await suppressionRemoveCommand(io, {
+        installationId: opts.installationId,
+        repo: opts.repo,
+        ruleId: opts.ruleId,
+        env,
+      });
+      // exit-0 arm fires on 'ok' / 'not_found'. Both tested directly on
+      // suppressionRemoveCommand; reaching them through parseAsync needs an
+      // injected createDb seam that the program-level surface lacks.
+      /* v8 ignore next */
+      io.exit(result.status === 'config_error' ? 1 : 0);
+    });
+
   program.exitOverride();
   return program;
 }
@@ -457,6 +520,17 @@ type FeedbackBackfillCliOpts = {
   dryRun?: boolean;
   rate?: number;
   botLogin?: string;
+};
+
+type SuppressionListCliOpts = {
+  installationId: bigint;
+  repo: string;
+};
+
+type SuppressionRemoveCliOpts = {
+  installationId: bigint;
+  repo: string;
+  ruleId: bigint;
 };
 
 export type { ProgramIo } from './io.js';

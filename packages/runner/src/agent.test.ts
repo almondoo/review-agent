@@ -1690,3 +1690,99 @@ describe('runReview — ruleset filter (#148)', () => {
     expect(DEFAULT_RULESET_CATEGORY).toBe('bug');
   });
 });
+
+// ---------------------------------------------------------------------------
+// #155 false-positive suppression enforcement
+// ---------------------------------------------------------------------------
+describe('runReview — suppression enforcement (#155)', () => {
+  it('skips findings whose fingerprint matches an active suppression rule', async () => {
+    const provider = makeProvider();
+    // Run once to learn the fingerprints.
+    const firstRun = await runReview(baseJob, provider);
+    const fp = firstRun.comments[0]?.fingerprint;
+    expect(fp).toBeTruthy();
+
+    // Second run — wire suppressionLoader that returns a rule for fp.
+    const secondRun = await runReview(baseJob, provider, {
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      suppressionLoader: async () => [{ factText: `[fp:${fp}] suppressed` }],
+    });
+    expect(secondRun.comments.map((c) => c.fingerprint)).not.toContain(fp);
+    expect(secondRun.droppedBySuppression).toBe(1);
+  });
+
+  it('reports 0 droppedBySuppression when no fingerprints match', async () => {
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider, {
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      suppressionLoader: async () => [{ factText: '[fp:nonexistent] no match' }],
+    });
+    expect(result.comments).toHaveLength(2);
+    expect(result.droppedBySuppression).toBe(0);
+  });
+
+  it('leaves droppedBySuppression undefined when suppressionLoader is absent', async () => {
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider);
+    expect(result.droppedBySuppression).toBeUndefined();
+  });
+
+  it('skips suppression-loader entirely when evalContext is missing', async () => {
+    const provider = makeProvider();
+    const suppressionLoader = vi.fn(async () => []);
+    await runReview(baseJob, provider, { suppressionLoader });
+    // No evalContext → loader is not called.
+    expect(suppressionLoader).not.toHaveBeenCalled();
+  });
+
+  it('handles suppression rules with malformed factText (no fp: prefix) gracefully', async () => {
+    const provider = makeProvider();
+    const result = await runReview(baseJob, provider, {
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      suppressionLoader: async () => [{ factText: 'malformed no fp prefix' }],
+    });
+    // No fingerprint extracted → no suppression → all comments kept.
+    expect(result.comments).toHaveLength(2);
+    expect(result.droppedBySuppression).toBe(0);
+  });
+
+  it('applies suppression after ruleset filter (not before)', async () => {
+    // Verify the pipeline order: suppression fires after ruleset.
+    // We confirm this by checking droppedByRuleset > 0 and droppedBySuppression = 0
+    // when the comment is already dropped by the ruleset.
+    const rulesetJob: ReviewJob = {
+      ...baseJob,
+      ruleset: { bug: { enabled: false, min_severity: 'info' } },
+    };
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => ({
+        summary: 'One finding.',
+        comments: [
+          {
+            path: 'src/a.ts',
+            line: 1,
+            side: 'RIGHT' as const,
+            body: 'This is a bug.',
+            severity: 'minor' as const,
+            category: 'bug' as const,
+          },
+        ],
+        tokensUsed: { input: 100, output: 20 },
+        costUsd: 0.001,
+      })),
+    });
+    const firstRun = await runReview(baseJob, provider);
+    const fp = firstRun.comments[0]?.fingerprint ?? '';
+
+    const result = await runReview(rulesetJob, provider, {
+      evalContext: { installationId: 1n, prNumber: 1, headSha: 'h' },
+      // Suppression rule exists for the comment's fingerprint.
+      suppressionLoader: async () => [{ factText: `[fp:${fp}] suppressed` }],
+    });
+    // The comment is dropped by ruleset first (disabled bug category).
+    // Suppression has no opportunity to fire because the comment doesn't
+    // survive the ruleset filter. droppedBySuppression is 0, droppedByRuleset is 1.
+    expect(result.droppedByRuleset).toBe(1);
+    expect(result.droppedBySuppression).toBe(0);
+  });
+});

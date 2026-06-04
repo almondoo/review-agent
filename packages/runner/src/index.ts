@@ -10,6 +10,14 @@ export {
   type PathInstructionWithFetch,
 } from './auto-fetch.js';
 export {
+  type ConversationContext,
+  type ConversationReplyInput,
+  type ConversationReplyOutcome,
+  type ConversationRunnerDeps,
+  type ConversationTurn,
+  handleConversationReply,
+} from './conversation-runner.js';
+export {
   COORDINATION_MODES,
   type CoordinationDecision,
   type CoordinationDecisionInput,
@@ -36,6 +44,7 @@ export {
   type FeedbackWriter,
   type FeedbackWriterOptions,
   type ReviewHistoryWriter,
+  type SuppressionOpts,
 } from './feedback-writer.js';
 export {
   applyRedactions,

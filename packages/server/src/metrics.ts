@@ -41,6 +41,14 @@ export type ReviewAgentMetrics = {
   feedbackRateLimitDropsTotal: Counter<Record<string, string>>;
   reviewHistoryPrunedTotal: Counter<Record<string, string>>;
   historyReaderErrorsTotal: Counter<Record<string, string>>;
+  /**
+   * #155 false-positive suppression: incremented each time the runner
+   * creates a new `suppression_rule` row in `review_history` (i.e. when
+   * the 👎 count for a fingerprint reaches `feedback.suppress_after`).
+   * Labels: `repo` — the canonical `owner/repo` string. Feeds the C3
+   * false-positive rate observable.
+   */
+  suppressionRulesCreatedTotal: Counter<{ repo: string }>;
   latencySecondsHistogram: Histogram<{ phase: string }>;
 };
 
@@ -82,6 +90,10 @@ export function getMetrics(meter: Meter | null = null): ReviewAgentMetrics {
     }),
     historyReaderErrorsTotal: m.createCounter('review_agent_history_reader_errors_total', {
       description: 'historyReader threw inside the runner. v1.2 #106.',
+    }),
+    suppressionRulesCreatedTotal: m.createCounter('review_agent_suppression_rules_created_total', {
+      description:
+        'Suppression rules created when 👎 count reaches suppress_after threshold. #155.',
     }),
     latencySecondsHistogram: m.createHistogram('review_agent_latency_seconds', {
       description: 'End-to-end latency by phase.',
@@ -129,6 +141,17 @@ export function bridgePrunedRowsToMetrics(): (count: number) => void {
 export function bridgeHistoryReaderErrorsToMetrics(): (err: unknown) => void {
   return () => {
     getMetrics().historyReaderErrorsTotal.add(1);
+  };
+}
+
+/**
+ * #155: fires once per suppression rule created, labelled with the repo.
+ * Operators wire this into `deps.onSuppressionRuleCreated` in the runner
+ * call site (webhook worker, CLI). Reads `getMetrics()` lazily.
+ */
+export function bridgeSuppressionRulesCreatedToMetrics(): (repo: string) => void {
+  return (repo) => {
+    getMetrics().suppressionRulesCreatedTotal.add(1, { repo });
   };
 }
 

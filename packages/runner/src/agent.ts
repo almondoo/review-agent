@@ -281,6 +281,22 @@ async function runReviewInner(
     (promptOptions as { learnedFacts?: typeof learnedFacts }).learnedFacts = learnedFacts;
   }
 
+  // #155 false-positive suppression: load active suppression_rule rows for
+  // this repo. The runner applies these after dedup + confidence + ruleset
+  // filters to drop findings whose fingerprint is muted. Failures bubble up
+  // (same rationale as historyReader above — operator-visible transient DB
+  // errors must not silently skip suppression enforcement).
+  let suppressedFingerprints: ReadonlyArray<string> = [];
+  if (deps.suppressionLoader && deps.evalContext) {
+    const suppressionRows = await deps.suppressionLoader({
+      installationId: deps.evalContext.installationId,
+      repo: normalizeRepoKey(job.prRepo, deps.evalContext.installationId),
+    });
+    suppressedFingerprints = suppressionRows
+      .map((r) => extractFingerprint(r.factText))
+      .filter((fp): fp is string => fp !== null);
+  }
+
   const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
   // Bind the operator's `privacy.redact_patterns` into the default
@@ -559,7 +575,25 @@ async function runReviewInner(
   //   2. Findings in a disabled category are suppressed.
   //   3. Findings below the category's `min_severity` floor are suppressed.
   const rulesetResult = applyRulesetFilter(afterConfidence, job.ruleset);
-  const filteredKept = rulesetResult.kept;
+
+  // #155 false-positive suppression: drop findings whose fingerprint matches
+  // an active suppression_rule. Applied after all other filters so the
+  // suppression count reflects exactly what the user would have seen without
+  // it. The suppressed set is post-dedup/confidence/ruleset — this is the
+  // final gate before secret scanning.
+  const suppressionSet = new Set(suppressedFingerprints);
+  let droppedBySuppression = 0;
+  const afterSuppression =
+    suppressionSet.size === 0
+      ? rulesetResult.kept
+      : rulesetResult.kept.filter((c) => {
+          if (suppressionSet.has(c.fingerprint)) {
+            droppedBySuppression += 1;
+            return false;
+          }
+          return true;
+        });
+  const filteredKept = afterSuppression;
 
   const scannedText = [result.summary, ...filteredKept.map((c) => c.body)].join('\n\n');
   const outputFindings = [...scanContent(scannedText)];
@@ -620,6 +654,12 @@ async function runReviewInner(
     droppedDuplicates: dedup.droppedCount,
     droppedByFeedback: dedup.droppedByFeedback,
     droppedByRuleset: rulesetResult.dropped,
+    // #155: only populate droppedBySuppression when the feature is active
+    // (suppressionLoader was wired) so callers can distinguish "off" from
+    // "on but 0 suppressed". When the suppressionLoader is absent,
+    // suppressedFingerprints is empty but we still leave the field undefined
+    // to honor the back-compat contract.
+    ...(deps.suppressionLoader !== undefined ? { droppedBySuppression } : {}),
     toolCalls,
     reviewEvent,
     ...(exclusionReport !== undefined ? { exclusionReport } : {}),

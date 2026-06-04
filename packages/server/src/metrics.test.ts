@@ -6,6 +6,7 @@ import {
   bridgeFeedbackRateLimitToMetrics,
   bridgeHistoryReaderErrorsToMetrics,
   bridgePrunedRowsToMetrics,
+  bridgeSuppressionRulesCreatedToMetrics,
   getMetrics,
 } from './metrics.js';
 
@@ -46,6 +47,7 @@ describe('getMetrics', () => {
       'review_agent_feedback_rate_limit_drops_total',
       'review_agent_review_history_pruned_total',
       'review_agent_history_reader_errors_total',
+      'review_agent_suppression_rules_created_total',
     ]);
     expect(createHistogram).toHaveBeenCalledWith(
       'review_agent_latency_seconds',
@@ -74,8 +76,8 @@ describe('getMetrics', () => {
     const first = getMetrics(meter);
     const second = getMetrics(meter);
     expect(first).toBe(second);
-    // 11 counters were created on the first call only.
-    expect(createCounter).toHaveBeenCalledTimes(11);
+    // 12 counters were created on the first call only (#155 added suppressionRulesCreatedTotal).
+    expect(createCounter).toHaveBeenCalledTimes(12);
   });
 
   it('falls back to the global meter provider when no meter is supplied', () => {
@@ -153,5 +155,13 @@ describe('fail-open metric bridges (#106)', () => {
     bridgeHistoryReaderErrorsToMetrics()(new Error('again'));
     expect(addSpy).toHaveBeenCalledTimes(2);
     expect(addSpy).toHaveBeenNthCalledWith(1, 1);
+  });
+
+  it('bridgeSuppressionRulesCreatedToMetrics increments with repo label (#155)', () => {
+    const { meter } = fakeMeter();
+    const m = getMetrics(meter);
+    const addSpy = vi.spyOn(m.suppressionRulesCreatedTotal, 'add');
+    bridgeSuppressionRulesCreatedToMetrics()('org/repo');
+    expect(addSpy).toHaveBeenCalledWith(1, { repo: 'org/repo' });
   });
 });
