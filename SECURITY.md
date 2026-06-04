@@ -51,7 +51,7 @@ Adversaries can attempt:
 | Container escape | Non-root `agent` user; `REVIEW_AGENT_SANDBOXED=1`; minimal alpine base; no host mounts in the default Action | §15.1 |
 | Bot author abuse | `ignore_authors` defaults skip `dependabot[bot]` / `renovate[bot]` / `github-actions[bot]` | §10 |
 | Cross-tenant data leak | Postgres RLS `tenant_isolation` policy on every tenant-scoped table; fails closed when GUC unset | §16.1 |
-| Provider-key compromise scope | Per-installation BYOK with KMS envelope encryption (AES-256-GCM data key wrapped under per-installation CMK) | §8.5 |
+| Provider-key compromise scope | Per-installation BYOK with KMS envelope encryption (AES-256-GCM data key wrapped under per-installation CMK). See [BYOK key storage & incident response](./docs/security/byok.md) for the storage model, rotation, and leak runbook. | §8.5 |
 
 ## Operational guidance
 
