@@ -486,6 +486,130 @@ describe('resolveEffectiveConfig', () => {
   });
 });
 
+describe('loadConfigFromYaml — reviews.max_steps (#156)', () => {
+  it('defaults reviews.max_steps to 20 (matches MAX_TOOL_CALLS)', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.reviews.max_steps).toBe(20);
+  });
+
+  it('parses reviews.max_steps: 30', () => {
+    const cfg = loadConfigFromYaml('reviews:\n  max_steps: 30\n');
+    expect(cfg.reviews.max_steps).toBe(30);
+  });
+
+  it('parses reviews.max_steps: 1 (lower bound)', () => {
+    const cfg = loadConfigFromYaml('reviews:\n  max_steps: 1\n');
+    expect(cfg.reviews.max_steps).toBe(1);
+  });
+
+  it('parses reviews.max_steps: 50 (upper bound)', () => {
+    const cfg = loadConfigFromYaml('reviews:\n  max_steps: 50\n');
+    expect(cfg.reviews.max_steps).toBe(50);
+  });
+
+  it('rejects reviews.max_steps: 0 (below min)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_steps: 0\n')).toThrow(ConfigError);
+  });
+
+  it('rejects reviews.max_steps: 51 (above max)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_steps: 51\n')).toThrow(ConfigError);
+  });
+
+  it('rejects reviews.max_steps: 1.5 (non-integer)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_steps: 1.5\n')).toThrow(ConfigError);
+  });
+
+  it('rejects reviews.max_steps: -1 (negative)', () => {
+    expect(() => loadConfigFromYaml('reviews:\n  max_steps: -1\n')).toThrow(ConfigError);
+  });
+});
+
+describe('resolveEffectiveConfig — max_steps precedence (config > env > default, #156)', () => {
+  it('uses YAML max_steps when explicitly set — ignores env var (config wins over env)', () => {
+    const { config } = resolveEffectiveConfig({
+      repoYaml: 'reviews:\n  max_steps: 30\n',
+      env: { REVIEW_AGENT_MAX_STEPS: '10' },
+    });
+    // Config (30) must win over env (10).
+    expect(config.reviews.max_steps).toBe(30);
+  });
+
+  it('uses env var when YAML does not set max_steps (env overrides default)', () => {
+    const { config } = resolveEffectiveConfig({
+      repoYaml: 'language: ja-JP\n',
+      env: { REVIEW_AGENT_MAX_STEPS: '15' },
+    });
+    // YAML omits max_steps → env (15) wins over default (20).
+    expect(config.reviews.max_steps).toBe(15);
+  });
+
+  it('falls back to default 20 when neither YAML nor env sets max_steps', () => {
+    const { config } = resolveEffectiveConfig({ repoYaml: null });
+    expect(config.reviews.max_steps).toBe(20);
+  });
+
+  it('uses env var when repoYaml is null (no YAML at all)', () => {
+    const { config } = resolveEffectiveConfig({
+      repoYaml: null,
+      env: { REVIEW_AGENT_MAX_STEPS: '5' },
+    });
+    expect(config.reviews.max_steps).toBe(5);
+  });
+
+  it('uses YAML max_steps: 20 explicitly — still ignores env (explicit YAML beats env even at default value)', () => {
+    // This case proves we check raw YAML key presence, not value-equality to 20.
+    const { config } = resolveEffectiveConfig({
+      repoYaml: 'reviews:\n  max_steps: 20\n',
+      env: { REVIEW_AGENT_MAX_STEPS: '5' },
+    });
+    expect(config.reviews.max_steps).toBe(20);
+  });
+
+  it('rejects out-of-range REVIEW_AGENT_MAX_STEPS (below 1)', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        repoYaml: null,
+        env: { REVIEW_AGENT_MAX_STEPS: '0' },
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects out-of-range REVIEW_AGENT_MAX_STEPS (above 50)', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        repoYaml: null,
+        env: { REVIEW_AGENT_MAX_STEPS: '100' },
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects non-integer REVIEW_AGENT_MAX_STEPS', () => {
+    expect(() =>
+      resolveEffectiveConfig({
+        repoYaml: null,
+        env: { REVIEW_AGENT_MAX_STEPS: 'abc' },
+      }),
+    ).toThrow(ConfigError);
+  });
+
+  it('records envApplied=true when REVIEW_AGENT_MAX_STEPS is set and YAML omits max_steps', () => {
+    const { log } = resolveEffectiveConfig({
+      repoYaml: null,
+      env: { REVIEW_AGENT_MAX_STEPS: '10' },
+    });
+    expect(log.envApplied).toBe(true);
+  });
+
+  it('records envApplied=true when REVIEW_AGENT_MAX_STEPS is set and YAML overrides it (env still counted)', () => {
+    // envApplied tracks that env vars were present, not that they were used.
+    const { log } = resolveEffectiveConfig({
+      repoYaml: 'reviews:\n  max_steps: 30\n',
+      env: { REVIEW_AGENT_MAX_STEPS: '10' },
+    });
+    expect(log.envApplied).toBe(true);
+  });
+});
+
 describe('mergeWithEnv', () => {
   const base = defaultConfig();
 

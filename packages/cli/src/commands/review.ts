@@ -95,6 +95,8 @@ export async function runReviewCommand(
   if (opts.env.REVIEW_AGENT_MODEL) envOverrides.REVIEW_AGENT_MODEL = opts.env.REVIEW_AGENT_MODEL;
   if (opts.env.REVIEW_AGENT_MAX_USD_PER_PR)
     envOverrides.REVIEW_AGENT_MAX_USD_PER_PR = opts.env.REVIEW_AGENT_MAX_USD_PER_PR;
+  if (opts.env.REVIEW_AGENT_MAX_STEPS)
+    envOverrides.REVIEW_AGENT_MAX_STEPS = opts.env.REVIEW_AGENT_MAX_STEPS;
 
   const { config: baseConfig, log: resolutionLog } = resolveEffectiveConfig({
     repoYaml,
@@ -160,6 +162,7 @@ export async function runReviewCommand(
       pathFilters: config.reviews.path_filters,
       maxFiles: config.reviews.max_files,
       maxDiffLines: config.reviews.max_diff_lines,
+      maxSteps: config.reviews.max_steps,
       privacy: {
         allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
         denyPaths: config.privacy.deny_paths,

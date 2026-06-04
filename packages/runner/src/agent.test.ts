@@ -512,6 +512,23 @@ describe('runReview — tool exposure (#59)', () => {
     expect(callArgs?.maxToolCalls).toBe(MAX_TOOL_CALLS);
   });
 
+  it('uses job.maxSteps when set — passes it to the provider as maxToolCalls (#156)', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    await runReview({ ...baseJob, maxSteps: 30 }, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.maxToolCalls).toBe(30);
+  });
+
+  it('falls back to MAX_TOOL_CALLS when job.maxSteps is absent (#156 back-compat)', async () => {
+    const generateReview = vi.fn<LlmProvider['generateReview']>(async () => validOutput);
+    const provider = makeProvider({ generateReview });
+    // baseJob has no maxSteps field — the runner must fall back to MAX_TOOL_CALLS.
+    await runReview(baseJob, provider);
+    const callArgs = generateReview.mock.calls[0]?.[0] as ReviewInput | undefined;
+    expect(callArgs?.maxToolCalls).toBe(MAX_TOOL_CALLS);
+  });
+
   it('counts at least one read_file tool call when the LLM invokes it during the review', async () => {
     // Integration scenario: the diff references a function defined
     // elsewhere; a tool-using LLM looks it up via read_file before

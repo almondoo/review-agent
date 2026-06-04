@@ -252,6 +252,16 @@ export type ReviewJob = {
    * resolution for audit / reproducibility purposes.
    */
   readonly resolutionLog?: ConfigResolutionLog;
+  /**
+   * Maximum number of agent steps (LLM round-trips including tool-call
+   * round-trips) for this review. Maps to `stopWhen: stepCountIs(N)` in
+   * the AI SDK's `generateText` call. When absent, the runner falls back
+   * to `MAX_TOOL_CALLS` (20) — preserving the hard-coded v0.x behaviour
+   * for callers that pre-date this field. Configured via
+   * `.review-agent.yml` `reviews.max_steps` (or `REVIEW_AGENT_MAX_STEPS`
+   * env var when the YAML key is absent). Bounds: 1–50.
+   */
+  readonly maxSteps?: number;
 };
 
 export type FinalizedComment = InlineComment & {

@@ -414,6 +414,11 @@ async function runReviewInner(
   });
   const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
 
+  // Use job.maxSteps when explicitly set (operator-configured via YAML or
+  // env REVIEW_AGENT_MAX_STEPS); fall back to the hard-coded MAX_TOOL_CALLS
+  // constant (20) for back-compat with callers that pre-date #156.
+  const effectiveMaxSteps = job.maxSteps ?? MAX_TOOL_CALLS;
+
   const baseInput: ReviewInput = {
     systemPrompt,
     diffText: diffPayload,
@@ -421,7 +426,7 @@ async function runReviewInner(
     fileReader,
     language: job.language,
     tools,
-    maxToolCalls: MAX_TOOL_CALLS,
+    maxToolCalls: effectiveMaxSteps,
   };
 
   const costState: CostState = { totalCostUsd: 0 };

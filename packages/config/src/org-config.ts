@@ -131,6 +131,9 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
       ],
       max_files: repoConfig.reviews.max_files,
       max_diff_lines: repoConfig.reviews.max_diff_lines,
+      // max_steps: repo wins (scalar override, same rule as max_files /
+      // max_diff_lines). Org sets a default; repo can tighten or widen it.
+      max_steps: repoConfig.reviews.max_steps,
       ignore_authors: dedup([
         ...orgConfig.reviews.ignore_authors,
         ...repoConfig.reviews.ignore_authors,

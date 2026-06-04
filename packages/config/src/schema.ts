@@ -98,6 +98,17 @@ const ReviewsSchema = z
     // release branch), or `'never'` to disable the mapping entirely
     // (every review posts `COMMENT`, regardless of severity).
     request_changes_on: z.enum(REQUEST_CHANGES_THRESHOLDS).default('critical'),
+    // Maximum number of agent steps (LLM round-trips + tool-call
+    // round-trips) before the runner terminates the loop. Maps to
+    // `stopWhen: stepCountIs(N)` in the Vercel AI SDK call. Bounds
+    // (1–50) are enforced at parse time so an out-of-range YAML value
+    // is rejected immediately with an actionable error. Default 20
+    // matches the historical hard-coded `MAX_TOOL_CALLS` constant in
+    // `packages/runner/src/tools.ts` — preserves existing behaviour
+    // for operators who have not set this key. Precedence:
+    //   repo/org YAML > env REVIEW_AGENT_MAX_STEPS > built-in default
+    // (see `loader.ts` `mergeWithEnvMaxSteps`).
+    max_steps: z.number().int().min(1).max(50).default(20),
   })
   .strict();
 

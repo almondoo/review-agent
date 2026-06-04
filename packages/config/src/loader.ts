@@ -8,6 +8,21 @@ export type EnvOverrides = {
   REVIEW_AGENT_PROVIDER?: string;
   REVIEW_AGENT_MODEL?: string;
   REVIEW_AGENT_MAX_USD_PER_PR?: string;
+  /**
+   * Env-var fallback for `reviews.max_steps`. Precedence for this key
+   * follows §10.2 correctly (config > env > default) — when the YAML
+   * explicitly sets `reviews.max_steps`, this env var is ignored. When
+   * the YAML omits `reviews.max_steps` (i.e. raw YAML object has no
+   * `reviews.max_steps` key), this env var provides a deployment-level
+   * override before the built-in default of 20 applies.
+   *
+   * NOTE: unlike `REVIEW_AGENT_MAX_USD_PER_PR` (which currently
+   * overrides the config value — a known §10.2 inversion documented in
+   * `loader.ts`), `REVIEW_AGENT_MAX_STEPS` is implemented with the
+   * correct config > env precedence. The inversion on the other env
+   * keys is a known inconsistency tracked for a future follow-up.
+   */
+  REVIEW_AGENT_MAX_STEPS?: string;
 };
 
 /**
@@ -97,6 +112,28 @@ export function loadConfigFromYaml(yamlText: string): Config {
   return result.data;
 }
 
+/**
+ * Detect whether `reviews.max_steps` was explicitly set in the raw YAML
+ * object BEFORE Zod applies its default value of 20. This is needed to
+ * implement the correct §10.2 config > env precedence for max_steps:
+ *
+ *   - If the YAML object has `reviews.max_steps` → config wins; ignore env.
+ *   - If the YAML object lacks `reviews.max_steps` → env var (if set)
+ *     overrides the built-in default of 20.
+ *
+ * We inspect the raw parsed object rather than comparing the final
+ * config value against the default (which would be ambiguous when the
+ * user explicitly writes `max_steps: 20`). The path `reviews.max_steps`
+ * is a single, stable key — this is tractable unlike per-key provenance
+ * tracking across the entire schema (issue #146).
+ */
+function rawYamlHasMaxSteps(raw: unknown): boolean {
+  if (typeof raw !== 'object' || raw === null) return false;
+  const reviews = (raw as Record<string, unknown>).reviews;
+  if (typeof reviews !== 'object' || reviews === null) return false;
+  return Object.hasOwn(reviews, 'max_steps');
+}
+
 export function defaultConfig(): Config {
   return ConfigSchema.parse({});
 }
@@ -171,9 +208,53 @@ export function resolveEffectiveConfig(opts: {
     orgYamlLoaded ? 'org-yaml' : null,
   );
 
-  // Apply env overrides on top (current behaviour — see #156 TODO).
-  const hasEnv = Object.values(env).some((v) => v !== undefined);
-  const finalConfig = hasEnv ? mergeWithEnv(baseConfig, env) : baseConfig;
+  // Detect whether `reviews.max_steps` was explicitly present in the raw
+  // YAML (before Zod applied the default). We need this to implement the
+  // correct §10.2 config > env precedence: if the YAML says max_steps,
+  // the env var must not override it. We inspect the raw object for the
+  // key's presence rather than comparing the final value to 20, which
+  // would be ambiguous when the operator intentionally writes `max_steps: 20`.
+  //
+  // NOTE: this is the only key we thread through with correct config > env
+  // precedence. The other env keys (LANGUAGE, PROVIDER, MODEL,
+  // MAX_USD_PER_PR) still apply env on top of config — a known §10.2
+  // inversion documented below (see `mergeWithEnv`). max_steps is new
+  // in #156 and adopts the correct semantics from the start.
+  let rawParsed: unknown = {};
+  if (repoYaml !== null) {
+    try {
+      rawParsed = parseYaml(repoYaml) ?? {};
+    } catch {
+      // Parsing already succeeded above (loadConfigFromYaml would have
+      // thrown) — this branch is unreachable in practice. Fall through.
+    }
+  } else if (orgYaml !== null) {
+    try {
+      rawParsed = parseYaml(orgYaml) ?? {};
+    } catch {
+      // Same: already parsed successfully above.
+    }
+  }
+  const yamlExplicitlySetMaxSteps = rawYamlHasMaxSteps(rawParsed);
+
+  // Apply env overrides. For max_steps, env is skipped when the YAML
+  // already set it (config > env per §10.2). For all other env keys,
+  // env currently overrides YAML — the known §10.2 inversion tracked
+  // as a future follow-up.
+  const hasEnvWithoutMaxSteps = Object.entries(env)
+    .filter(([k]) => k !== 'REVIEW_AGENT_MAX_STEPS')
+    .some(([, v]) => v !== undefined);
+  const hasMaxStepsEnv = env.REVIEW_AGENT_MAX_STEPS !== undefined;
+  const hasEnv = hasEnvWithoutMaxSteps || hasMaxStepsEnv;
+
+  let finalConfig = baseConfig;
+  if (hasEnvWithoutMaxSteps) {
+    finalConfig = mergeWithEnv(finalConfig, env);
+  }
+  // Apply REVIEW_AGENT_MAX_STEPS only when config did NOT explicitly set it.
+  if (hasMaxStepsEnv && !yamlExplicitlySetMaxSteps) {
+    finalConfig = applyMaxStepsEnv(finalConfig, env.REVIEW_AGENT_MAX_STEPS as string);
+  }
 
   const log: ConfigResolutionLog = {
     primarySource,
@@ -240,6 +321,19 @@ function buildSectionSources(
   return sections;
 }
 
+/**
+ * Apply env-var overrides for all keys except `REVIEW_AGENT_MAX_STEPS`.
+ * That key is handled separately in `resolveEffectiveConfig` with the
+ * correct config > env precedence (see `applyMaxStepsEnv`).
+ *
+ * KNOWN PRECEDENCE INVERSION (§10.2): The keys handled here
+ * (LANGUAGE, PROVIDER/MODEL, MAX_USD_PER_PR) allow the env var to
+ * override the YAML config value. This inverts the §10.2 rule
+ * (config > env). The inversion is preserved for backwards compat
+ * and documented here as a known inconsistency. `REVIEW_AGENT_MAX_STEPS`
+ * (issue #156) is the first key implemented with the correct
+ * config > env semantics. Future follow-up work will unify all keys.
+ */
 export function mergeWithEnv(config: Config, env: EnvOverrides): Config {
   let next: Config = config;
   if (env.REVIEW_AGENT_LANGUAGE) {
@@ -273,5 +367,24 @@ export function mergeWithEnv(config: Config, env: EnvOverrides): Config {
     }
     next = { ...next, cost: { ...next.cost, max_usd_per_pr: value } };
   }
+  // REVIEW_AGENT_MAX_STEPS is NOT applied here — it is handled in
+  // resolveEffectiveConfig with the correct config > env precedence.
   return next;
+}
+
+/**
+ * Apply `REVIEW_AGENT_MAX_STEPS` env var to the config. Called from
+ * `resolveEffectiveConfig` ONLY when the YAML did not explicitly set
+ * `reviews.max_steps` (config wins per §10.2).
+ *
+ * Validates that the value is an integer in [1, 50] — same bounds as
+ * the Zod schema so an env var with an out-of-range value is rejected
+ * with an actionable error at config-load time.
+ */
+function applyMaxStepsEnv(config: Config, raw: string): Config {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 50) {
+    throw new ConfigError(`REVIEW_AGENT_MAX_STEPS='${raw}' must be an integer between 1 and 50.`);
+  }
+  return { ...config, reviews: { ...config.reviews, max_steps: value } };
 }
