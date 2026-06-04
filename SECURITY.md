@@ -6,9 +6,9 @@ If you discover a security vulnerability in this project, please report it
 privately via [GitHub Security Advisories](https://github.com/almondoo/review-agent/security/advisories/new).
 
 Do **not** report security issues through public channels (forks, discussions,
-or social media) until they have been addressed. As this is a personal
-project, response times are best-effort but you can expect an initial
-acknowledgement within a reasonable timeframe.
+or social media) until they have been addressed. You can expect an initial
+acknowledgement within **24 hours** of a report being filed (best-effort; this
+is a personal project).
 
 **Escalation contact**: the project maintainer ([@almondoo](https://github.com/almondoo)).
 For multi-tenant operators running their own deployment, *you* are the
