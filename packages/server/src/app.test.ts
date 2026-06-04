@@ -479,3 +479,190 @@ describe('createApp', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// #149 inline conversation: handleConversation + getBotLogin wiring
+// ---------------------------------------------------------------------------
+
+describe('createApp — #149 conversation wiring', () => {
+  it('forwards deps.handleConversation to the webhook handler for pull_request_review_comment replies with @review-agent', async () => {
+    // Build a pull_request_review_comment body that is a thread reply mentioning @review-agent.
+    const handleConversation = vi.fn().mockResolvedValue('dispatched' as const);
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const app = createApp({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: makeDb() as any,
+      queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+      webhookSecret: SECRET,
+      allowedSnsTopicArns: [TOPIC],
+      checkGithubFeedbackAuthz: checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+
+    const body = JSON.stringify({
+      action: 'created',
+      installation: { id: 11 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 7 },
+      comment: {
+        id: 200,
+        in_reply_to_id: 100,
+        body: 'Hey @review-agent, can you clarify?',
+        diff_hunk: '@@ -1,2 +1,3 @@',
+      },
+      sender: { login: 'alice' },
+    });
+    const res = await app.request('/webhook', {
+      method: 'POST',
+      headers: {
+        'x-hub-signature-256': sign(body),
+        'x-github-event': 'pull_request_review_comment',
+        'x-github-delivery': 'dlv-conv-1',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string; outcome: string };
+    expect(json.kind).toBe('conversation_reply');
+    expect(json.outcome).toBe('dispatched');
+    expect(handleConversation).toHaveBeenCalledOnce();
+  });
+
+  it('drops conversation self-replies when deps.getBotLogin returns the sender login', async () => {
+    // Sender is the bot itself — the self-reply guard must fire.
+    const handleConversation = vi.fn().mockResolvedValue('dispatched' as const);
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const app = createApp({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: makeDb() as any,
+      queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+      webhookSecret: SECRET,
+      allowedSnsTopicArns: [TOPIC],
+      handleConversation,
+      getBotLogin,
+    });
+
+    const body = JSON.stringify({
+      action: 'created',
+      installation: { id: 11 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 7 },
+      comment: {
+        id: 201,
+        in_reply_to_id: 100,
+        body: '@review-agent following up',
+      },
+      sender: { login: 'review-agent[bot]' },
+    });
+    const res = await app.request('/webhook', {
+      method: 'POST',
+      headers: {
+        'x-hub-signature-256': sign(body),
+        'x-github-event': 'pull_request_review_comment',
+        'x-github-delivery': 'dlv-self-1',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string; outcome: string };
+    expect(json.kind).toBe('conversation_reply');
+    expect(json.outcome).toBe('self_reply');
+    expect(handleConversation).not.toHaveBeenCalled();
+    expect(getBotLogin).toHaveBeenCalledOnce();
+  });
+
+  it('uses GITHUB_BOT_LOGIN env var as getBotLogin when no explicit override is supplied', async () => {
+    const prev = process.env.GITHUB_BOT_LOGIN;
+    process.env.GITHUB_BOT_LOGIN = 'env-bot[bot]';
+    try {
+      const handleConversation = vi.fn().mockResolvedValue('dispatched' as const);
+      const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+      const app = createApp({
+        // biome-ignore lint/suspicious/noExplicitAny: mock
+        db: makeDb() as any,
+        queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+        webhookSecret: SECRET,
+        allowedSnsTopicArns: [TOPIC],
+        checkGithubFeedbackAuthz: checkAuthz,
+        handleConversation,
+        // No explicit getBotLogin — should fall back to env.
+      });
+
+      // The sender is the env-configured bot — self-reply guard should fire.
+      const body = JSON.stringify({
+        action: 'created',
+        installation: { id: 11 },
+        repository: { owner: { login: 'o' }, name: 'r' },
+        pull_request: { number: 7 },
+        comment: {
+          id: 202,
+          in_reply_to_id: 100,
+          body: '@review-agent hello',
+        },
+        sender: { login: 'env-bot[bot]' },
+      });
+      const res = await app.request('/webhook', {
+        method: 'POST',
+        headers: {
+          'x-hub-signature-256': sign(body),
+          'x-github-event': 'pull_request_review_comment',
+          'x-github-delivery': 'dlv-env-bot-1',
+          'content-type': 'application/json',
+        },
+        body,
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { kind: string; outcome: string };
+      expect(json.kind).toBe('conversation_reply');
+      // The sender matches the env-configured bot login → self_reply.
+      expect(json.outcome).toBe('self_reply');
+      expect(handleConversation).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.GITHUB_BOT_LOGIN;
+      else process.env.GITHUB_BOT_LOGIN = prev;
+    }
+  });
+
+  it('falls through to legacy command parser when handleConversation is not wired', async () => {
+    // Without handleConversation, a pull_request_review_comment reply with @review-agent
+    // should fall through to the legacy parser (no conversation_reply result).
+    const app = createApp({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: makeDb() as any,
+      queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+      webhookSecret: SECRET,
+      allowedSnsTopicArns: [TOPIC],
+    });
+
+    const body = JSON.stringify({
+      action: 'created',
+      installation: { id: 11 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 7 },
+      comment: {
+        id: 203,
+        in_reply_to_id: 100,
+        body: '@review-agent review',
+      },
+      sender: { login: 'alice' },
+    });
+    const res = await app.request('/webhook', {
+      method: 'POST',
+      headers: {
+        'x-hub-signature-256': sign(body),
+        'x-github-event': 'pull_request_review_comment',
+        'x-github-delivery': 'dlv-fallthrough-1',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string };
+    // Falls through to command parser — 'ignored' (no authz wired) or noop.
+    expect(json.kind).not.toBe('conversation_reply');
+  });
+});

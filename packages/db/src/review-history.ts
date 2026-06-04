@@ -15,7 +15,11 @@ export function createReviewHistoryWriter(db: DbClient) {
   return async (input: {
     readonly installationId: bigint;
     readonly repo: string;
-    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factType:
+      | 'accepted_pattern'
+      | 'rejected_finding'
+      | 'arch_decision'
+      | 'suppression_rule';
     readonly factText: string;
   }): Promise<void> => {
     const row: NewReviewHistoryRow = {
