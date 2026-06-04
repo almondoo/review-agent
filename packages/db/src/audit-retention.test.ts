@@ -11,6 +11,8 @@ import type { DbClient } from './connection.js';
 // loadAuditLogForExport / loadCostLedgerForExport. The chain we model is:
 //   db.select(...).from(...).where(...).orderBy(...)
 // `await` lands on the Promise returned by `.orderBy(...)`.
+// `execute` is stubbed to a no-op so the GUC set_config call in
+// loadAuditLogForExport does not throw.
 function fakeReadDb<R>(rows: ReadonlyArray<R>): DbClient {
   const db = {
     select: () => ({
@@ -18,6 +20,7 @@ function fakeReadDb<R>(rows: ReadonlyArray<R>): DbClient {
         where: () => ({ orderBy: () => Promise.resolve(rows) }),
       }),
     }),
+    execute: () => Promise.resolve([]),
   };
   return db as unknown as DbClient;
 }

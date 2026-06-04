@@ -14,6 +14,7 @@
  * Uses vi.mock('@review-agent/db') to replace withTenant with a controllable fake.
  * The fetchInstallation dep is injected directly so no @octokit/rest calls are made.
  */
+import type { AuditAppender } from '@review-agent/db';
 import { describe, expect, it, vi } from 'vitest';
 import type { InstallationInfo } from '../github-setup.js';
 import { createGithubRouter } from '../github-setup.js';
@@ -344,5 +345,75 @@ describe('GET /setup', () => {
 
     // Reset for subsequent tests.
     withTenantError = null;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit write tests
+// ---------------------------------------------------------------------------
+
+describe('GET /setup — audit', () => {
+  type AuditRecord = Parameters<AuditAppender>[0];
+
+  function fakeAuditAppender(): { appender: AuditAppender; records: AuditRecord[] } {
+    const records: AuditRecord[] = [];
+    const appender: AuditAppender = vi.fn(async (ev) => {
+      records.push(ev);
+      return { ...ev, ts: new Date(), prevHash: '0'.repeat(64), hash: '0'.repeat(64) };
+    });
+    return { appender, records };
+  }
+
+  it('audit write failure is best-effort (does not fail the setup redirect)', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const db = fakeDb() as any;
+    const failingAppender: AuditAppender = vi.fn().mockRejectedValue(new Error('audit fail'));
+
+    const router = createGithubRouter({
+      db,
+      githubAppSlug: 'my-review-agent',
+      dashboardOrigin: 'https://dash.example.com',
+      fetchInstallation: defaultFetchInstallation,
+      auditAppender: failingAppender,
+    });
+
+    const { cookieHeader, stateValue } = await getStateAndCookie(router);
+    const res = await router.request(
+      `http://host/setup?installation_id=99999&setup_action=install&state=${stateValue}`,
+      { headers: { cookie: cookieHeader } },
+    );
+    // The redirect should still succeed despite the audit write failure
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location') ?? '';
+    expect(location).toContain('/integrations/github/repos');
+  });
+
+  it('writes github_installation.setup audit event on successful install', async () => {
+    // biome-ignore lint/suspicious/noExplicitAny: test mock
+    const db = fakeDb() as any;
+    const { appender, records } = fakeAuditAppender();
+
+    const router = createGithubRouter({
+      db,
+      githubAppSlug: 'my-review-agent',
+      dashboardOrigin: 'https://dash.example.com',
+      fetchInstallation: defaultFetchInstallation,
+      auditAppender: appender,
+    });
+
+    const { cookieHeader, stateValue } = await getStateAndCookie(router);
+    const res = await router.request(
+      `http://host/setup?installation_id=12345&setup_action=install&state=${stateValue}`,
+      { headers: { cookie: cookieHeader } },
+    );
+    expect(res.status).toBe(302);
+    expect(records).toHaveLength(1);
+    const ev = records[0];
+    expect(ev?.event).toBe('github_installation.setup');
+    expect(ev?.resourceType).toBe('github_installation');
+    expect(ev?.resourceId).toBe('12345');
+    expect(ev?.installationId).toBe(12345n);
+    // actor must be null (no JWT principal on this endpoint)
+    expect(ev?.actor).toBeUndefined();
   });
 });

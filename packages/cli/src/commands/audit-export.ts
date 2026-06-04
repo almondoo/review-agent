@@ -104,6 +104,9 @@ export async function auditExportCommand(
         model: r.model,
         inputTokens: r.inputTokens,
         outputTokens: r.outputTokens,
+        actor: r.actor,
+        resourceType: r.resourceType,
+        resourceId: r.resourceId,
       }));
       const verification = verifyAuditChainSegment(links);
       if (!verification.ok) {

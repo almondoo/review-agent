@@ -2068,11 +2068,23 @@ CREATE TABLE audit_log (
   input_tokens INT,
   output_tokens INT,
   prev_hash TEXT,
-  hash TEXT
+  hash TEXT,
+  actor TEXT,          -- operator/service identity (nullable; omitted from hash when null)
+  resource_type TEXT,  -- mutated resource kind (nullable; omitted from hash when null)
+  resource_id TEXT     -- mutated resource identifier (nullable; omitted from hash when null)
 );
 ```
 
 `hash = sha256(prev_hash || row_payload)`. Verifiable by replaying.
+
+**Admin mutation auditing.** The following config-and-access mutations are automatically
+recorded (issue #136): repo CRUD (`repo.create/enable/disable/delete/bulk_register`),
+prompt update (`prompt.update`), BYOK key management (`byok.key.*`), GitHub App installation
+setup (`github_installation.setup`), principal/membership management via CLI
+(`principal.create/delete/password_change`, `membership.grant/revoke`). The `actor` column
+carries the JWT principal ID for HTTP API requests, `cli:<$USER>` for CLI operations, or `null`
+when no authenticated principal is available. Secret material is never written to audit fields.
+Export via `review-agent audit export` includes `actor`, `resource_type`, and `resource_id`.
 
 ---
 

@@ -9,6 +9,7 @@
  *
  * Uses stub DB and stub AppAuthClient — no live Postgres or GitHub API.
  */
+import type { AuditAppender } from '@review-agent/db';
 import type { AppAuthClient } from '@review-agent/platform-github';
 import { describe, expect, it, vi } from 'vitest';
 import { createGithubReposRouter } from '../github-repos.js';
@@ -608,5 +609,96 @@ describe('multi-tenant guard: POST /repos/bulk', () => {
     });
     // No rows must have been inserted
     expect(db._repos).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit write tests: POST /repos/bulk
+// ---------------------------------------------------------------------------
+
+describe('POST /repos/bulk — audit', () => {
+  type AuditRecord = Parameters<AuditAppender>[0];
+
+  function fakeAuditAppender(): { appender: AuditAppender; records: AuditRecord[] } {
+    const records: AuditRecord[] = [];
+    const appender: AuditAppender = vi.fn(async (ev) => {
+      records.push(ev);
+      return { ...ev, ts: new Date(), prevHash: '0'.repeat(64), hash: '0'.repeat(64) };
+    });
+    return { appender, records };
+  }
+
+  it('writes repo.bulk_register audit event when repos are created', async () => {
+    const db = makeDb({ repos: [] });
+    const { appender, records } = fakeAuditAppender();
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      auditAppender: appender,
+    });
+    const res = await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 55, names: ['owner/repo-audit'] }),
+    });
+    expect(res.status).toBe(201);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.event).toBe('repo.bulk_register');
+    expect(records[0]?.resourceType).toBe('repo');
+    expect(records[0]?.installationId).toBe(55n);
+    // No secrets
+    expect(
+      JSON.stringify(records[0], (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+    ).not.toContain('password');
+  });
+
+  it('audit write failure is best-effort (does not fail the bulk register response)', async () => {
+    const db = makeDb({ repos: [] });
+    const failingAppender: AuditAppender = vi.fn().mockRejectedValue(new Error('audit db fail'));
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      auditAppender: failingAppender,
+    });
+    const res = await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 42, names: ['owner/resilient-bulk'] }),
+    });
+    // HTTP response must still succeed even though audit write threw
+    expect(res.status).toBe(201);
+  });
+
+  it('does NOT write audit event when all repos already exist', async () => {
+    const existingRepos: RepoRecord[] = [
+      {
+        id: 'e1',
+        platform: 'github',
+        name: 'owner/existing',
+        enabled: true,
+        installationId: 42n,
+        createdAt: NOW,
+        updatedAt: NOW,
+        deletedAt: null,
+      },
+    ];
+    const db = makeDb({ repos: existingRepos });
+    const { appender, records } = fakeAuditAppender();
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      auditAppender: appender,
+    });
+    const res = await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 42, names: ['owner/existing'] }),
+    });
+    expect(res.status).toBe(200);
+    // No new repos created → no audit write
+    expect(records).toHaveLength(0);
   });
 });

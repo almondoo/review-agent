@@ -18,7 +18,7 @@
  * multiTenant=false → pass-through (single-operator implicit trust).
  */
 import { githubInstallations, repos } from '@review-agent/core/db';
-import type { DbClient } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
 import { withTenant } from '@review-agent/db';
 import type {
   AppAuthClient,
@@ -65,6 +65,7 @@ export type GithubReposDeps = {
    * See docs/security/multi-tenant-authz.md.
    */
   readonly multiTenant?: boolean;
+  readonly auditAppender?: AuditAppender;
 };
 
 // ---------------------------------------------------------------------------
@@ -305,6 +306,23 @@ export function createGithubReposRouter(deps: GithubReposDeps): Hono {
       }
 
       const result: BulkRepoResult = { created, alreadyExists, errors };
+
+      if (deps.auditAppender !== undefined && created.length > 0) {
+        const actor = c.get('principal')?.id ?? null;
+        try {
+          await deps.auditAppender({
+            event: 'repo.bulk_register',
+            installationId,
+            resourceType: 'repo',
+            resourceId: String(installationId),
+            ...(actor !== null ? { actor } : {}),
+          });
+        } catch (err) {
+          process.stderr.write(
+            `[review-agent] WARN: audit write failed for repo.bulk_register installationId=${installationId}: ${String(err)}\n`,
+          );
+        }
+      }
 
       if (errors.length === 0 && alreadyExists.length === 0 && created.length > 0) {
         return c.json(result, 201);

@@ -131,6 +131,9 @@ describe.skipIf(!url)('audit retention integration (1000 → 100 prune)', () => 
         model: r.model,
         inputTokens: r.inputTokens,
         outputTokens: r.outputTokens,
+        actor: r.actor ?? null,
+        resourceType: r.resourceType ?? null,
+        resourceId: r.resourceId ?? null,
       }));
       expect(verifyAuditChainSegment(links).ok).toBe(true);
     } finally {

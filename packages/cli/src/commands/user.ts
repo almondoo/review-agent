@@ -2,6 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { type DashboardRole, dashboardRoleSchema, hashPassword } from '@review-agent/core';
 import {
+  type AuditAppender,
+  createAuditAppender,
   createDbClient,
   createPrincipal,
   type DbClient,
@@ -12,6 +14,7 @@ import {
   revokeMembership,
   setPrincipalPassword,
   upsertMembership,
+  withTenant,
 } from '@review-agent/db';
 import type { ProgramIo } from '../io.js';
 
@@ -120,6 +123,8 @@ export type UserCreateOpts = {
   readonly upsertMembershipFn?: typeof upsertMembership;
   /** Override password-prompt / generation for tests. */
   readonly resolvePassword?: (opts: UserCreateOpts) => Promise<string>;
+  /** Test seam: override the AuditAppender used for writing audit events. */
+  readonly auditAppenderFn?: (db: DbClient) => AuditAppender;
 };
 
 export type UserCreateResult = {
@@ -182,6 +187,10 @@ export async function userCreateCommand(
   const create = opts.createPrincipalFn ?? createPrincipal;
   /* v8 ignore next */
   const upsert = opts.upsertMembershipFn ?? upsertMembership;
+  /* v8 ignore next */
+  const makeAuditAppender = opts.auditAppenderFn ?? createAuditAppender;
+  const appender = makeAuditAppender(db);
+  const cliActor = `cli:${opts.env.USER ?? 'unknown'}`;
 
   try {
     try {
@@ -197,10 +206,47 @@ export async function userCreateCommand(
 
     io.stdout(`Created principal '${opts.username}' (id: ${id}).\n`);
 
+    // Audit principal.create. principal events have no installation_id
+    // (global scope). The audit_log RLS withCheck allows NULL installation_id,
+    // but the `using` clause requires app.current_tenant to match — in a plain
+    // CLI connection the GUC is unset, so the SELECT for prev_hash will return
+    // no rows (defaulting to genesis). Each global CLI event starts an isolated
+    // chain segment; this is a known limitation documented in docs/security/audit-log.md.
+    try {
+      await appender({
+        event: 'principal.create',
+        resourceType: 'principal',
+        resourceId: id,
+        actor: cliActor,
+        ...(opts.installation !== undefined ? { installationId: BigInt(opts.installation) } : {}),
+      });
+    } catch (auditErr) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for principal.create id=${id}: ${String(auditErr)}\n`,
+      );
+    }
+
     if (opts.installation !== undefined) {
       const role: DashboardRole = opts.role ?? 'viewer';
       await upsert(db, id, opts.installation, role);
       io.stdout(`Granted role '${role}' on installation ${opts.installation}.\n`);
+
+      // Audit membership.grant under the installation's tenant context.
+      try {
+        await withTenant(db, BigInt(opts.installation), async () => {
+          await appender({
+            event: 'membership.grant',
+            installationId: BigInt(opts.installation ?? '0'),
+            resourceType: 'membership',
+            resourceId: `${id}:${opts.installation}`,
+            actor: cliActor,
+          });
+        });
+      } catch (auditErr) {
+        process.stderr.write(
+          `[review-agent] WARN: audit write failed for membership.grant: ${String(auditErr)}\n`,
+        );
+      }
     }
 
     return { status: 'ok', id };
@@ -286,6 +332,8 @@ export type UserSetPasswordOpts = {
   readonly setPrincipalPasswordFn?: typeof setPrincipalPassword;
   /** Override password-prompt / generation for tests. */
   readonly resolvePassword?: (opts: UserSetPasswordOpts) => Promise<string>;
+  /** Test seam: override the AuditAppender used for writing audit events. */
+  readonly auditAppenderFn?: (db: DbClient) => AuditAppender;
 };
 
 export type UserSetPasswordResult = {
@@ -328,6 +376,10 @@ export async function userSetPasswordCommand(
   const getPrincipal = opts.getPrincipalFn ?? getPrincipalByUsername;
   /* v8 ignore next */
   const setPassword = opts.setPrincipalPasswordFn ?? setPrincipalPassword;
+  /* v8 ignore next */
+  const makeAuditAppender = opts.auditAppenderFn ?? createAuditAppender;
+  const appender = makeAuditAppender(db);
+  const cliActor = `cli:${opts.env.USER ?? 'unknown'}`;
 
   try {
     const principal = await getPrincipal(db, opts.username);
@@ -341,6 +393,21 @@ export async function userSetPasswordCommand(
       `Password updated for '${opts.username}'. ` +
         'All existing sessions have been invalidated (token version bumped).\n',
     );
+
+    // Audit principal.password_change (best-effort; global/null-installation event).
+    try {
+      await appender({
+        event: 'principal.password_change',
+        resourceType: 'principal',
+        resourceId: principal.id,
+        actor: cliActor,
+      });
+    } catch (auditErr) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for principal.password_change id=${principal.id}: ${String(auditErr)}\n`,
+      );
+    }
+
     return { status: 'ok' };
   } finally {
     await close();
@@ -358,6 +425,8 @@ export type UserDeleteOpts = {
   readonly createDb?: (url: string) => { db: DbClient; close: () => Promise<void> };
   readonly getPrincipalFn?: typeof getPrincipalByUsername;
   readonly deletePrincipalFn?: typeof deletePrincipal;
+  /** Test seam: override the AuditAppender used for writing audit events. */
+  readonly auditAppenderFn?: (db: DbClient) => AuditAppender;
 };
 
 export type UserDeleteResult = {
@@ -381,12 +450,30 @@ export async function userDeleteCommand(
   const getPrincipal = opts.getPrincipalFn ?? getPrincipalByUsername;
   /* v8 ignore next */
   const del = opts.deletePrincipalFn ?? deletePrincipal;
+  /* v8 ignore next */
+  const makeAuditAppender = opts.auditAppenderFn ?? createAuditAppender;
+  const appender = makeAuditAppender(db);
+  const cliActor = `cli:${opts.env.USER ?? 'unknown'}`;
 
   try {
     const principal = await getPrincipal(db, opts.username);
     if (!principal) {
       io.stderr(`Principal '${opts.username}' not found.\n`);
       return { status: 'not_found' };
+    }
+
+    // Audit principal.delete before deleting (so we have the id).
+    try {
+      await appender({
+        event: 'principal.delete',
+        resourceType: 'principal',
+        resourceId: principal.id,
+        actor: cliActor,
+      });
+    } catch (auditErr) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for principal.delete id=${principal.id}: ${String(auditErr)}\n`,
+      );
     }
 
     await del(db, principal.id);
@@ -410,6 +497,8 @@ export type UserGrantOpts = {
   readonly createDb?: (url: string) => { db: DbClient; close: () => Promise<void> };
   readonly getPrincipalFn?: typeof getPrincipalByUsername;
   readonly upsertMembershipFn?: typeof upsertMembership;
+  /** Test seam: override the AuditAppender used for writing audit events. */
+  readonly auditAppenderFn?: (db: DbClient) => AuditAppender;
 };
 
 export type UserGrantResult = {
@@ -443,6 +532,10 @@ export async function userGrantCommand(
   const getPrincipal = opts.getPrincipalFn ?? getPrincipalByUsername;
   /* v8 ignore next */
   const upsert = opts.upsertMembershipFn ?? upsertMembership;
+  /* v8 ignore next */
+  const makeAuditAppender = opts.auditAppenderFn ?? createAuditAppender;
+  const appender = makeAuditAppender(db);
+  const cliActor = `cli:${opts.env.USER ?? 'unknown'}`;
 
   try {
     const principal = await getPrincipal(db, opts.username);
@@ -455,6 +548,24 @@ export async function userGrantCommand(
     io.stdout(
       `Granted role '${opts.role}' to '${opts.username}' on installation ${opts.installation}.\n`,
     );
+
+    // Audit membership.grant under the installation's tenant context.
+    try {
+      await withTenant(db, BigInt(opts.installation), async () => {
+        await appender({
+          event: 'membership.grant',
+          installationId: BigInt(opts.installation),
+          resourceType: 'membership',
+          resourceId: `${principal.id}:${opts.installation}`,
+          actor: cliActor,
+        });
+      });
+    } catch (auditErr) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for membership.grant: ${String(auditErr)}\n`,
+      );
+    }
+
     return { status: 'ok' };
   } finally {
     await close();
@@ -473,6 +584,8 @@ export type UserRevokeOpts = {
   readonly createDb?: (url: string) => { db: DbClient; close: () => Promise<void> };
   readonly getPrincipalFn?: typeof getPrincipalByUsername;
   readonly revokeMembershipFn?: typeof revokeMembership;
+  /** Test seam: override the AuditAppender used for writing audit events. */
+  readonly auditAppenderFn?: (db: DbClient) => AuditAppender;
 };
 
 export type UserRevokeResult = {
@@ -501,6 +614,10 @@ export async function userRevokeCommand(
   const getPrincipal = opts.getPrincipalFn ?? getPrincipalByUsername;
   /* v8 ignore next */
   const revoke = opts.revokeMembershipFn ?? revokeMembership;
+  /* v8 ignore next */
+  const makeAuditAppender = opts.auditAppenderFn ?? createAuditAppender;
+  const appender = makeAuditAppender(db);
+  const cliActor = `cli:${opts.env.USER ?? 'unknown'}`;
 
   try {
     const principal = await getPrincipal(db, opts.username);
@@ -511,6 +628,24 @@ export async function userRevokeCommand(
 
     await revoke(db, principal.id, opts.installation);
     io.stdout(`Revoked membership for '${opts.username}' on installation ${opts.installation}.\n`);
+
+    // Audit membership.revoke under the installation's tenant context.
+    try {
+      await withTenant(db, BigInt(opts.installation), async () => {
+        await appender({
+          event: 'membership.revoke',
+          installationId: BigInt(opts.installation),
+          resourceType: 'membership',
+          resourceId: `${principal.id}:${opts.installation}`,
+          actor: cliActor,
+        });
+      });
+    } catch (auditErr) {
+      process.stderr.write(
+        `[review-agent] WARN: audit write failed for membership.revoke: ${String(auditErr)}\n`,
+      );
+    }
+
     return { status: 'ok' };
   } finally {
     await close();

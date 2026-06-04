@@ -1,7 +1,8 @@
 import { AUDIT_GENESIS_HASH, type ChainLink, verifyAuditChainSegment } from '@review-agent/core';
 import { auditLog } from '@review-agent/core/db';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
+import { TENANT_GUC } from './tenancy.js';
 
 export type SegmentVerificationReport = {
   readonly ok: boolean;
@@ -16,6 +17,11 @@ export async function verifyAuditChainSegmentFromDb(
   db: DbClient,
   opts: { installationId?: bigint } = {},
 ): Promise<SegmentVerificationReport> {
+  // Set the tenant GUC so the RLS `using` clause allows the SELECT.
+  if (opts.installationId !== undefined) {
+    const id = String(opts.installationId);
+    await db.execute(sql`SELECT set_config(${TENANT_GUC}, ${id}, true)`);
+  }
   const where =
     opts.installationId !== undefined
       ? eq(auditLog.installationId, opts.installationId)
@@ -31,6 +37,9 @@ export async function verifyAuditChainSegmentFromDb(
       outputTokens: auditLog.outputTokens,
       prevHash: auditLog.prevHash,
       hash: auditLog.hash,
+      actor: auditLog.actor,
+      resourceType: auditLog.resourceType,
+      resourceId: auditLog.resourceId,
     })
     .from(auditLog)
     .orderBy(asc(auditLog.id));
@@ -45,6 +54,9 @@ export async function verifyAuditChainSegmentFromDb(
     model: r.model,
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
+    actor: r.actor,
+    resourceType: r.resourceType,
+    resourceId: r.resourceId,
   }));
   const result = verifyAuditChainSegment(links);
   return { ok: result.ok, rowsChecked: links.length, breaks: result.breaks };

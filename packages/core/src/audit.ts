@@ -17,6 +17,17 @@ export type AuditEvent = {
    * backward-compatibility guarantee.
    */
   readonly actor?: string | null;
+  /**
+   * Optional resource type that was mutated (e.g. 'repo', 'principal',
+   * 'membership', 'github_installation'). Omitting or passing `null`/`undefined`
+   * is equivalent — canonicalPayload omits null values for backward compatibility.
+   */
+  readonly resourceType?: string | null;
+  /**
+   * Optional resource identifier (e.g. repo UUID, principal ID, composite key).
+   * Omitting or passing `null`/`undefined` is equivalent.
+   */
+  readonly resourceId?: string | null;
 };
 
 export type AuditRow = AuditEvent & {
@@ -43,6 +54,16 @@ export function canonicalPayload(ev: AuditEvent, ts: Date): string {
   if (ev.actor != null) {
     ordered.actor = ev.actor;
   }
+  // BACKWARD-COMPAT NOTE: resourceType and resourceId follow the same pattern
+  // as actor — appended ONLY when non-null. Events without these fields produce
+  // a JSON string byte-for-byte identical to events produced before these fields
+  // were introduced.
+  if (ev.resourceType != null) {
+    ordered.resourceType = ev.resourceType;
+  }
+  if (ev.resourceId != null) {
+    ordered.resourceId = ev.resourceId;
+  }
   return JSON.stringify(ordered);
 }
 
@@ -63,6 +84,10 @@ export type ChainLink = {
   readonly outputTokens: number | null;
   /** Present when the audit row was written after the actor field was added. */
   readonly actor?: string | null;
+  /** Present when the audit row was written after the resource_type field was added. */
+  readonly resourceType?: string | null;
+  /** Present when the audit row was written after the resource_id field was added. */
+  readonly resourceId?: string | null;
 };
 
 export type ChainBreak = {

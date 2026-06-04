@@ -167,6 +167,50 @@ describe('audit chain', () => {
     expect(hash).toBe(computeAuditHash(prev, { ...ev, actor: undefined }, ts));
   });
 
+  // ---- canonicalPayload resource_type / resource_id backward-compatibility ----
+  // These tests prove that adding `resourceType`/`resourceId` to AuditEvent does
+  // NOT change the canonical string for events that have null/undefined values.
+  // Existing stored hashes remain valid without any data migration.
+
+  it('canonicalPayload without resourceType/resourceId is byte-for-byte identical whether fields are absent, null, or undefined', () => {
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = { event: 'repo.create', installationId: 42n };
+    const withoutFields = canonicalPayload(ev, ts);
+    const withNullFields = canonicalPayload({ ...ev, resourceType: null, resourceId: null }, ts);
+    const withUndefinedFields = canonicalPayload(
+      { ...ev, resourceType: undefined, resourceId: undefined },
+      ts,
+    );
+
+    expect(withNullFields).toBe(withoutFields);
+    expect(withUndefinedFields).toBe(withoutFields);
+    expect(withoutFields).not.toContain('resourceType');
+    expect(withoutFields).not.toContain('resourceId');
+  });
+
+  it('canonicalPayload with non-null resourceType/resourceId differs from the null form', () => {
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = { event: 'repo.create' };
+    const withoutFields = canonicalPayload(ev, ts);
+    const withFields = canonicalPayload({ ...ev, resourceType: 'repo', resourceId: 'abc-123' }, ts);
+    expect(withFields).not.toBe(withoutFields);
+    expect(withFields).toContain('"resourceType":"repo"');
+    expect(withFields).toContain('"resourceId":"abc-123"');
+  });
+
+  it('HMAC hash is identical for null and absent resourceType/resourceId (backward compat)', () => {
+    const ts = new Date('2026-04-30T00:00:00.000Z');
+    const ev = { event: 'review.start', installationId: 1n };
+    const prev = '0'.repeat(64);
+    const baseHash = computeAuditHash(prev, ev, ts);
+    expect(baseHash).toBe(
+      computeAuditHash(prev, { ...ev, resourceType: null, resourceId: null }, ts),
+    );
+    expect(baseHash).toBe(
+      computeAuditHash(prev, { ...ev, resourceType: undefined, resourceId: undefined }, ts),
+    );
+  });
+
   it('verifyAuditChain reports breaks when a row is tampered', () => {
     const r1 = appendAuditRow(null, { event: 'a' }, fixedNow);
     const r2 = appendAuditRow(r1.hash, { event: 'b' }, fixedNow);

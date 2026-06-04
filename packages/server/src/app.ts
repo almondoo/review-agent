@@ -1,5 +1,5 @@
 import type { KmsClient, QueueClient } from '@review-agent/core';
-import type { AuditAppender, DbClient } from '@review-agent/db';
+import { type AuditAppender, createAuditAppender, type DbClient } from '@review-agent/db';
 import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -304,6 +304,15 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
     return n;
   })();
 
+  // Resolve the audit appender once at app-creation time so the same instance
+  // is shared across /api routes and /github/setup. The appender now sets the
+  // tenant GUC internally so no outer withTenant wrapper is required.
+  const resolvedAppAuditAppender: AuditAppender =
+    deps.auditAppender ??
+    (deps.now !== undefined
+      ? createAuditAppender(deps.db, deps.now)
+      : createAuditAppender(deps.db));
+
   // GitHub App onboarding — mounted BEFORE /api and OUTSIDE the bearer-token guard.
   // spec §8.2.2: /github/* uses CSRF state cookie as the sole auth mechanism.
   const githubAppSlug = deps.githubAppSlug ?? process.env.GITHUB_APP_SLUG;
@@ -315,6 +324,7 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       ...(githubAppSlug !== undefined ? { githubAppSlug } : {}),
       ...(dashboardOrigin !== undefined ? { dashboardOrigin } : {}),
       ...(deps.github !== undefined ? { github: deps.github } : {}),
+      auditAppender: resolvedAppAuditAppender,
     }),
   );
 
@@ -339,7 +349,7 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
       // /integrations/llm-keys routes can wrap/unwrap data keys per request.
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
-      ...(deps.auditAppender !== undefined ? { auditAppender: deps.auditAppender } : {}),
+      auditAppender: resolvedAppAuditAppender,
       ...(kmsKeyId !== undefined && kmsKeyId.length > 0 ? { kmsKeyId } : {}),
       // Auth mode and session config (issue #161).
       authMode: resolvedAuthMode,

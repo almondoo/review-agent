@@ -1,4 +1,4 @@
-import type { DbClient } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
 import { describe, expect, it, vi } from 'vitest';
 import {
   userCreateCommand,
@@ -545,6 +545,33 @@ describe('userGrantCommand', () => {
 // userRevokeCommand
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Audit helpers (shared across grant/revoke audit tests)
+// ---------------------------------------------------------------------------
+
+type AuditRecord = Parameters<AuditAppender>[0];
+
+function fakeAuditAppenderFactory(): {
+  appenderFn: (db: DbClient) => AuditAppender;
+  records: AuditRecord[];
+} {
+  const records: AuditRecord[] = [];
+  const appender: AuditAppender = vi.fn(async (ev) => {
+    records.push(ev);
+    return { ...ev, ts: new Date(), prevHash: '0'.repeat(64), hash: '0'.repeat(64) };
+  });
+  return { appenderFn: () => appender, records };
+}
+
+/** A minimal DbClient whose transaction() satisfies withTenant's contract. */
+function fakeDbWithTx(): { db: DbClient; close: () => Promise<void> } {
+  const tx = { execute: vi.fn().mockResolvedValue([]) };
+  const db = {
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(tx),
+  };
+  return { db: db as unknown as DbClient, close: async () => undefined };
+}
+
 describe('userRevokeCommand', () => {
   it('returns config_error when DATABASE_URL is missing', async () => {
     const io = recordingIo();
@@ -595,5 +622,165 @@ describe('userRevokeCommand', () => {
     expect(id).toBe('uuid-1');
     expect(instId).toBe('55');
     expect(io.out.join('')).toContain("Revoked membership for 'alice' on installation 55");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit round-trip tests
+// ---------------------------------------------------------------------------
+
+describe('audit integration — userGrantCommand writes membership.grant', () => {
+  it('writes membership.grant audit event with actor=cli:* and correct resource', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const upsertMembershipFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userGrantCommand(io, {
+      username: 'alice',
+      installation: '42',
+      role: 'admin',
+      env: { DATABASE_URL: 'postgres://x', USER: 'testuser' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      getPrincipalFn: async () => ({ id: 'uuid-1', username: 'alice', tokenVersion: 1 }),
+      upsertMembershipFn,
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records).toHaveLength(1);
+    const ev = records[0];
+    expect(ev?.event).toBe('membership.grant');
+    expect(ev?.resourceType).toBe('membership');
+    expect(ev?.resourceId).toBe('uuid-1:42');
+    expect(ev?.actor).toBe('cli:testuser');
+    expect(ev?.installationId).toBe(42n);
+    // No secret values in audit record (use custom serializer for bigint)
+    const evJson = JSON.stringify(ev, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    expect(evJson).not.toContain('password');
+  });
+});
+
+describe('audit integration — userRevokeCommand writes membership.revoke', () => {
+  it('writes membership.revoke audit event with actor=cli:* and correct resource', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const revokeMembershipFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userRevokeCommand(io, {
+      username: 'bob',
+      installation: '99',
+      env: { DATABASE_URL: 'postgres://x', USER: 'ops' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      getPrincipalFn: async () => ({ id: 'uuid-2', username: 'bob', tokenVersion: 1 }),
+      revokeMembershipFn,
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records).toHaveLength(1);
+    const ev = records[0];
+    expect(ev?.event).toBe('membership.revoke');
+    expect(ev?.resourceType).toBe('membership');
+    expect(ev?.resourceId).toBe('uuid-2:99');
+    expect(ev?.actor).toBe('cli:ops');
+    expect(ev?.installationId).toBe(99n);
+  });
+});
+
+describe('audit integration — userCreateCommand writes principal.create + membership.grant', () => {
+  it('writes principal.create when no installation', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const createPrincipalFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userCreateCommand(io, {
+      username: 'carol',
+      env: { DATABASE_URL: 'postgres://x', USER: 'admin' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      createPrincipalFn,
+      resolvePassword: async () => 'pw123',
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records.some((r) => r.event === 'principal.create')).toBe(true);
+    const pc = records.find((r) => r.event === 'principal.create');
+    expect(pc?.resourceType).toBe('principal');
+    expect(pc?.actor).toBe('cli:admin');
+    expect(pc?.resourceId).toBe(result.id);
+  });
+
+  it('writes principal.create + membership.grant when --installation given', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const createPrincipalFn = vi.fn().mockResolvedValue(undefined);
+    const upsertMembershipFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userCreateCommand(io, {
+      username: 'dave',
+      installation: '7',
+      role: 'editor',
+      env: { DATABASE_URL: 'postgres://x', USER: 'admin' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      createPrincipalFn,
+      upsertMembershipFn,
+      resolvePassword: async () => 'pw456',
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records.some((r) => r.event === 'principal.create')).toBe(true);
+    expect(records.some((r) => r.event === 'membership.grant')).toBe(true);
+    const mg = records.find((r) => r.event === 'membership.grant');
+    expect(mg?.installationId).toBe(7n);
+    expect(mg?.actor).toBe('cli:admin');
+  });
+});
+
+describe('audit integration — userDeleteCommand writes principal.delete', () => {
+  it('writes principal.delete audit event before deletion', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const deletePrincipalFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userDeleteCommand(io, {
+      username: 'eve',
+      env: { DATABASE_URL: 'postgres://x', USER: 'sysadmin' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      getPrincipalFn: async () => ({ id: 'uuid-del', username: 'eve', tokenVersion: 1 }),
+      deletePrincipalFn,
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records).toHaveLength(1);
+    const ev = records[0];
+    expect(ev?.event).toBe('principal.delete');
+    expect(ev?.resourceId).toBe('uuid-del');
+    expect(ev?.actor).toBe('cli:sysadmin');
+    // Verify no secrets were logged
+    expect(JSON.stringify(ev)).not.toContain('password');
+  });
+});
+
+describe('audit integration — userSetPasswordCommand writes principal.password_change', () => {
+  it('writes principal.password_change audit event (no plain password in record)', async () => {
+    const io = recordingIo();
+    const { appenderFn, records } = fakeAuditAppenderFactory();
+    const { db, close } = fakeDbWithTx();
+    const setPrincipalPasswordFn = vi.fn().mockResolvedValue(undefined);
+    const result = await userSetPasswordCommand(io, {
+      username: 'frank',
+      env: { DATABASE_URL: 'postgres://x', USER: 'secops' } as NodeJS.ProcessEnv,
+      createDb: () => ({ db, close }),
+      getPrincipalFn: async () => ({ id: 'uuid-pw', username: 'frank', tokenVersion: 2 }),
+      setPrincipalPasswordFn,
+      resolvePassword: async () => 'newpassword',
+      auditAppenderFn: appenderFn,
+    });
+    expect(result.status).toBe('ok');
+    expect(records).toHaveLength(1);
+    const ev = records[0];
+    expect(ev?.event).toBe('principal.password_change');
+    expect(ev?.resourceId).toBe('uuid-pw');
+    expect(ev?.actor).toBe('cli:secops');
+    // Verify no plain-text credentials in audit record
+    expect(JSON.stringify(ev)).not.toContain('newpassword');
+    expect(JSON.stringify(ev)).not.toContain('scrypt$');
   });
 });

@@ -27,7 +27,7 @@
  */
 import { type DashboardRole, roleSatisfies } from '@review-agent/core';
 import { repos, reviewEvalEvent } from '@review-agent/core/db';
-import type { DbClient } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
 import { and, avg, count, desc, eq, gte, inArray, isNull, lt, or, sum } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getMembershipsByPrincipal, type MembershipEntry } from '../auth/principal-store.js';
@@ -52,6 +52,7 @@ export type ReposDeps = {
   readonly db: DbClient;
   readonly now?: () => Date;
   readonly generateId?: () => string;
+  readonly auditAppender?: AuditAppender;
 };
 
 function defaultId(): string {
@@ -281,6 +282,22 @@ export function createReposRouter(deps: ReposDeps): Hono {
       .insert(repos)
       .values({ id, platform, name, enabled: true, createdAt: now, updatedAt: now });
 
+    if (deps.auditAppender !== undefined) {
+      const actor = c.get('principal')?.id ?? null;
+      try {
+        await deps.auditAppender({
+          event: 'repo.create',
+          resourceType: 'repo',
+          resourceId: id,
+          ...(actor !== null ? { actor } : {}),
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[review-agent] WARN: audit write failed for repo.create id=${id}: ${String(err)}\n`,
+        );
+      }
+    }
+
     const created: RepoSummary = {
       id,
       platform,
@@ -335,6 +352,25 @@ export function createReposRouter(deps: ReposDeps): Hono {
 
     if (enabled !== undefined) {
       await deps.db.update(repos).set({ enabled, updatedAt: now }).where(eq(repos.id, id));
+    }
+
+    if (deps.auditAppender !== undefined && enabled !== undefined) {
+      const actor = c.get('principal')?.id ?? null;
+      const eventName = enabled ? 'repo.enable' : 'repo.disable';
+      const installationId = row.installationId;
+      try {
+        await deps.auditAppender({
+          event: eventName,
+          ...(installationId != null ? { installationId } : {}),
+          resourceType: 'repo',
+          resourceId: id,
+          ...(actor !== null ? { actor } : {}),
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[review-agent] WARN: audit write failed for ${eventName} id=${id}: ${String(err)}\n`,
+        );
+      }
     }
 
     const updated = await deps.db
@@ -398,6 +434,24 @@ export function createReposRouter(deps: ReposDeps): Hono {
 
     const now = (deps.now ?? (() => new Date()))();
     await deps.db.update(repos).set({ deletedAt: now, updatedAt: now }).where(eq(repos.id, id));
+
+    if (deps.auditAppender !== undefined) {
+      const actor = c.get('principal')?.id ?? null;
+      const installationId = row.installationId;
+      try {
+        await deps.auditAppender({
+          event: 'repo.delete',
+          ...(installationId != null ? { installationId } : {}),
+          resourceType: 'repo',
+          resourceId: id,
+          ...(actor !== null ? { actor } : {}),
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[review-agent] WARN: audit write failed for repo.delete id=${id}: ${String(err)}\n`,
+        );
+      }
+    }
 
     return new Response(null, { status: 204 });
   });
@@ -490,6 +544,24 @@ export function createReposRouter(deps: ReposDeps): Hono {
         updatedAt: now,
       })
       .where(eq(repos.id, id));
+
+    if (deps.auditAppender !== undefined) {
+      const actor = c.get('principal')?.id ?? null;
+      const installationId = repoRow.installationId;
+      try {
+        await deps.auditAppender({
+          event: 'prompt.update',
+          ...(installationId != null ? { installationId } : {}),
+          resourceType: 'repo',
+          resourceId: id,
+          ...(actor !== null ? { actor } : {}),
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[review-agent] WARN: audit write failed for prompt.update id=${id}: ${String(err)}\n`,
+        );
+      }
+    }
 
     const response: PromptResponse = {
       systemPrompt: storedPrompt ?? '',

@@ -631,6 +631,33 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 - gitleaks(#8/#58) 不変、`external_tools` 無しは完全 back-compat。
 - **docs/spec**: `docs/configuration/external-tools.md` + config-reference、spec §7.4.1「External static-analysis tool ingestion」追記。
 
+### [A6] admin-mutation audit log — #136 landed (develop, 2026-06-05)
+
+config/prompt/keys/repo/role 変更を authenticated actor + resource 付きで `audit_log` に記録（#161 の actor
+基盤を網羅化）。あわせて **#161 由来の audit RLS 潜在バグ**（appender がプール tx で tenant GUC 未設定 →
+非 null installation の INSERT が RLS withCheck で拒否される問題、byok.key.* 含む全 audit が対象）を根本修正。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#136](https://github.com/almondoo/review-agent/issues/136) | audit log（誰がいつ config/prompt/keys を変更したか） | ✅ landed (develop) |
+
+主な変更:
+- **RLS 根本修正**: `createAuditAppender` が `event.installationId` から tenant GUC（`app.current_tenant`）を自前
+  設定し、per-installation の HMAC チェーンで INSERT する。verify/export も GUC を設定。これにより
+  byok / repos / membership / review-event の全 audit 書込・読取・検証が RLS（`review_agent_app` ロール）下で成立。
+- **#161 の actor 永続化漏れ修正**: appender INSERT・verify SELECT・export に `actor` が欠落していたのを修正
+  （session モードで hash に actor が入るのに DB 列 NULL → verify でチェーンが壊れる問題）。
+- **schema**: `audit_log` に `resource_type`/`resource_id`（migration `0012_audit_admin_fields`）+ AuditEvent +
+  canonicalPayload（非 null 時のみ含め後方互換）。
+- **監査追加**: server `repo.create`/`enable`/`disable`/`delete`・`prompt.update`・`repo.bulk_register`・
+  `github_installation.setup`（app.ts の appender 配線漏れも修正）、CLI `membership.grant`/`revoke`・`principal.*`。
+  actor=server は principal.id / cli は `cli:<user>` / github-setup は null。秘密値は非記録（resource_id は id/provider のみ）。
+- **閲覧**: 既存 `review-agent audit export` CLI に actor/resource を反映（dashboard UI / GET API は scope 外＝follow-up）。
+- **既知の限界**: installation に紐づかない global principal イベント（`--installation` 無しの principal.create 等）は
+  per-installation RLS で read/verify 不可（write-only）。docs に明記。
+- RLS round-trip の integration test 追加（`TEST_DATABASE_APP_URL` gate）、docs(audit-log.md) + spec §13.3 更新。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
@@ -643,7 +670,6 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 #132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
 フル per-principal credential 方式の最終決定は GA 据え置き) /
 #137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
-#136 (audit log — #161 で actor identity 基盤が入ったため着手可、要 refine) /
 #138 (retry/DLQ/alerting — #144 依存) / #140 (cost analytics — #144/#142 依存) /
 #144 (notifications — #138/#140 のイベント源前提) / #154 (preset 配布 — npm publish 権限要)。
 （#161 は landed したため [C] から除外 → [A2] 参照）

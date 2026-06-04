@@ -13,8 +13,9 @@
  *   - Legacy regression: no principal → all repos visible, mutations pass-through.
  */
 import { installationMemberships, operatorPrincipals, repos } from '@review-agent/core/db';
+import type { AuditAppender } from '@review-agent/db';
 import { Hono } from 'hono';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { issueSessionToken } from '../../auth/jwt.js';
 import { sessionAuth } from '../../auth/session-auth.js';
 import type { AuthEnv } from '../../auth/types.js';
@@ -602,5 +603,62 @@ describe('legacy regression — no principal', () => {
       body: JSON.stringify({ systemPrompt: 'hello' }),
     });
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit + actor integration (session mode)
+// ---------------------------------------------------------------------------
+
+describe('repos router — audit actor is populated from JWT principal', () => {
+  type AuditRecord = Parameters<AuditAppender>[0];
+
+  function fakeAuditAppender(): { appender: AuditAppender; records: AuditRecord[] } {
+    const records: AuditRecord[] = [];
+    const appender: AuditAppender = vi.fn(async (ev) => {
+      records.push(ev);
+      return { ...ev, ts: new Date(), prevHash: '0'.repeat(64), hash: '0'.repeat(64) };
+    });
+    return { appender, records };
+  }
+
+  /** Admin membership for null-installation repos. */
+  const NULL_INSTALL_MEMBERSHIPS: MembershipRow[] = [
+    { principalId: ADMIN_PRINCIPAL.id, installationId: INSTALLATION_A, role: 'admin' },
+  ];
+
+  it('POST /repos includes actor=principal.id in audit when authenticated', async () => {
+    const db = makeDb([], NULL_INSTALL_MEMBERSHIPS, PRINCIPAL_ROWS);
+    const { appender, records } = fakeAuditAppender();
+    const api = new Hono<AuthEnv>();
+    api.use(
+      '*',
+      sessionAuth({
+        authMode: 'session',
+        sharedToken: undefined,
+        sessionSecret: SESSION_SECRET,
+        db,
+      }),
+    );
+    api.route(
+      '/repos',
+      createReposRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+        generateId: () => 'audit-actor-test',
+        auditAppender: appender,
+      }),
+    );
+    const token = await adminJwt();
+    const res = await api.request('http://host/repos', {
+      method: 'POST',
+      headers: { ...JSON_CT, Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ platform: 'github', name: 'org/actor-test' }),
+    });
+    expect(res.status).toBe(201);
+    expect(records).toHaveLength(1);
+    // actor must be the principal ID, not null
+    expect(records[0]?.actor).toBe(ADMIN_PRINCIPAL.id);
   });
 });

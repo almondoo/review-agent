@@ -18,12 +18,63 @@ CREATE TABLE audit_log (
   input_tokens    INT,
   output_tokens   INT,
   prev_hash       TEXT,
-  hash            TEXT NOT NULL
+  hash            TEXT NOT NULL,
+  actor           TEXT,          -- operator/service identity (nullable; migration 0011)
+  resource_type   TEXT,          -- mutated resource kind (nullable; migration 0012)
+  resource_id     TEXT           -- mutated resource identifier (nullable; migration 0012)
 );
 ```
 
 See `packages/core/src/db/schema/audit-log.ts` for the canonical Drizzle
 definition.
+
+### Actor column
+
+`actor` records the operator or service that triggered the event. For
+HTTP API events it is set to the JWT principal ID when the request
+is authenticated (`c.get('principal')?.id`). For CLI events it is
+set to `cli:<$USER>`. For events without an authenticated principal
+(e.g. GitHub App webhook callbacks, `github_installation.setup`) it is
+`null`. Legacy events written before migration 0011 also have `actor = null`.
+
+### resource_type / resource_id columns
+
+`resource_type` and `resource_id` capture the specific resource that was
+mutated. Examples:
+
+| event                       | resource_type        | resource_id                    |
+|-----------------------------|----------------------|--------------------------------|
+| `repo.create`               | `repo`               | repo UUID                      |
+| `repo.enable` / `.disable`  | `repo`               | repo UUID                      |
+| `repo.delete`               | `repo`               | repo UUID                      |
+| `repo.bulk_register`        | `repo`               | installation ID (string)       |
+| `prompt.update`             | `repo`               | repo UUID                      |
+| `byok.key.upsert/rotate/delete` | *(not set)*      | *(not set)*                    |
+| `github_installation.setup` | `github_installation`| installation ID (string)       |
+| `membership.grant` / `.revoke` | `membership`      | `<principalId>:<installationId>` |
+| `principal.create` / `.delete` | `principal`        | principal ID                   |
+| `principal.password_change` | `principal`          | principal ID                   |
+
+Both fields are nullable for backward compatibility. Existing rows written
+before migration 0012 have `resource_type = null` and `resource_id = null`,
+which does not affect chain verification (canonicalPayload omits null values).
+
+## Admin mutation events
+
+The following admin mutations are recorded in `audit_log` automatically:
+
+- **`repo.create`** — POST /api/repos
+- **`repo.enable`** / **`repo.disable`** — PATCH /api/repos/:id
+- **`repo.delete`** — DELETE /api/repos/:id
+- **`repo.bulk_register`** — POST /api/repos/bulk (GitHub App installation)
+- **`prompt.update`** — PUT /api/repos/:id/prompt
+- **`github_installation.setup`** — GET /github/setup (GitHub App OAuth callback)
+- **`byok.key.upsert`** / **`byok.key.rotate`** / **`byok.key.delete`** — BYOK key management
+- **`membership.grant`** / **`membership.revoke`** — CLI `review-agent user grant/revoke`
+- **`principal.create`** / **`principal.delete`** / **`principal.password_change`** — CLI `review-agent user create/delete/set-password`
+
+Secret material (API keys, passwords, hashes) is never included in any audit
+field. resource_id contains only IDs, not key bytes or credentials.
 
 ## Chain rule
 
@@ -37,16 +88,42 @@ emitted in fixed key order by `canonicalPayload()` in
 `packages/core/src/audit.ts`. The genesis row uses
 `prev_hash = "0".repeat(64)` (constant `AUDIT_GENESIS_HASH`).
 
+When `actor`, `resourceType`, or `resourceId` are non-null they are appended
+to the canonical JSON in that order. Rows where all three are null produce
+a canonical payload byte-for-byte identical to rows produced before these
+fields were introduced, preserving full backward compatibility.
+
 ## Append path
 
 Inserts go through `createAuditAppender(db)` in `@review-agent/db`. The
-appender opens a short transaction, reads the highest-id row's `hash`, and
-inserts a new row whose `prev_hash` is that value. The transaction
-serializes concurrent appenders so the chain stays linear.
+appender opens a short transaction, sets the `app.current_tenant` GUC to the
+event's `installationId` (when non-null), reads the highest-id row's `hash`
+scoped to that installation, and inserts a new row whose `prev_hash` is that
+value. The GUC ensures the `audit_log` RLS `tenant_isolation` policy allows
+both the SELECT and the INSERT. The transaction serializes concurrent appenders
+so the chain stays linear per installation.
 
 The appender is the **only** sanctioned write path. Direct `INSERT` /
 `UPDATE` / `DELETE` from psql is treated as tampering and will be detected
 by the verifier.
+
+### Global (null installationId) events — write-only limitation
+
+Events without an `installationId` (e.g. `principal.create/delete/
+password_change` from the CLI when no `--installation` flag is given) are
+written with `installation_id = NULL`. The RLS `withCheck` permits this INSERT
+(`installation_id IS NULL OR ...`), but the `using` clause requires
+`installation_id::text = current_setting('app.current_tenant', true)`, which
+never matches `NULL`. These rows are therefore **write-only under the app role**:
+they are durably stored and auditable via a superuser / BYPASSRLS connection,
+but invisible to tenant-scoped reads (`verifyAuditChainFromDb`,
+`loadAuditLogForExport`, `audit export` CLI). There is no installation-scoped
+HMAC chain for them (each write uses genesis hash as `prev_hash`).
+
+Events **with** an `installationId` — including `membership.grant/revoke` and
+`principal.create --installation` — are fully verifiable and exportable under
+that installation's tenant context and are the recommended way to audit
+principal/membership changes.
 
 ## Verifier
 

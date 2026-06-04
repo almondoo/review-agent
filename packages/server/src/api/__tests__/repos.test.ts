@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import type { AuditAppender } from '@review-agent/db';
+import { describe, expect, it, vi } from 'vitest';
 import { createReposRouter } from '../repos.js';
 
 // ---------------------------------------------------------------------------
@@ -10,6 +11,7 @@ type RepoRecord = {
   platform: 'github' | 'codecommit';
   name: string;
   enabled: boolean;
+  installationId?: bigint | null;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
@@ -324,5 +326,207 @@ describe('repos router', () => {
       });
       expect(res.status).toBe(404);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Audit write tests
+// ---------------------------------------------------------------------------
+
+type AuditRecord = Parameters<AuditAppender>[0];
+
+function fakeAuditAppender(): { appender: AuditAppender; records: AuditRecord[] } {
+  const records: AuditRecord[] = [];
+  const appender: AuditAppender = vi.fn(async (ev) => {
+    records.push(ev);
+    return { ...ev, ts: new Date(), prevHash: '0'.repeat(64), hash: '0'.repeat(64) };
+  });
+  return { appender, records };
+}
+
+describe('repos router audit writes', () => {
+  const NOW = new Date('2026-01-01T00:00:00Z');
+  let idSeq = 0;
+
+  function makeRouterWithAudit(initialRepos: RepoRecord[], auditAppender: AuditAppender) {
+    idSeq = 0;
+    return createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: makeDb(initialRepos) as any,
+      now: () => NOW,
+      generateId: () => `id-${++idSeq}`,
+      auditAppender,
+    });
+  }
+
+  it('POST / writes repo.create audit event with resourceType=repo', async () => {
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([], appender);
+    const res = await app.request('http://host/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: 'github', name: 'org/repo-audit' }),
+    });
+    expect(res.status).toBe(201);
+    expect(records).toHaveLength(1);
+    expect(records[0]?.event).toBe('repo.create');
+    expect(records[0]?.resourceType).toBe('repo');
+    expect(records[0]?.resourceId).toBeTruthy();
+    // No secrets in audit record
+    expect(JSON.stringify(records[0])).not.toContain('password');
+  });
+
+  it('PATCH /:id writes repo.enable audit event', async () => {
+    const existing: RepoRecord = {
+      id: 'r-en',
+      platform: 'github',
+      name: 'org/repo',
+      enabled: false,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-en', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(res.status).toBe(200);
+    expect(records.some((r) => r.event === 'repo.enable')).toBe(true);
+    const ev = records.find((r) => r.event === 'repo.enable');
+    expect(ev?.resourceType).toBe('repo');
+    expect(ev?.resourceId).toBe('r-en');
+  });
+
+  it('PATCH /:id writes repo.disable audit event', async () => {
+    const existing: RepoRecord = {
+      id: 'r-dis',
+      platform: 'github',
+      name: 'org/repo2',
+      enabled: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-dis', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(res.status).toBe(200);
+    expect(records.some((r) => r.event === 'repo.disable')).toBe(true);
+  });
+
+  it('DELETE /:id writes repo.delete audit event', async () => {
+    const existing: RepoRecord = {
+      id: 'r-del',
+      platform: 'github',
+      name: 'org/repo3',
+      enabled: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-del', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(204);
+    expect(records.some((r) => r.event === 'repo.delete')).toBe(true);
+    const ev = records.find((r) => r.event === 'repo.delete');
+    expect(ev?.resourceId).toBe('r-del');
+  });
+
+  it('PUT /:id/prompt writes prompt.update audit event', async () => {
+    const existing: RepoRecord = {
+      id: 'r-prompt',
+      platform: 'github',
+      name: 'org/repo4',
+      enabled: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-prompt/prompt', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt: 'Review carefully.' }),
+    });
+    expect(res.status).toBe(200);
+    expect(records.some((r) => r.event === 'prompt.update')).toBe(true);
+    const ev = records.find((r) => r.event === 'prompt.update');
+    expect(ev?.resourceType).toBe('repo');
+    expect(ev?.resourceId).toBe('r-prompt');
+    // No secrets
+    expect(JSON.stringify(ev)).not.toContain('password');
+  });
+
+  it('PATCH /:id includes installationId in audit when repo has one', async () => {
+    const existing: RepoRecord = {
+      id: 'r-inst',
+      platform: 'github',
+      name: 'org/repo-inst',
+      enabled: false,
+      installationId: 77n,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-inst', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(res.status).toBe(200);
+    const ev = records.find((r) => r.event === 'repo.enable');
+    expect(ev?.installationId).toBe(77n);
+  });
+
+  it('DELETE /:id includes installationId in audit when repo has one', async () => {
+    const existing: RepoRecord = {
+      id: 'r-del-inst',
+      platform: 'github',
+      name: 'org/repo-del-inst',
+      enabled: true,
+      installationId: 88n,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    const { appender, records } = fakeAuditAppender();
+    const app = makeRouterWithAudit([existing], appender);
+    const res = await app.request('http://host/r-del-inst', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(204);
+    const ev = records.find((r) => r.event === 'repo.delete');
+    expect(ev?.installationId).toBe(88n);
+  });
+
+  it('audit write failure is best-effort (does not fail the HTTP response)', async () => {
+    const failingAppender: AuditAppender = vi.fn().mockRejectedValue(new Error('audit DB down'));
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: makeDb([]) as any,
+      now: () => NOW,
+      generateId: () => 'id-safe',
+      auditAppender: failingAppender,
+    });
+    const res = await app.request('http://host/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: 'github', name: 'org/resilient' }),
+    });
+    // HTTP response must still succeed even though audit write threw
+    expect(res.status).toBe(201);
   });
 });

@@ -241,23 +241,24 @@ export function createApi(deps: ApiDeps): Hono {
     createDashboardRouter({ db: deps.db, ...(deps.now ? { now: deps.now } : {}) }),
   );
 
+  // Resolve auditAppender early — used by repos, github-repos, and llm-keys routers.
+  const resolvedAuditAppender =
+    deps.auditAppender ??
+    (deps.now !== undefined
+      ? createAuditAppender(deps.db, deps.now)
+      : createAuditAppender(deps.db));
+
   api.route(
     '/repos',
     createReposRouter({
       db: deps.db,
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.generateId ? { generateId: deps.generateId } : {}),
+      auditAppender: resolvedAuditAppender,
     }),
   );
 
   api.route('/integrations', createIntegrationsRouter({ env: deps.env, db: deps.db }));
-
-  // Wire BYOK LLM key management routes when KMS is configured.
-  const resolvedAuditAppender =
-    deps.auditAppender ??
-    (deps.now !== undefined
-      ? createAuditAppender(deps.db, deps.now)
-      : createAuditAppender(deps.db));
 
   const kmsKeyId =
     deps.kmsKeyId !== undefined && deps.kmsKeyId.length > 0 ? deps.kmsKeyId : undefined;
@@ -312,6 +313,7 @@ export function createApi(deps: ApiDeps): Hono {
         ? { appAuth: { appAuthClient: deps.appAuthClient } }
         : {}),
       multiTenant,
+      auditAppender: resolvedAuditAppender,
     }),
   );
 
