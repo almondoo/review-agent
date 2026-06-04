@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { auditLog } from '../audit-log.js';
 import { installationSecrets } from '../byok-store.js';
 import { costLedger, installationCostDaily } from '../cost-ledger.js';
+import { githubInstallations } from '../github-installations.js';
 import { installationTokens } from '../installation-tokens.js';
 import { repos } from '../repos.js';
 import { reviewEvalEvent } from '../review-eval-event.js';
@@ -94,7 +95,7 @@ describe('db schema shape', () => {
   // §16.1 — every tenant-scoped table must enable RLS and install the
   // tenant_isolation policy keyed on review_agent_app + the
   // app.current_tenant GUC.
-  it('repos covers required columns and has no RLS (no installation_id)', () => {
+  it('repos covers required columns, has nullable installation_id FK, and has no RLS', () => {
     const cfg = getTableConfig(repos);
     expect(cfg.name).toBe('repos');
     const cols = cfg.columns.map((c) => c.name);
@@ -108,11 +109,16 @@ describe('db schema shape', () => {
       'created_at',
       'updated_at',
       'deleted_at',
+      'installation_id',
     ]) {
       expect(cols).toContain(required);
     }
     const pk = cfg.columns.find((c) => c.name === 'id');
     expect(pk?.primary).toBe(true);
+    // installation_id is nullable (backward compatible)
+    const installationIdCol = cfg.columns.find((c) => c.name === 'installation_id');
+    expect(installationIdCol?.notNull).toBe(false);
+    // repos does not have RLS (no installation_id at row level)
     expect(cfg.enableRLS).toBe(false);
     expect(cfg.policies).toEqual([]);
   });
@@ -147,6 +153,36 @@ describe('db schema shape', () => {
     }
   });
 
+  it('github_installations covers required columns with correct types', () => {
+    const cfg = getTableConfig(githubInstallations);
+    expect(cfg.name).toBe('github_installations');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'installation_id',
+      'account_login',
+      'account_type',
+      'app_id',
+      'setup_action',
+      'suspended_at',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+    // installation_id is PK
+    const pk = cfg.columns.find((c) => c.name === 'installation_id');
+    expect(pk?.primary).toBe(true);
+    // suspended_at is nullable
+    const suspendedAt = cfg.columns.find((c) => c.name === 'suspended_at');
+    expect(suspendedAt?.notNull).toBe(false);
+    // created_at / updated_at are not null with defaults
+    for (const colName of ['created_at', 'updated_at']) {
+      const col = cfg.columns.find((c) => c.name === colName);
+      expect(col?.notNull).toBe(true);
+      expect(col?.hasDefault).toBe(true);
+    }
+  });
+
   const tenantScoped = [
     ['review_state', reviewState],
     ['review_history', reviewHistory],
@@ -156,6 +192,7 @@ describe('db schema shape', () => {
     ['audit_log', auditLog],
     ['installation_secrets', installationSecrets],
     ['review_eval_event', reviewEvalEvent],
+    ['github_installations', githubInstallations],
   ] as const;
 
   for (const [name, table] of tenantScoped) {

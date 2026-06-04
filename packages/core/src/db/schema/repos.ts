@@ -1,4 +1,5 @@
-import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { bigint, boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { githubInstallations } from './github-installations.js';
 
 /**
  * Top-level repository registry. One row per VCS repository that
@@ -29,6 +30,16 @@ export const repos = pgTable('repos', {
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  /**
+   * FK to `github_installations(installation_id)`. NULL for manually-registered
+   * repos (backward compatible). Set to NULL on installation deletion.
+   *
+   * Added in migration `0007_repos_installation_id.sql`.
+   */
+  installationId: bigint('installation_id', { mode: 'bigint' }).references(
+    () => githubInstallations.installationId,
+    { onDelete: 'set null' },
+  ),
 });
 
 export type RepoRow = typeof repos.$inferSelect;
