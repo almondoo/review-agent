@@ -12,6 +12,17 @@
               "const": "org"
             },
             {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            {
               "type": "null"
             }
           ]

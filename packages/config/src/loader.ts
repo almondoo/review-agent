@@ -1,6 +1,7 @@
 import { ConfigError } from '@review-agent/core';
 import { parse as parseYaml } from 'yaml';
 import { isSupportedLanguage } from './languages.js';
+import { resolveExtendsPresets } from './preset-loader.js';
 import { type Config, ConfigSchema } from './schema.js';
 
 export type EnvOverrides = {
@@ -100,7 +101,34 @@ export function loadConfigFromYaml(yamlText: string): Config {
   } catch (err) {
     throw new ConfigError('Invalid YAML in .review-agent.yml', { cause: err });
   }
-  const result = ConfigSchema.safeParse(parsed);
+
+  // Resolve `extends:` preset inheritance BEFORE Zod parsing so that preset
+  // values serve as defaults that the repo config can override. The special
+  // keyword 'org' is passed through untouched — org-merge is handled
+  // separately by `loadConfigWithOrgFallback` in org-config.ts.
+  let effective = parsed;
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    const raw = parsed as Record<string, unknown>;
+    const extendsVal = raw.extends;
+
+    if (Array.isArray(extendsVal)) {
+      // Array extends: all entries are preset names. 'org' inside an array
+      // raises PresetNotFoundError (via resolveExtendsPresets) with a clear
+      // message instructing the operator to use the scalar form instead.
+      const names = extendsVal as string[];
+      const { extends: _removed, ...repoRaw } = raw;
+      void _removed;
+      effective = resolveExtendsPresets(names, repoRaw);
+    } else if (typeof extendsVal === 'string' && extendsVal !== 'org' && extendsVal !== null) {
+      // Single preset name (not 'org'). Wrap in array and delegate.
+      const { extends: _removed, ...repoRaw } = raw;
+      void _removed;
+      effective = resolveExtendsPresets([extendsVal], repoRaw);
+    }
+    // else: extendsVal is 'org', null, or undefined — pass through to Zod as-is.
+  }
+
+  const result = ConfigSchema.safeParse(effective);
   if (!result.success) {
     throw new ConfigError(
       `Invalid .review-agent.yml: ${result.error.issues

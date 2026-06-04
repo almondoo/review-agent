@@ -1,0 +1,68 @@
+# review-agent bundled preset: recommended
+#
+# Sensible defaults for most repositories. Works out of the box with
+# `extends: recommended` and requires only surgical overrides for repo-
+# specific needs. Mirrors the ESLint / Renovate adoption model.
+#
+# Override semantics (documented):
+#   - Scalar values: your config wins (last wins).
+#   - Object keys: deep-merged (your keys override matching preset keys;
+#     unmatched preset keys are preserved).
+#   - Arrays: REPLACED entirely by your config (not appended).
+#     This is intentional — preset authors cannot know which entries
+#     your repo needs. Document your full desired list in your config.
+
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+      - master
+      - develop
+  path_filters:
+    - "!dist/**"
+    - "!build/**"
+    - "!coverage/**"
+    - "!**/*.lock"
+    - "!**/*.generated.*"
+    - "!**/__snapshots__/**"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+  max_files: 50
+  max_diff_lines: 3000
+  ignore_authors:
+    - "dependabot[bot]"
+    - "renovate[bot]"
+    - "github-actions[bot]"
+  min_confidence: low
+  request_changes_on: critical
+  max_steps: 20
+
+cost:
+  max_usd_per_pr: 1.0
+  hard_stop: true
+  daily_cap_usd: 50.0
+
+ruleset:
+  bug:
+    enabled: true
+    min_severity: minor
+  security:
+    enabled: true
+    min_severity: minor
+  performance:
+    enabled: true
+    min_severity: major
+  maintainability:
+    enabled: true
+    min_severity: major
+  style:
+    enabled: true
+    min_severity: minor
+  docs:
+    enabled: true
+    min_severity: info
+  test:
+    enabled: true
+    min_severity: minor

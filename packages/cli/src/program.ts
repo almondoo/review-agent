@@ -4,6 +4,7 @@ import { auditPruneCommand } from './commands/audit-prune.js';
 import { runDryRunCommand } from './commands/dry-run.js';
 import { runEvalCommand } from './commands/eval.js';
 import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
+import { listPresetsCommand } from './commands/presets.js';
 import {
   recoverFeedbackHistoryCommand,
   recoverReviewEvalEventsCommand,
@@ -109,6 +110,16 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .description('Print the JSON Schema for `.review-agent.yml` to stdout.')
     .action(() => {
       printSchemaCommand(io);
+      io.exit(0);
+    });
+
+  const presets = config.command('presets').description('Bundled preset helpers.');
+
+  presets
+    .command('list')
+    .description('List all bundled first-party preset names.')
+    .action(() => {
+      listPresetsCommand(io);
       io.exit(0);
     });
 

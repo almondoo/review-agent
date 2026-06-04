@@ -40,6 +40,7 @@ describe('buildProgram', () => {
     const subNames = config?.commands.map((c) => c.name());
     expect(subNames).toContain('validate');
     expect(subNames).toContain('schema');
+    expect(subNames).toContain('presets');
     const setup = program.commands.find((c) => c.name() === 'setup');
     expect(setup?.commands.map((c) => c.name())).toContain('workspace');
     const audit = program.commands.find((c) => c.name() === 'audit');
@@ -55,6 +56,17 @@ describe('buildProgram', () => {
     const text = io.out.join('');
     expect(text.length).toBeGreaterThan(0);
     expect(() => JSON.parse(text)).not.toThrow();
+    expect(io.exitCode).toBe(0);
+  });
+
+  it('wires `config presets list` to print preset names to stdout', async () => {
+    const io = recordingIo();
+    const program = buildProgram({ io, env: {}, version: 'test' });
+    await program.parseAsync(['config', 'presets', 'list'], { from: 'user' });
+    const text = io.out.join('');
+    expect(text).toContain('recommended');
+    expect(text).toContain('strict');
+    expect(text).toContain('security-focused');
     expect(io.exitCode).toBe(0);
   });
 

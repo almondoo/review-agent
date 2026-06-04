@@ -26,6 +26,14 @@ export {
   type OrgConfigFetch,
 } from './org-config.js';
 export {
+  BUNDLED_PRESET_NAMES,
+  type BundledPresetName,
+  deepMerge,
+  PresetCycleError,
+  PresetNotFoundError,
+  resolveExtendsPresets,
+} from './preset-loader.js';
+export {
   type Config,
   type ConfigInput,
   ConfigSchema,

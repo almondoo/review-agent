@@ -1,0 +1,61 @@
+# review-agent bundled preset: security-focused
+#
+# Optimised for security-sensitive repositories. Maximises security and bug
+# coverage, suppresses low-signal style / docs noise. Requests changes on
+# any critical security or bug finding; escalates major security findings
+# to blocking. Combine with `recommended` for a balanced profile, or use
+# standalone for dedicated security review pipelines.
+#
+# Override semantics (documented):
+#   - Scalar values: your config wins (last wins).
+#   - Object keys: deep-merged (your keys override matching preset keys;
+#     unmatched preset keys are preserved).
+#   - Arrays: REPLACED entirely by your config (not appended).
+
+reviews:
+  auto_review:
+    enabled: true
+    drafts: true
+  path_filters:
+    - "!dist/**"
+    - "!build/**"
+    - "!coverage/**"
+    - "!**/*.lock"
+    - "!**/*.generated.*"
+    - "!**/__snapshots__/**"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+  max_files: 100
+  max_diff_lines: 5000
+  ignore_authors:
+    - "dependabot[bot]"
+    - "renovate[bot]"
+    - "github-actions[bot]"
+  min_confidence: low
+  request_changes_on: critical
+  max_steps: 30
+
+cost:
+  max_usd_per_pr: 2.0
+  hard_stop: true
+  daily_cap_usd: 100.0
+
+ruleset:
+  bug:
+    enabled: true
+    min_severity: minor
+  security:
+    enabled: true
+    min_severity: info
+  performance:
+    enabled: true
+    min_severity: major
+  maintainability:
+    enabled: false
+  style:
+    enabled: false
+  docs:
+    enabled: false
+  test:
+    enabled: true
+    min_severity: minor

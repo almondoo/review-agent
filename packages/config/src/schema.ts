@@ -294,14 +294,29 @@ export const RulesetSchema = z.record(z.enum(CATEGORIES), RulesetCategorySchema)
 
 export type Ruleset = z.infer<typeof RulesetSchema>;
 
-// `extends: 'org'` (§10.2 layer 3) opts the repo into merging the
-// `<org>/.github/review-agent.yml` central config underneath this
-// file. Without `extends`, the org file is consulted only as a
-// silent fallback when the repo file is absent. We accept the
-// keyword form (mirrors ESLint / Prettier) plus the explicit
-// `null` to mean "no inheritance", which lets a tenant override
-// inherited org config back to defaults.
-const ExtendsSchema = z.literal('org').or(z.null()).optional();
+// `extends:` (§10.2 / #151) supports three forms:
+//
+//   extends: org               — org-merge keyword (§10.2 layer 3). Merges
+//                                the org `.github/review-agent.yml` below this
+//                                config. Backward-compatible with the original
+//                                single-keyword form.
+//
+//   extends: recommended       — a single bundled preset name. The preset is
+//                                deep-merged as a base; this config overrides it.
+//
+//   extends: [recommended, strict]  — a list of preset names. Presets are
+//                                merged left-to-right; this config is applied
+//                                last (highest priority).
+//
+//   extends: null              — explicit "no inheritance" opt-out.
+//
+// NOTE: mixing 'org' inside an array (e.g. [org, recommended]) is not
+// supported. 'org' must appear as a scalar keyword. The preset loader
+// (`preset-loader.ts`) raises an actionable error if 'org' appears in an
+// array extends list.
+const ExtendsSchema = z
+  .union([z.literal('org'), z.string().min(1), z.array(z.string().min(1)), z.null()])
+  .optional();
 
 export const ConfigSchema = z
   .object({
