@@ -1208,6 +1208,8 @@ wiring instructions are in `SECURITY.md`.
 
 ### 8.2 GitHub App mode (server)
 
+#### 8.2.1 Manual setup (existing)
+
 - App created by the operator (you, or each org self-hosting).
 - Permissions requested by App manifest:
   - `pull_requests`: write
@@ -1245,6 +1247,127 @@ const octokit = new Octokit({ auth: token });
 
 - Token is cached per installation in Redis (or Postgres `installation_tokens` table)
   with TTL = `expiresAt - 5min`.
+
+#### 8.2.2 Dashboard onboarding flow
+
+Operators onboard a GitHub App installation from the web dashboard without
+manual webhook configuration.
+
+**Prerequisite:** The GitHub App manifest must set:
+- `callback_url` → `<server-origin>/api/github/setup`
+- `setup_url` → `<server-origin>/api/github/setup`
+
+**Flow:**
+
+1. User visits `/integrations` and clicks **Connect GitHub**.
+2. The dashboard calls `GET /github/install-redirect`. The server mints a
+   random `state` token, writes it as an `HttpOnly; Secure; SameSite=Lax` cookie
+   (`github_install_state`), and returns a redirect to
+   `https://github.com/apps/<GITHUB_APP_SLUG>/installations/new?state=<token>`.
+3. GitHub redirects back to `GET /github/setup?installation_id=<id>&setup_action=<action>&state=<token>`.
+4. The server validates `state` against the cookie using `timingSafeEqual`; mismatches
+   return `403` and clear the cookie.
+5. On success: upsert into `github_installations` (see §8.2.3), clear the cookie.
+6. Redirect to `<REVIEW_AGENT_DASHBOARD_ORIGIN>/integrations/github/repos?installation_id=<id>`.
+
+**Authentication boundary:** `GET /github/setup` is an external redirect
+target from GitHub and therefore mounted on a separate `/github/*` router that
+sits **outside** the `/api/*` bearer-token guard. No JWT is required on this
+endpoint; CSRF is the sole authentication mechanism (step 4 above).
+
+**`setup_action` values:**
+
+| Value | Meaning |
+|---|---|
+| `install` | New installation — `installation_id` is present and valid. |
+| `update` | Repository selection changed — re-upsert. |
+| `request` | Org admin approval pending. `installation_id` may be absent. See open question (a) in §22. |
+
+#### 8.2.3 `github_installations` table
+
+Stores one row per GitHub App installation. RLS ON; tenant-scoped via the same
+`tenant_isolation` permissive policy applied to `installation_tokens` and
+`installation_secrets` (§16.1).
+
+```ts
+// packages/core/src/db/schema/github-installations.ts
+import { sql } from 'drizzle-orm';
+import { bigint, pgPolicy, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { appRole } from './roles.js';
+
+export const githubInstallations = pgTable(
+  'github_installations',
+  {
+    installationId: bigint('installation_id', { mode: 'bigint' }).primaryKey(),
+    accountLogin:   text('account_login').notNull(),
+    accountType:    text('account_type').notNull(),   // 'User' | 'Organization'
+    appId:          bigint('app_id', { mode: 'bigint' }).notNull(),
+    setupAction:    text('setup_action').notNull(),   // 'install' | 'update' | 'request'
+    suspendedAt:    timestamp('suspended_at', { withTimezone: true }),
+    createdAt:      timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt:      timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    pgPolicy('tenant_isolation', {
+      as: 'permissive',
+      to: appRole,
+      for: 'all',
+      using:     sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+      withCheck: sql`${t.installationId}::text = current_setting('app.current_tenant', true)`,
+    }),
+  ],
+).enableRLS();
+```
+
+**RLS and installation count:** Because RLS is ON, a `SELECT count(*)` from
+`github_installations` returns only rows visible to the current tenant.
+`GET /api/integrations` must either run the count inside a `withTenant`
+transaction, or use an admin role with `BYPASSRLS` for the cross-tenant total.
+
+**`repos.installation_id` FK:** The `repos` table gains a nullable
+`installation_id bigint` column with a foreign key to
+`github_installations(installation_id)`. Manually-registered repos retain
+`installation_id = NULL` (backward compatible).
+
+**App-level JWT for callback:** The `apps.getInstallation` Octokit call in the
+setup callback requires an App-level JWT (not an installation token). Add an
+`createAppJwt()` helper to `packages/platform-github/src/app-auth.ts` that mints a
+short-lived JWT signed with the App private key, independent of any
+`installationId`.
+
+#### 8.2.4 Accessible repos API
+
+```
+GET /api/github/installations/:installationId/repos
+```
+
+- Generates an installation token for `installationId` (standard `@octokit/auth-app`
+  flow, §8.2.1).
+- Calls `octokit.paginate(octokit.apps.listReposAccessibleToInstallation)` to
+  retrieve the full set of accessible repositories.
+- Joins against the local `repos` table to flag `registered`.
+- Returns `{ repos: { id, fullName, private, registered }[] }`.
+
+> **Open question (b) — per-installation authorization gap:** In the current
+> single-tenant operator model, any authenticated dashboard user can enumerate
+> repos for an arbitrary `installationId`. Accepted as a known gap for v0.x; a
+> follow-up issue will add ownership validation before multi-tenant GA.
+
+#### 8.2.5 Bulk repo registration
+
+```
+POST /api/repos/bulk
+```
+
+Request: `{ installationId: number, names: string[] }` (full repo names).
+Response: `{ created: string[], alreadyExists: string[], errors: { name, message }[] }`.
+
+- Each `name` is upserted into `repos` with `platform='github'`,
+  `installation_id=installationId`, `enabled=true`.
+- Existing rows go to `alreadyExists` with no destructive update.
+- Partial failure allowed; returns `207` when `errors` is non-empty, `201` on
+  full success, `200` when all `alreadyExists`.
+- On success the dashboard redirects to `/repos`.
 
 ### 8.3 CLI mode
 
@@ -2325,6 +2448,10 @@ Every worker request:
 4. Run all queries.
 5. Commit.
 
+**Tenant-scoped tables (RLS ON, `tenant_isolation` policy):**
+`review_state`, `cost_ledger`, `review_history`, `installation_tokens`,
+`installation_secrets`, `github_installations`.
+
 ### 16.2 File workspace isolation
 
 `/tmp/{installation_id}/{job_id}/`. Each worker process scopes os-level operations
@@ -2716,6 +2843,21 @@ v1.0+ as design work, not implementation blockers. Status as of v0.3 release:
     **Resolved**: v0.3 ships with `manifest.json` + SHA-256 only (mandatory).
     Cosign attestation is **deferred to v1.1** — re-evaluate based on
     contributor demand. Track in a roadmap issue, not in the spec.
+16. **`setup_action=request` behavior in GitHub App setup callback (§8.2.2).**
+    When GitHub redirects back with `setup_action=request`, the installation
+    is pending org-admin approval and `installation_id` may be absent. The
+    current spec says: do not upsert; redirect to dashboard with
+    `?error=pending_admin_approval`. **Open:** confirm whether GitHub sends a
+    subsequent `installation.created` webhook on approval (expected), and
+    whether the callback path ever receives a valid `installation_id` in the
+    `request` case. Implementer must record the observed behavior in the PR.
+17. **Per-installation authorization gap in accessible repos API (§8.2.4).**
+    Any authenticated dashboard user can call
+    `GET /api/github/installations/:id/repos` for an arbitrary
+    `installationId`. In the current single-tenant operator model this is an
+    acceptable gap: the operator controls all installations. **Deferred to
+    GA follow-up** — add ownership validation (confirm the tenant owns the
+    requested `installationId`) before multi-tenant support ships.
 
 ### 22.x Platform registry contract (VCS dispatch)
 
@@ -2925,6 +3067,8 @@ Do not duplicate or rename upstream conventions.
 | `GITHUB_APP_PRIVATE_KEY_ARN` | AWS Secrets Manager ARN holding the PEM. | Server | (see above) |
 | `GITHUB_APP_PRIVATE_KEY_RESOURCE` | GCP Secret Manager resource name. | Server | (see above) |
 | `GITHUB_WEBHOOK_SECRET` | HMAC secret for webhook verification. | Server | Yes (Server) |
+| `GITHUB_APP_SLUG` | GitHub App slug (the URL-safe name in `github.com/apps/<slug>`). Used to build the install URL and returned by `GET /api/integrations` as `appSlug`. | Server | Yes (Server) |
+| `REVIEW_AGENT_DASHBOARD_ORIGIN` | Origin of the web dashboard. The setup callback redirects here after a successful installation. | Server | Yes (Server) |
 | `REVIEW_AGENT_GH_TOKEN` | PAT for CLI mode. | CLI | Yes (CLI) |
 | `DATABASE_URL` | Postgres connection string. | Server | Yes (Server) |
 | `QUEUE_URL` | SQS or ElasticMQ URL. | Server | Yes (Server) |

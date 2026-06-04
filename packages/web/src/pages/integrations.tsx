@@ -1,11 +1,22 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useIntegrations } from '../api/client.js';
 import type { CodeCommitIntegration, GithubIntegration, LlmIntegration } from '../api/types.js';
 import { Hairline } from '../components/hairline.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
 import { StatusBadge } from '../components/status-badge.js';
+
+const KNOWN_SETUP_ERRORS = [
+  'validation_error',
+  'missing_state_cookie',
+  'state_mismatch',
+  'setup_cancelled',
+  'pending_admin_approval',
+  'setup_failed',
+] as const;
+type SetupError = (typeof KNOWN_SETUP_ERRORS)[number];
 
 type IntegrationCardProps = {
   title: string;
@@ -99,6 +110,31 @@ function GithubCard({ data }: { data: GithubIntegration }) {
         label={t('pages.integrations.fieldInstallations')}
         value={String(data.installationCount)}
       />
+      {data.appSlug !== null && (
+        <dt style={{ gridColumn: '1 / -1', marginTop: '0.75rem' }}>
+          <button
+            type="button"
+            onClick={() => {
+              window.location.assign('/github/install-redirect');
+            }}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.6875rem',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--fg)',
+              background: 'none',
+              border: '1px solid var(--hairline)',
+              borderRadius: 'var(--radius)',
+              padding: '0.375rem 0.75rem',
+              cursor: 'pointer',
+            }}
+          >
+            {t('pages.integrations.connectGithub')}
+          </button>
+        </dt>
+      )}
     </IntegrationCard>
   );
 }
@@ -126,9 +162,36 @@ function LlmCard({ data }: { data: LlmIntegration }) {
   );
 }
 
+function getSetupError(search: string): SetupError | null {
+  const raw = new URLSearchParams(search).get('error');
+  if (raw !== null && (KNOWN_SETUP_ERRORS as ReadonlyArray<string>).includes(raw)) {
+    return raw as SetupError;
+  }
+  return null;
+}
+
+function errorKey(err: SetupError): string {
+  if (err === 'setup_cancelled') return 'pages.integrations.errorSetupCancelled';
+  if (err === 'pending_admin_approval') return 'pages.integrations.errorPendingAdminApproval';
+  if (err === 'validation_error') return 'pages.integrations.errorValidationError';
+  if (err === 'missing_state_cookie') return 'pages.integrations.errorMissingStateCookie';
+  if (err === 'state_mismatch') return 'pages.integrations.errorStateMismatch';
+  return 'pages.integrations.errorSetupFailed';
+}
+
 export function IntegrationsPage() {
   const { t } = useTranslation();
   const { data, isLoading, error } = useIntegrations();
+  const { search } = useLocation();
+  const initialSetupError = getSetupError(search);
+  const [setupError, setSetupError] = useState<SetupError | null>(initialSetupError);
+
+  function dismissError() {
+    setSetupError(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('error');
+    window.history.replaceState(null, '', url.toString());
+  }
 
   return (
     <StaggerContainer>
@@ -138,6 +201,47 @@ export function IntegrationsPage() {
           subtitle={t('pages.integrations.subtitle')}
         />
       </StaggerItem>
+
+      {setupError !== null && (
+        <StaggerItem>
+          <div
+            role="alert"
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
+              padding: '0.75rem 1rem',
+              border: '1px solid var(--rust)',
+              borderRadius: 'var(--radius)',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.75rem',
+              color: 'var(--rust)',
+              marginBottom: '0.5rem',
+            }}
+          >
+            <span>{t(errorKey(setupError))}</span>
+            <button
+              type="button"
+              aria-label={t('pages.integrations.errorDismiss')}
+              onClick={dismissError}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                color: 'var(--rust)',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                flexShrink: 0,
+              }}
+            >
+              {t('pages.integrations.errorDismiss')}
+            </button>
+          </div>
+        </StaggerItem>
+      )}
 
       {isLoading && (
         <StaggerItem>

@@ -1,4 +1,7 @@
 import type { JobMessage, QueueClient } from '@review-agent/core';
+import { githubInstallations } from '@review-agent/core/db';
+import { type DbClient, type TenantTransaction, withTenant } from '@review-agent/db';
+import { eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { getMetrics } from '../metrics.js';
 import type { FeedbackAuthzResult, GithubAuthzInput } from '../utils/feedback-authz.js';
@@ -21,6 +24,13 @@ export type WebhookHandlerDeps = {
    * because no authz wiring is provided (fail-closed).
    */
   readonly checkAuthz?: (input: Omit<GithubAuthzInput, 'octokit'>) => Promise<FeedbackAuthzResult>;
+  /**
+   * Postgres client for persisting `installation` lifecycle events into
+   * `github_installations`. When omitted the handler falls back to the
+   * existing ACK-only behaviour so existing tests that do not supply a
+   * DB continue to pass without modification.
+   */
+  readonly db?: DbClient;
 };
 
 type EventName =
@@ -35,6 +45,15 @@ type EventName =
   | 'ping';
 
 const ENQUEUE_PR_ACTIONS = new Set(['opened', 'synchronize', 'reopened', 'ready_for_review']);
+
+type InstallationEventBody = {
+  action?: string;
+  installation?: {
+    id?: number;
+    app_id?: number;
+    account?: { login?: string; type?: string };
+  };
+};
 
 type PrEventBody = {
   action?: string;
@@ -59,6 +78,7 @@ export type WebhookResult =
   | { kind: 'ignored'; reason: string }
   | { kind: 'enqueued'; messageId: string }
   | { kind: 'noop'; reason: string }
+  | { kind: 'installation'; action: string; installationId: number }
   | {
       kind: 'feedback';
       signal: 'thumbs_up' | 'thumbs_down' | 'dismissed';
@@ -81,10 +101,21 @@ export async function handleWebhook(
   const now = deps.now ?? (() => new Date());
   if (event === 'ping') return { kind: 'noop', reason: 'ping' };
 
-  if (event === 'installation' || event === 'installation_repositories') {
-    // Lifecycle events: receiver-side ack only. Worker-side handling is
-    // wired in v0.2 #16 / #19 once the per-installation state lives in DB.
-    return { kind: 'noop', reason: `${event} acknowledged` };
+  if (event === 'installation_repositories') {
+    // Repository selection changes: no-op per spec (§8.2.2).
+    return { kind: 'noop', reason: 'installation_repositories acknowledged' };
+  }
+
+  if (event === 'installation') {
+    const ie = body as InstallationEventBody;
+    const action = ie.action;
+    // When no DB is wired (e.g. test environments without a real Postgres
+    // connection), fall back to the existing ACK-only behaviour so callers
+    // that do not inject `db` continue to work unchanged.
+    if (!deps.db) {
+      return { kind: 'noop', reason: `${action ?? 'unknown'} acknowledged` };
+    }
+    return handleInstallationEvent(action, ie, deps.db, now());
   }
 
   if (event === 'pull_request_review_comment_reaction' || event === 'reaction') {
@@ -162,6 +193,94 @@ export async function handleWebhook(
   }
 
   return { kind: 'ignored', reason: `unhandled event '${event}'` };
+}
+
+/**
+ * Persists GitHub App installation lifecycle events into `github_installations`.
+ *
+ * - `created` / `unsuspend` → upsert all fields; `unsuspend` clears `suspended_at`
+ *   by setting it to NULL via the same upsert path.
+ * - `suspend` → update `suspended_at = NOW()` for the matching row.
+ * - `deleted` → **physical DELETE** (choice recorded here per issue #126):
+ *   physical delete keeps the table clean and avoids stale rows affecting
+ *   `installationCount` queries; the spec table has no `deleted_at` column,
+ *   confirming physical delete is the intended approach. Historical data is
+ *   retained in `review_state` / `cost_ledger` via their own RLS-scoped tables.
+ * - Any other action → no-op (ACK only, future-proof).
+ *
+ * Uses `withTenant(installationId, ...)` so the RLS `tenant_isolation` policy
+ * on `github_installations` is satisfied for every write (§16.1).
+ */
+async function handleInstallationEvent(
+  action: string | undefined,
+  body: InstallationEventBody,
+  db: DbClient,
+  now: Date,
+): Promise<WebhookResult> {
+  const installationId = body.installation?.id;
+  if (typeof installationId !== 'number') {
+    return { kind: 'ignored', reason: 'installation event missing installation.id' };
+  }
+
+  if (action === 'created' || action === 'unsuspend') {
+    const appId = body.installation?.app_id;
+    const accountLogin = body.installation?.account?.login;
+    const accountType = body.installation?.account?.type;
+    if (
+      typeof appId !== 'number' ||
+      typeof accountLogin !== 'string' ||
+      typeof accountType !== 'string'
+    ) {
+      return { kind: 'ignored', reason: 'installation.created/unsuspend missing required fields' };
+    }
+    await withTenant(db, installationId, async (tx: TenantTransaction) => {
+      await tx
+        .insert(githubInstallations)
+        .values({
+          installationId: BigInt(installationId),
+          appId: BigInt(appId),
+          accountLogin,
+          accountType,
+          setupAction: 'install',
+          suspendedAt: null,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: githubInstallations.installationId,
+          set: {
+            appId: BigInt(appId),
+            accountLogin,
+            accountType,
+            setupAction: 'install',
+            suspendedAt: null,
+            updatedAt: now,
+          },
+        });
+    });
+    return { kind: 'installation', action, installationId };
+  }
+
+  if (action === 'suspend') {
+    await withTenant(db, installationId, async (tx: TenantTransaction) => {
+      await tx
+        .update(githubInstallations)
+        .set({ suspendedAt: now, updatedAt: now })
+        .where(eq(githubInstallations.installationId, BigInt(installationId)));
+    });
+    return { kind: 'installation', action, installationId };
+  }
+
+  if (action === 'deleted') {
+    await withTenant(db, installationId, async (tx: TenantTransaction) => {
+      await tx
+        .delete(githubInstallations)
+        .where(eq(githubInstallations.installationId, BigInt(installationId)));
+    });
+    return { kind: 'installation', action, installationId };
+  }
+
+  // Unknown action (e.g. future GitHub additions): ACK without DB write.
+  return { kind: 'noop', reason: `installation.${action ?? 'unknown'} acknowledged` };
 }
 
 /**

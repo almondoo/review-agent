@@ -1,8 +1,10 @@
 import type { KmsClient } from '@review-agent/core';
 import type { AuditAppender, DbClient } from '@review-agent/db';
 import { createAuditAppender } from '@review-agent/db';
+import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { createDashboardRouter } from './dashboard.js';
+import { createGithubReposRouter } from './github-repos.js';
 import { createIntegrationsRouter, type IntegrationsEnv } from './integrations.js';
 import { createLlmKeysRouter } from './llm-keys.js';
 import { bearerTokenAuth } from './middleware/auth.js';
@@ -46,6 +48,14 @@ export type ApiDeps = {
    * from deps.db (allows test injection).
    */
   readonly auditAppender?: AuditAppender;
+  /**
+   * App-level GitHub auth client. When provided, enables:
+   *   - GET /api/github/installations/:installationId/repos
+   * When absent those routes return 503.
+   *
+   * Spec §8.2.4.
+   */
+  readonly appAuthClient?: AppAuthClient;
 };
 
 /**
@@ -91,7 +101,7 @@ export function createApi(deps: ApiDeps): Hono {
     }),
   );
 
-  api.route('/integrations', createIntegrationsRouter({ env: deps.env }));
+  api.route('/integrations', createIntegrationsRouter({ env: deps.env, db: deps.db }));
 
   // Wire BYOK LLM key management routes when KMS is configured.
   const resolvedAuditAppender =
@@ -134,6 +144,23 @@ export function createApi(deps: ApiDeps): Hono {
       db: deps.db,
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.awsRegion ? { awsRegion: deps.awsRegion } : {}),
+    }),
+  );
+
+  // GitHub App accessible repos + bulk registration (spec §8.2.4, §8.2.5).
+  // The sub-router mounts:
+  //   GET  /github/installations/:installationId/repos
+  //   POST /repos/bulk
+  // Both are covered by the bearer-token middleware applied above.
+  api.route(
+    '/',
+    createGithubReposRouter({
+      db: deps.db,
+      ...(deps.now ? { now: deps.now } : {}),
+      ...(deps.generateId ? { generateId: deps.generateId } : {}),
+      ...(deps.appAuthClient !== undefined
+        ? { appAuth: { appAuthClient: deps.appAuthClient } }
+        : {}),
     }),
   );
 

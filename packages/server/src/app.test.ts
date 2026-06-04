@@ -131,6 +131,73 @@ describe('createApp', () => {
     }
   });
 
+  it('end-to-end: signed installation.created wires db through to handler and upserts', async () => {
+    // Build a DB mock that handles both the idempotency middleware (outer
+    // `insert` for webhook_deliveries) and the withTenant / installation
+    // upsert path (inner `transaction` → `tx.execute` + `tx.insert`).
+    const seen = new Set<string>();
+    const txInsertResult = { onConflictDoUpdate: vi.fn().mockResolvedValue([]) };
+    const txInsert = vi.fn().mockReturnValue({
+      values: vi.fn().mockReturnValue(txInsertResult),
+    });
+    const transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        execute: vi.fn().mockResolvedValue([{ tenant: '55' }]),
+        insert: txInsert,
+        update: vi.fn(),
+        delete: vi.fn(),
+      }),
+    );
+    const db = {
+      seen,
+      insert: () => ({
+        values: (v: { deliveryId: string }) => ({
+          onConflictDoNothing: () => ({
+            returning: async () => {
+              if (seen.has(v.deliveryId)) return [];
+              seen.add(v.deliveryId);
+              return [{ deliveryId: v.deliveryId }];
+            },
+          }),
+        }),
+      }),
+      transaction,
+    };
+    const app = createApp({
+      // biome-ignore lint/suspicious/noExplicitAny: mock
+      db: db as any,
+      queue: { enqueue: vi.fn(), dequeue: vi.fn() },
+      webhookSecret: SECRET,
+      now: () => new Date('2026-06-04T00:00:00Z'),
+      allowedSnsTopicArns: [TOPIC],
+    });
+    const body = JSON.stringify({
+      action: 'created',
+      installation: {
+        id: 55,
+        app_id: 42,
+        account: { login: 'acme-org', type: 'Organization' },
+      },
+    });
+    const res = await app.request('/webhook', {
+      method: 'POST',
+      headers: {
+        'x-hub-signature-256': sign(body),
+        'x-github-event': 'installation',
+        'x-github-delivery': 'dlv-install-1',
+        'content-type': 'application/json',
+      },
+      body,
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { kind: string };
+    expect(json.kind).toBe('installation');
+    // Verify the db.transaction wire is exercised — removing `db: deps.db`
+    // from app.ts would make transaction never be called.
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(txInsert).toHaveBeenCalledOnce();
+  });
+
   it('end-to-end: signed pull_request.opened enqueues a job', async () => {
     const enqueue = vi.fn().mockResolvedValue({ messageId: 'm-7' });
     const app = createApp({

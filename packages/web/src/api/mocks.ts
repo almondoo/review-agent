@@ -1,5 +1,9 @@
 import type {
+  BulkCreateRepoBody,
+  BulkCreateRepoResponse,
   BYOKProvider,
+  InstallationRepo,
+  InstallationReposResponse,
   IntegrationsStatus,
   LlmKeyStatus,
   LlmKeysResponse,
@@ -521,6 +525,7 @@ export const mockIntegrations: IntegrationsStatus = {
   github: {
     configured: true,
     appId: 'app-12345',
+    appSlug: 'my-review-agent',
     installationCount: 4,
   },
   codecommit: {
@@ -886,4 +891,43 @@ export function rotateMockLlmKey(installationId: number, provider: BYOKProvider)
 export function deleteMockLlmKey(installationId: number, provider: BYOKProvider): void {
   const store = getOrCreateInstallationStore(installationId);
   store.set(provider, false);
+}
+
+// --- GitHub App onboarding mocks ---
+
+const mockInstallationRepos: InstallationRepo[] = [
+  { id: 100001, fullName: 'acme/api-service', private: false, registered: true },
+  { id: 100002, fullName: 'acme/frontend', private: false, registered: true },
+  { id: 100003, fullName: 'acme/backend', private: true, registered: false },
+  { id: 100004, fullName: 'acme/infra', private: true, registered: false },
+  { id: 100005, fullName: 'acme/docs', private: false, registered: false },
+];
+
+export function getMockInstallationRepos(installationId: number): InstallationReposResponse {
+  void installationId;
+  return { repos: mockInstallationRepos };
+}
+
+/** Sentinel name: triggers a simulated error entry in bulkCreateMockRepos (207 path). */
+export const MOCK_BULK_CREATE_ERROR_SENTINEL = '__error__';
+
+export function bulkCreateMockRepos(body: BulkCreateRepoBody): BulkCreateRepoResponse {
+  const created: string[] = [];
+  const alreadyExists: string[] = [];
+  const errors: { name: string; message: string }[] = [];
+
+  for (const name of body.names) {
+    if (name === MOCK_BULK_CREATE_ERROR_SENTINEL) {
+      errors.push({ name, message: 'simulated registration failure' });
+    } else {
+      const existing = mockInstallationRepos.find((r) => r.fullName === name);
+      if (existing?.registered) {
+        alreadyExists.push(name);
+      } else {
+        created.push(name);
+      }
+    }
+  }
+
+  return { created, alreadyExists, errors };
 }

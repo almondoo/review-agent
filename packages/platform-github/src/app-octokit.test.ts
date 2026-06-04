@@ -10,6 +10,7 @@ describe('createAppOctokitFactory', () => {
         expiresAt: new Date(Date.now() + 60_000),
       }),
       invalidate: vi.fn(),
+      createAppJwt: vi.fn(),
     };
     const factory = createAppOctokitFactory({ authClient, userAgent: 'test/1' });
     const octokit = await factory(99n);
@@ -27,6 +28,7 @@ describe('build401RetryHandler', () => {
         .fn()
         .mockResolvedValue({ token: 'fresh', expiresAt: new Date(Date.now() + 60_000) }),
       invalidate: vi.fn().mockResolvedValue(undefined),
+      createAppJwt: vi.fn(),
     };
   }
 

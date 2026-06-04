@@ -6,9 +6,11 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  useBulkCreateRepos,
   useCreateRepo,
   useDeleteLlmKey,
   useDeleteRepo,
+  useInstallationRepos,
   useIntegrations,
   useLlmKeys,
   useOverview,
@@ -24,6 +26,8 @@ import {
   useRotateLlmKey,
   useUpsertLlmKey,
 } from './client.js';
+import { MOCK_BULK_CREATE_ERROR_SENTINEL } from './mocks.js';
+import type { BulkCreateRepoResponse } from './types.js';
 
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -305,5 +309,118 @@ describe('client hooks (mock mode)', () => {
       );
     });
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  // --- GitHub App onboarding hooks ---
+
+  it('useInstallationRepos is disabled when installationId is null', () => {
+    const { result } = renderHook(() => useInstallationRepos(null), { wrapper: makeWrapper() });
+    expect(result.current.fetchStatus).toBe('idle');
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it('useInstallationRepos returns repos for valid installationId', async () => {
+    const { result } = renderHook(() => useInstallationRepos(12345), { wrapper: makeWrapper() });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(Array.isArray(result.current.data?.repos)).toBe(true);
+    expect(result.current.data?.repos.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('useInstallationRepos result includes expected repo fields', async () => {
+    const { result } = renderHook(() => useInstallationRepos(12345), { wrapper: makeWrapper() });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const repo = result.current.data?.repos[0];
+    expect(repo).toHaveProperty('id');
+    expect(repo).toHaveProperty('fullName');
+    expect(repo).toHaveProperty('private');
+    expect(repo).toHaveProperty('registered');
+  });
+
+  it('useBulkCreateRepos exposes a mutate function', () => {
+    const { result } = renderHook(() => useBulkCreateRepos(), { wrapper: makeWrapper() });
+    expect(typeof result.current.mutate).toBe('function');
+  });
+
+  it('useBulkCreateRepos mutate succeeds for unregistered repos (full success)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBulkCreateRepos(), { wrapper });
+    let response: BulkCreateRepoResponse | undefined;
+    await new Promise<void>((resolve) => {
+      result.current.mutate(
+        { installationId: 12345, names: ['acme/backend', 'acme/docs'] },
+        {
+          onSuccess: (data) => {
+            response = data;
+            resolve();
+          },
+          onError: () => resolve(),
+        },
+      );
+    });
+    expect(result.current.isError).toBe(false);
+    expect(response?.created).toEqual(expect.arrayContaining(['acme/backend', 'acme/docs']));
+    expect(response?.alreadyExists).toHaveLength(0);
+    expect(response?.errors).toHaveLength(0);
+  });
+
+  it('useBulkCreateRepos mutate handles already-existing repos (alreadyExists path)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBulkCreateRepos(), { wrapper });
+    let response: BulkCreateRepoResponse | undefined;
+    await new Promise<void>((resolve) => {
+      result.current.mutate(
+        { installationId: 12345, names: ['acme/api-service', 'acme/frontend'] },
+        {
+          onSuccess: (data) => {
+            response = data;
+            resolve();
+          },
+          onError: () => resolve(),
+        },
+      );
+    });
+    expect(result.current.isError).toBe(false);
+    expect(response?.alreadyExists).toEqual(
+      expect.arrayContaining(['acme/api-service', 'acme/frontend']),
+    );
+    expect(response?.created).toHaveLength(0);
+  });
+
+  it('useBulkCreateRepos mutate handles partial response with non-empty errors array (207 shape)', async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useBulkCreateRepos(), { wrapper });
+    let response: BulkCreateRepoResponse | undefined;
+    await new Promise<void>((resolve) => {
+      result.current.mutate(
+        // Sentinel triggers an error entry; 'acme/docs' is a normal unregistered repo.
+        { installationId: 12345, names: ['acme/docs', MOCK_BULK_CREATE_ERROR_SENTINEL] },
+        {
+          onSuccess: (data) => {
+            response = data;
+            resolve();
+          },
+          onError: () => resolve(),
+        },
+      );
+    });
+    // 207 is still a successful mutation (not an error throw).
+    expect(result.current.isError).toBe(false);
+    expect(Array.isArray(response?.errors)).toBe(true);
+    // At least one error entry must be present with name and message fields.
+    expect(response?.errors.length).toBeGreaterThan(0);
+    const errorEntry = response?.errors[0];
+    expect(typeof errorEntry?.name).toBe('string');
+    expect(typeof errorEntry?.message).toBe('string');
+    // The successful portion must still be present.
+    expect(response?.created).toContain('acme/docs');
   });
 });

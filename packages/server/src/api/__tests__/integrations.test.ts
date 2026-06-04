@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { createIntegrationsRouter } from '../integrations.js';
 
 describe('integrations router', () => {
-  function makeApp(env: Record<string, string | undefined> = {}) {
-    return createIntegrationsRouter({ env });
+  function makeApp(
+    env: Record<string, string | undefined> = {},
+    db?: Parameters<typeof createIntegrationsRouter>[0]['db'],
+  ) {
+    return createIntegrationsRouter({ env, ...(db !== undefined ? { db } : {}) });
   }
 
   describe('GET /', () => {
@@ -35,8 +38,78 @@ describe('integrations router', () => {
       expect(String(body.github.appId).includes('****')).toBe(true);
     });
 
-    it('github: installationCount is 0 (not yet wired to DB)', async () => {
+    it('github: installationCount is 0 when no db injected', async () => {
       const app = makeApp({ GITHUB_APP_ID: '111' });
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.installationCount).toBe(0);
+    });
+
+    it('github: appSlug is null when GITHUB_APP_SLUG not set', async () => {
+      const app = makeApp({ GITHUB_APP_ID: '111' });
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.appSlug).toBe(null);
+    });
+
+    it('github: appSlug is null when GITHUB_APP_SLUG is empty string', async () => {
+      const app = makeApp({ GITHUB_APP_ID: '111', GITHUB_APP_SLUG: '' });
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.appSlug).toBe(null);
+    });
+
+    it('github: appSlug is returned when GITHUB_APP_SLUG is set', async () => {
+      const app = makeApp({ GITHUB_APP_ID: '111', GITHUB_APP_SLUG: 'my-review-agent' });
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.appSlug).toBe('my-review-agent');
+    });
+
+    it('github: appSlug present even when GITHUB_APP_ID absent', async () => {
+      const app = makeApp({ GITHUB_APP_SLUG: 'standalone-slug' });
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.appSlug).toBe('standalone-slug');
+      expect(body.github.configured).toBe(false);
+    });
+
+    it('github: installationCount from mock DB when db injected', async () => {
+      const mockDb = {
+        select: () => ({
+          from: () => ({
+            where: () => Promise.resolve([{ value: 7 }]),
+          }),
+        }),
+      } as unknown as Parameters<typeof createIntegrationsRouter>[0]['db'];
+      const app = makeApp({ GITHUB_APP_ID: '111' }, mockDb);
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.installationCount).toBe(7);
+    });
+
+    it('github: installationCount falls back to 0 when db query returns no rows', async () => {
+      const mockDb = {
+        select: () => ({
+          from: () => ({
+            where: () => Promise.resolve([]),
+          }),
+        }),
+      } as unknown as Parameters<typeof createIntegrationsRouter>[0]['db'];
+      const app = makeApp({ GITHUB_APP_ID: '111' }, mockDb);
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.installationCount).toBe(0);
+    });
+
+    it('github: installationCount defaults to 0 when database throws', async () => {
+      const mockDb = {
+        select: () => ({
+          from: () => ({
+            where: () => Promise.reject(new Error('connection refused')),
+          }),
+        }),
+      } as unknown as Parameters<typeof createIntegrationsRouter>[0]['db'];
+      const app = makeApp({ GITHUB_APP_ID: '111' }, mockDb);
+      const body = await (await app.request('http://host/')).json();
+      expect(body.github.installationCount).toBe(0);
+    });
+
+    it('github: installationCount is 0 when db not injected (no db arg)', async () => {
+      const app = createIntegrationsRouter({ env: { GITHUB_APP_ID: '111' } });
       const body = await (await app.request('http://host/')).json();
       expect(body.github.installationCount).toBe(0);
     });

@@ -1,3 +1,6 @@
+import { githubInstallations } from '@review-agent/core/db';
+import type { DbClient } from '@review-agent/db';
+import { count, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type {
   CodeCommitIntegration,
@@ -12,6 +15,12 @@ import type {
  */
 export type IntegrationsEnv = {
   readonly GITHUB_APP_ID?: string;
+  /**
+   * URL-safe GitHub App name used to build the install redirect URL
+   * (`https://github.com/apps/<GITHUB_APP_SLUG>/installations/new`).
+   * Distinct from GITHUB_APP_ID; optional — null when not set.
+   */
+  readonly GITHUB_APP_SLUG?: string;
   readonly AWS_REGION?: string;
   readonly REVIEW_AGENT_SNS_TOPIC_ARNS?: string;
   readonly REVIEW_AGENT_FEEDBACK_ALLOWLIST?: string;
@@ -32,15 +41,38 @@ function maskId(v: string): string {
   return `${v.slice(0, 4)}****`;
 }
 
-function buildGithubStatus(env: IntegrationsEnv): GithubIntegration {
+async function buildGithubStatus(
+  env: IntegrationsEnv,
+  db: DbClient | undefined,
+): Promise<GithubIntegration> {
   const configured = isPresent(env.GITHUB_APP_ID);
+  const appSlug = isPresent(env.GITHUB_APP_SLUG) ? (env.GITHUB_APP_SLUG as string) : null;
+
+  let installationCount = 0;
+  if (db !== undefined) {
+    // Spec §8.2.3: the count must run via withTenant or a BYPASSRLS admin
+    // role. When `db` is the regular review_agent_app connection without a
+    // tenant GUC set, RLS returns 0 rows (fail-closed). Operators who need
+    // the real cross-tenant total must inject a BYPASSRLS DbClient here.
+    // The value is informational UI only; falling back to 0 is safe.
+    try {
+      const rows = await db
+        .select({ value: count() })
+        .from(githubInstallations)
+        .where(isNull(githubInstallations.suspendedAt));
+      installationCount = Number(rows[0]?.value ?? 0);
+    } catch {
+      // Fall back to 0 on any DB error (e.g., table not yet migrated,
+      // connection failure). The count is informational only.
+      installationCount = 0;
+    }
+  }
+
   return {
     configured,
     appId: configured && env.GITHUB_APP_ID !== undefined ? maskId(env.GITHUB_APP_ID) : null,
-    // Installation count requires a DB join not wired in this endpoint yet.
-    // Operators extending this can pass the value via deps; for now 0 is
-    // the honest "unknown" value rather than a fabricated non-zero.
-    installationCount: 0,
+    appSlug,
+    installationCount,
   };
 }
 
@@ -88,14 +120,25 @@ function buildLlmStatus(env: IntegrationsEnv): LlmIntegration {
 
 export type IntegrationsDeps = {
   readonly env: IntegrationsEnv;
+  /**
+   * Optional DB client. When provided, `installationCount` is fetched via a
+   * real `COUNT(*)` from `github_installations WHERE suspended_at IS NULL`.
+   * When absent (e.g., unit tests or CLI usage), `installationCount` returns 0.
+   *
+   * RLS note (spec §8.2.3): to receive a real cross-tenant total, inject a
+   * DbClient that connects with a BYPASSRLS role. A standard review_agent_app
+   * connection without a tenant GUC set will return 0 (fail-closed). A
+   * withTenant-scoped connection will return 0 or 1 for that tenant only.
+   */
+  readonly db?: DbClient;
 };
 
 export function createIntegrationsRouter(deps: IntegrationsDeps): Hono {
   const app = new Hono();
 
-  app.get('/', (c) => {
+  app.get('/', async (c) => {
     const response: IntegrationsResponse = {
-      github: buildGithubStatus(deps.env),
+      github: await buildGithubStatus(deps.env, deps.db),
       codecommit: buildCodecommitStatus(deps.env),
       llm: buildLlmStatus(deps.env),
     };

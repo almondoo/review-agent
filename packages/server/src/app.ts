@@ -1,8 +1,10 @@
 import type { KmsClient, QueueClient } from '@review-agent/core';
 import type { AuditAppender, DbClient } from '@review-agent/db';
+import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { type ApiDeps, createApi } from './api/index.js';
+import { createGithubRouter } from './github-setup.js';
 import { handleCodecommitWebhook } from './handlers/codecommit-webhook.js';
 import { handleWebhook } from './handlers/webhook.js';
 import { idempotency } from './middleware/idempotency.js';
@@ -66,6 +68,25 @@ export type AppDeps = {
    * env (fail-closed when unset).
    */
   readonly codecommitFeedbackAllowlistEnv?: string;
+  /**
+   * URL-safe GitHub App slug (e.g. "my-review-agent"). Used by
+   * GET /github/install-redirect to build the GitHub App install URL.
+   * Falls back to GITHUB_APP_SLUG env when absent.
+   */
+  readonly githubAppSlug?: string;
+  /**
+   * Origin of the web dashboard (e.g. "https://dashboard.example.com").
+   * Used by GET /github/setup for post-install redirects.
+   * Falls back to REVIEW_AGENT_DASHBOARD_ORIGIN env when absent.
+   */
+  readonly dashboardOrigin?: string;
+  /**
+   * App-level auth client (from platform-github). Required for
+   * GET /github/setup to call apps.getInstallation via an App JWT.
+   */
+  readonly github?: {
+    readonly appAuthClient: AppAuthClient;
+  };
 };
 
 /**
@@ -143,12 +164,27 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       REVIEW_AGENT_MODEL: process.env.REVIEW_AGENT_MODEL,
       ANTHROPIC_MODEL: process.env.ANTHROPIC_MODEL,
       REVIEW_AGENT_DASHBOARD_CORS: process.env.REVIEW_AGENT_DASHBOARD_CORS,
+      GITHUB_APP_SLUG: process.env.GITHUB_APP_SLUG,
       // REVIEW_AGENT_DASHBOARD_TOKEN is intentionally excluded from apiEnv
       // (the integrations response must never leak the token value).
     }).filter(([, v]) => v !== undefined),
   ) as ApiDeps['env'];
   // BYOK KMS key ID: caller may supply via deps.api.kmsKeyId, otherwise fall back to env.
   const kmsKeyId = deps.api?.kmsKeyId ?? process.env.REVIEW_AGENT_BYOK_KMS_KEY_ID;
+
+  // GitHub App onboarding — mounted BEFORE /api and OUTSIDE the bearer-token guard.
+  // spec §8.2.2: /github/* uses CSRF state cookie as the sole auth mechanism.
+  const githubAppSlug = deps.githubAppSlug ?? process.env.GITHUB_APP_SLUG;
+  const dashboardOrigin = deps.dashboardOrigin ?? process.env.REVIEW_AGENT_DASHBOARD_ORIGIN;
+  app.route(
+    '/github',
+    createGithubRouter({
+      db: deps.db,
+      ...(githubAppSlug !== undefined ? { githubAppSlug } : {}),
+      ...(dashboardOrigin !== undefined ? { dashboardOrigin } : {}),
+      ...(deps.github !== undefined ? { github: deps.github } : {}),
+    }),
+  );
 
   app.route(
     '/api',
@@ -183,6 +219,7 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       const body = c.get('parsedBody');
       const result = await handleWebhook(c, event as Parameters<typeof handleWebhook>[1], body, {
         queue: deps.queue,
+        db: deps.db,
         ...(deps.now ? { now: deps.now } : {}),
         ...(deps.checkGithubFeedbackAuthz ? { checkAuthz: deps.checkGithubFeedbackAuthz } : {}),
       });

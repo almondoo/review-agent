@@ -10,13 +10,13 @@ CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方
 
 ---
 
-## Current state (as of 2026-05-19)
+## Current state (as of 2026-06-04)
 
 | 観点 | 状態 |
 |---|---|
 | Latest wave on `main` | **v1.0.1 + v1.1 + v1.2** — PR [#94](https://github.com/almondoo/review-agent/pull/94) merged 2026-05-18、`Closes #83〜#93` で 11 issue を解決 |
-| Latest wave on `develop` (unmerged) | **post-v1.2 wave A** — #95 (partial, fp_prefix path) / #99 / #101 / #104 を 2026-05-19 に landed (Refined 4 件)。develop→main PR は未作成 |
-| Active follow-on issues (post-v1.2 wave A 後) | **#95 (marker path) / #96〜#108** — 下記「Active follow-on issues」セクション参照 |
+| Latest wave on `develop` (unmerged) | **post-v1.2 wave C** — #123〜#131 (GitHub App onboarding, 9 issues) を 2026-06-04 に landed。develop→main PR は未作成 |
+| Active follow-on issues | **#95 (marker path) / #98〜#108** (wave A/B 後残存) — 下記「Active follow-on issues」セクション参照 |
 | Operator-runtime 待機タスク | **#97 (default baseline)** / **#102 (per-provider parity)** — 本物の `ANTHROPIC_API_KEY` + 課金枠が必要 |
 
 Live state は GitHub の検索で確認:
@@ -369,10 +369,8 @@ open question 解決済みで「issue を読んで即着手」できる状態。
 
 | # | タイトル | Refined |
 |---|---|---|
-| [#96](https://github.com/almondoo/review-agent/issues/96) | fingerprint embedding in posted PR comments (#95 marker 経路の前提) | — |
 | [#105](https://github.com/almondoo/review-agent/issues/105) | recover-sync-state v1.2 mirror reconciliation (CodeCommit) | — |
 | [#106](https://github.com/almondoo/review-agent/issues/106) | OTel metrics for fail-open events | — |
-| [#113](https://github.com/almondoo/review-agent/issues/113) | CodeCommit `/feedback` recovery: allowlist gate on reply author (#110 hardening) | ✅ |
 | _(unfiled)_ | CodeCommit web embedded auto-setup + server worker JobHandler — spec: [`codecommit-web-embedded-auto-setup.md`](./specs/codecommit-web-embedded-auto-setup.md) / handoff: [`session-handoff-2026-05-29-dashboard.md`](./specs/session-handoff-2026-05-29-dashboard.md) — 13–14 person-days (B0 blocker = JobHandler) | — |
 
 ### Dashboard / web UI (2026-06-01 追加)
@@ -413,6 +411,51 @@ Critical を検出。byok-store を per-request の tenant tx にバインドし
 回帰テストを追加。**将来課題**: per-installation 認可 (所有権マッピング) は別 issue、
 `VITE_*` ダッシュボードトークンの bundle 露出は全 mutation 共通の既存事項 (要 deployment ガード)。
 
+#### post-v1.2 wave C — GitHub App onboarding、`develop` 上 (2026-06-04)
+
+#123〜#131 を多エージェント wave で landed（`develop`、未マージ）。全 9 issue 完了。
+
+| # | Title (short) | 主な変更 |
+|---|---|---|
+| 123 | github_installations + repos.installation_id + migrations | `github_installations` テーブル + `repos.installation_id` FK + migrations 0006–0008 (RLS tenant_isolation) |
+| 124 | listInstallationRepos + App JWT mint | `platform-github` listInstallationRepos + `AppAuthClient.createAppJwt` |
+| 125 | GitHub App setup callback + install-redirect | server GET /github/install-redirect + GET /github/setup (CSRF state cookie、redirect-only error handling、`withTenant` upsert) |
+| 126 | webhook installation イベント永続化 | installation イベント (created/suspend/unsuspend/deleted) の永続化 |
+| 127 | accessible repos API + POST /api/repos/bulk | GET /api/github/installations/:id/repos + POST /api/repos/bulk (201/200/207) |
+| 128 | integrations に appSlug + installationCount 実カウント | integrations レスポンスに appSlug + 実 installationCount |
+| 129 | GitHub オンボーディング types + hooks + mocks | web API types + hooks + mocks (`useInstallationRepos` / `useBulkCreateRepos`) |
+| 130 | /integrations Connect GitHub ボタン + エラーバナー | `/integrations` Connect GitHub ボタン + setup error バナー |
+| 131 | /integrations/github/repos repo 選択ページ | `/integrations/github/repos` repo 選択ページ |
+
+**Wave 検証**: typecheck / lint / build green、unit 2,101 passed + 13 skipped
+(DB integration、`TEST_DATABASE_APP_URL` で unlock)。coverage 全閾値クリア (13 packages)。
+`main` への送出は別 PR (`Closes #123 #124 #125 #126 #127 #128 #129 #130 #131`)。
+
+### GitHub App オンボーディング — post-v1.2 wave C、`develop` 上 (2026-06-04)
+
+Web ダッシュボードから GitHub App をインストールし、リポジトリを一括登録できる
+フルオンボーディングフロー。BE-0〜BE-5（server/db）と FE-A〜FE-C（web）の 9 issue、
+すべて 2026-06-04 に landed。
+
+| 識別子 | Issue | タイトル (短縮) | 主な変更 |
+|---|---|---|---|
+| BE-0 | [#123](https://github.com/almondoo/review-agent/issues/123) | github_installations + repos.installation_id + migrations | `github_installations` テーブル + `repos.installation_id` FK + migrations 0006–0008 (RLS tenant_isolation) |
+| BE-1 | [#124](https://github.com/almondoo/review-agent/issues/124) | listInstallationRepos + App JWT mint | `platform-github` listInstallationRepos + `AppAuthClient.createAppJwt` |
+| BE-2 | [#125](https://github.com/almondoo/review-agent/issues/125) | GitHub App setup callback + install-redirect | `server` GET /github/install-redirect + GET /github/setup (CSRF state cookie、redirect-only error handling、`withTenant` upsert) |
+| BE-3 | [#126](https://github.com/almondoo/review-agent/issues/126) | webhook installation イベント永続化 | installation イベント (created/suspend/unsuspend/deleted) の永続化 |
+| BE-4 | [#127](https://github.com/almondoo/review-agent/issues/127) | accessible repos API + POST /api/repos/bulk | GET /api/github/installations/:id/repos + POST /api/repos/bulk (201/200/207) |
+| BE-5 | [#128](https://github.com/almondoo/review-agent/issues/128) | integrations に appSlug + installationCount 実カウント | integrations レスポンスに appSlug + 実 installationCount |
+| FE-A | [#129](https://github.com/almondoo/review-agent/issues/129) | GitHub オンボーディング types + hooks + mocks | web API types + hooks + mocks (`useInstallationRepos` / `useBulkCreateRepos`) |
+| FE-B | [#130](https://github.com/almondoo/review-agent/issues/130) | /integrations に Connect GitHub ボタン + エラーバナー | `/integrations` Connect GitHub ボタン + setup error バナー |
+| FE-C | [#131](https://github.com/almondoo/review-agent/issues/131) | /integrations/github/repos repo 選択ページ | `/integrations/github/repos` repo 選択ページ |
+
+**Wave 検証**: typecheck / lint / build green、unit 2,101 passed + 13 skipped
+(DB integration、`TEST_DATABASE_APP_URL` で unlock)。coverage 全閾値クリア (13 packages)。
+`main` への送出は別 PR (`Closes #123 #124 #125 #126 #127 #128 #129 #130 #131`)。
+
+新規 env: `GITHUB_APP_SLUG`, `REVIEW_AGENT_DASHBOARD_ORIGIN`。
+新規 migration: 0006 (github_installations), 0007 (repos.installation_id), 0008 (RLS tenant_isolation)。
+
 ### Docs
 
 | # | タイトル | Refined |
@@ -438,7 +481,6 @@ Critical を検出。byok-store を per-request の tenant tx にバインドし
 ### 依存関係 / 実装順序
 
 ```
-#96 (fingerprint embed)     ──unblocks──► #95 marker (a) path 有効化 (現在 fp_prefix のみ)
 #107 (migration compat)     ──relates──► #100 (migration guide)
 #108 (E2E self-feedback)    ──relates──► #107 (CI infra 共有)
 #97  ──blocks──► CI gate enforcing 化 (現在 informational)

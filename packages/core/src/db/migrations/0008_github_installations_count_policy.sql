@@ -1,0 +1,12 @@
+-- Migration 0008: no DDL change.
+--
+-- The spec (§8.2.3) requires that GET /api/integrations either runs the
+-- installation count inside a withTenant transaction or uses an admin role
+-- with BYPASSRLS. Adding a permissive SELECT USING (true) policy would break
+-- the fail-closed guarantee of the tenant_isolation policy for all SELECT
+-- operations outside a tenant context, so no new policy is created here.
+--
+-- Operators who need the real cross-tenant count should connect with a
+-- BYPASSRLS role (e.g. a superuser or a role granted BYPASSRLS) for the
+-- GET /api/integrations endpoint, or scope the query inside withTenant if
+-- a single installationId is known at call time.

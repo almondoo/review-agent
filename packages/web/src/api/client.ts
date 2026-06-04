@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addMockRepo,
+  bulkCreateMockRepos,
   deleteMockLlmKey,
   deleteMockRepo,
+  getMockInstallationRepos,
   getMockLlmKeys,
   getMockRepoDetail,
   getMockRepoMetrics,
@@ -18,9 +20,12 @@ import {
   upsertMockLlmKey,
 } from './mocks.js';
 import type {
+  BulkCreateRepoBody,
+  BulkCreateRepoResponse,
   CreateRepoBody,
   DeleteLlmKeyBody,
   DeleteLlmKeyResponse,
+  InstallationReposResponse,
   IntegrationsStatus,
   LlmKeysResponse,
   OverviewMetrics,
@@ -333,5 +338,40 @@ export function useDeleteLlmKey() {
     mutationFn: deleteLlmKey,
     onSuccess: (_data, vars) =>
       qc.invalidateQueries({ queryKey: ['llm-keys', vars.installationId] }),
+  });
+}
+
+// --- GitHub App onboarding ---
+
+async function fetchInstallationRepos(installationId: number): Promise<InstallationReposResponse> {
+  if (IS_MOCK) return Promise.resolve(getMockInstallationRepos(installationId));
+  return apiFetch<InstallationReposResponse>(`/api/github/installations/${installationId}/repos`);
+}
+
+async function bulkCreateRepos(body: BulkCreateRepoBody): Promise<BulkCreateRepoResponse> {
+  if (IS_MOCK) return Promise.resolve(bulkCreateMockRepos(body));
+  // 201 = all created, 200 = all already existed, 207 = partial success — all are ok.
+  return apiFetch<BulkCreateRepoResponse>('/api/repos/bulk', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function useInstallationRepos(installationId: number | null) {
+  return useQuery({
+    queryKey: ['installation-repos', installationId],
+    queryFn: () => fetchInstallationRepos(installationId as number),
+    enabled: installationId !== null,
+  });
+}
+
+export function useBulkCreateRepos() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: bulkCreateRepos,
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: ['repos'] });
+      void qc.invalidateQueries({ queryKey: ['installation-repos', vars.installationId] });
+    },
   });
 }

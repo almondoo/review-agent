@@ -146,7 +146,15 @@
       "fieldInstallations": "インストール数",
       "fieldRegion": "リージョン",
       "fieldProvider": "プロバイダー",
-      "fieldModel": "モデル"
+      "fieldModel": "モデル",
+      "connectGithub": "[GitHub を接続]",
+      "errorDismiss": "[×]",
+      "errorSetupCancelled": "[エラー] GitHub App のインストールがキャンセルされました。",
+      "errorPendingAdminApproval": "[エラー] インストールを有効化するには、Org 管理者の承認が必要です。",
+      "errorSetupFailed": "[エラー] GitHub App のセットアップ中に予期しないエラーが発生しました。もう一度お試しください。",
+      "errorValidationError": "[エラー] セットアップリクエストが無効です。もう一度 GitHub の接続をお試しください。",
+      "errorMissingStateCookie": "[エラー] GitHub App セットアップ中にセッションが期限切れになりました。もう一度お試しください。",
+      "errorStateMismatch": "[エラー] GitHub App セットアップ中にセキュリティチェックに失敗しました。もう一度お試しください。"
     },
     "history": {
       "title": "履歴",
@@ -218,6 +226,71 @@
       "description": "お探しのページは存在しないか、移動されました。",
       "returnLink": "[← 概要に戻る]"
     },
+    "howItWorks": {
+      "title": "AIレビューの仕組み",
+      "subtitle": "自動コードレビューパイプラインの概要",
+      "intro": "review-agent はセルフホスト型・OSS のマルチプロバイダ AI コードレビューエージェントです。PR が作成または更新されると、差分を自動で解析し、レビューコメントを投稿します。ソースファイルは読み取り専用であり、書き込むのは PR コメントのみです。",
+      "entryPointsLabel": "エントリーポイント",
+      "entryAriaLabel": "レビューパイプラインへ流入する3つのエントリーポイント",
+      "entryAction": "GitHub Action",
+      "entryActionDesc": "PR の作成・更新時に GitHub Actions から自動的にトリガされます。",
+      "entryWebhook": "Webhook (Lambda + SQS)",
+      "entryWebhookDesc": "AWS Lambda + SQS キューによるサーバーレス Webhook サーバー。",
+      "entryCli": "CLI",
+      "entryCliDesc": "ローカルまたはスクリプトから呼び出せるコマンドラインインターフェイス。",
+      "entryPipelineLabel": "へ流入",
+      "entryPipelineTitle": "レビューパイプライン",
+      "pipelineLabel": "レビューパイプライン",
+      "pipelineAriaLabel": "トリガーから PR 投稿までの7ステップのレビューパイプライン",
+      "step1Title": "起動",
+      "step1Desc": "PR の作成・更新イベントにより、GitHub Action / Webhook サーバー(Lambda+SQS) / CLI のいずれかでエージェントが起動します。",
+      "step2Title": "差分の読み取りと絞り込み",
+      "step2Desc": "変更差分をファイル単位で解析し、パスフィルタとサイズ上限でレビュー対象を絞ります。",
+      "step3Title": "コンテキスト準備",
+      "step3Desc": "関連するテストファイル・型定義・隣接ファイルを自動取得し、レビュー方針（システムプロンプト）を組み立てます。",
+      "step4Title": "AI エージェントによるレビュー",
+      "step4Desc": "エージェントは読み取り専用の3ツール — read_file / glob / grep — を最大20ステップ使い、リポジトリを探索します。指摘は Vercel AI SDK を通じて構造化 JSON で出力されます。",
+      "step5Title": "安全フィルタ",
+      "step5Desc": "秘密情報スキャンをレビュー前後の2回実行。PR 本文や取得ファイルは「信頼境界(untrusted)」として隔離され、インジェクション対策とコスト上限も適用されます。",
+      "step6Title": "指摘の精選",
+      "step6Desc": "フィンガープリントによる重複排除と確信度フィルタで、ノイズの多い・低確信度の指摘を除外します。",
+      "step7Title": "PR へ投稿",
+      "step7Desc": "インラインコメントとサマリーを PR に投稿します。差分レビュー(incremental)では前回状態を引き継いで再指摘を抑制します。",
+      "safetyTitle": "安全性の柱",
+      "safetySubtitle": "エージェントを安全・予測可能に保つ仕組み",
+      "safetyReadOnlyTitle": "読み取り専用ツール",
+      "safetyReadOnlyDesc": "エージェントが呼び出せるツールは read_file / glob / grep のみ。ソースコードは改変しません。",
+      "safetyScanTitle": "秘密情報スキャン",
+      "safetyScanDesc": "レビュー前後の2回、自動スキャンを実行して秘密情報の漏洩を検出します。",
+      "safetyBoundaryTitle": "信頼境界",
+      "safetyBoundaryDesc": "PR 本文と取得ファイルは「信頼できない入力」として隔離し、データ流出を防ぎます。",
+      "safetyInjectionTitle": "インジェクション対策",
+      "safetyInjectionDesc": "レビュー対象コード内の悪意ある入力からシステムプロンプトを保護するプロンプトインジェクション対策を備えます。",
+      "safetyCostTitle": "コスト上限",
+      "safetyCostDesc": "PR 単位・日次のコスト上限により、PR のサイズや頻度に関わらず過剰消費を防ぎます。",
+      "providersTitle": "マルチプロバイダ対応",
+      "providersSubtitle": "レビューワークフローを変えずに基盤 LLM を切り替え可能",
+      "defaultBadge": "既定"
+    },
+    "githubSetup": {
+      "title": "GitHub App セットアップ",
+      "subtitle": "インストール保留中",
+      "description": "GitHub App のインストールリクエストが送信されました。インストールが有効になるには、Org 管理者の承認が必要です。承認されると Webhook 通知が届きます。",
+      "backLink": "[← インテグレーションに戻る]"
+    },
+    "githubRepos": {
+      "title": "リポジトリを選択",
+      "subtitle": "インストール #{{installationId}}",
+      "loadingError": "[エラー] このインストールのリポジトリの読み込みに失敗しました。",
+      "emptyMessage": "[空] — リポジトリが見つかりません。",
+      "filterPlaceholder": "リポジトリ名で絞り込み",
+      "filterAriaLabel": "リポジトリ名で絞り込む",
+      "selectAll": "[全て選択]",
+      "badgePrivate": "[プライベート]",
+      "badgeRegistered": "[登録済]",
+      "addReposButton": "[リポジトリを追加]",
+      "partialErrorHeading": "[エラー] 一部のリポジトリを登録できませんでした:"
+    },
     "byokKeys": {
       "title": "LLM APIキー管理",
       "subtitle": "インストール別プロバイダーキーの設定 (BYOK)",
@@ -251,6 +324,11 @@
       "providerOpenaiCompatibleLabel": "OpenAI 互換",
       "noInstallationId": "インストール ID を入力するとキー一覧が表示されます。"
     }
+  },
+  "footer": {
+    "productLabel": "review-agent / オープンソース AI コードレビュー",
+    "navAriaLabel": "フッターナビゲーション",
+    "howItWorks": "仕組みを見る"
   },
   "dialog": {
     "unsavedChanges": {
@@ -295,6 +373,9 @@
     "llmKeyRotated": "[OK] キーを再発行しました。",
     "llmKeyRotateFailed": "[失敗] キーの再発行に失敗しました。",
     "llmKeyDeleted": "[OK] キーを削除しました。",
-    "llmKeyDeleteFailed": "[失敗] キーの削除に失敗しました。"
+    "llmKeyDeleteFailed": "[失敗] キーの削除に失敗しました。",
+    "reposRegistered": "[OK] リポジトリを登録しました。",
+    "reposPartialFailure": "[警告] 一部のリポジトリを登録できませんでした。",
+    "reposRegisterFailed": "[失敗] リポジトリの登録に失敗しました。"
   }
 }

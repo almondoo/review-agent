@@ -138,6 +138,7 @@ export type ReviewEvent = {
 export type GithubIntegration = {
   configured: boolean;
   appId: string | null;
+  appSlug: string | null;
   installationCount: number;
 };
 
