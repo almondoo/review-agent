@@ -146,7 +146,15 @@
       "fieldInstallations": "Installations",
       "fieldRegion": "Region",
       "fieldProvider": "Provider",
-      "fieldModel": "Model"
+      "fieldModel": "Model",
+      "connectGithub": "[CONNECT GITHUB]",
+      "errorDismiss": "[×]",
+      "errorSetupCancelled": "[ERROR] GitHub App installation was cancelled.",
+      "errorPendingAdminApproval": "[ERROR] Org admin approval is required before the installation can be activated.",
+      "errorSetupFailed": "[ERROR] An unexpected error occurred during GitHub App setup. Please try again.",
+      "errorValidationError": "[ERROR] Invalid setup request. Please try connecting GitHub again.",
+      "errorMissingStateCookie": "[ERROR] Session expired during GitHub App setup. Please try again.",
+      "errorStateMismatch": "[ERROR] Security check failed during GitHub App setup. Please try again."
     },
     "history": {
       "title": "History",
@@ -264,6 +272,25 @@
       "providersSubtitle": "Swap the underlying LLM without changing your review workflow",
       "defaultBadge": "DEFAULT"
     },
+    "githubSetup": {
+      "title": "GitHub App Setup",
+      "subtitle": "Installation pending",
+      "description": "Your GitHub App installation request has been submitted. An organisation admin must approve it before the installation becomes active. You will receive a webhook notification once approved.",
+      "backLink": "[← Back to Integrations]"
+    },
+    "githubRepos": {
+      "title": "Select Repositories",
+      "subtitle": "Installation #{{installationId}}",
+      "loadingError": "[ERROR] Failed to load repositories for this installation.",
+      "emptyMessage": "[EMPTY] — No repositories found.",
+      "filterPlaceholder": "Filter by repo name",
+      "filterAriaLabel": "Filter repositories by name",
+      "selectAll": "[SELECT ALL]",
+      "badgePrivate": "[PRIVATE]",
+      "badgeRegistered": "[REGISTERED]",
+      "addReposButton": "[ADD REPOS]",
+      "partialErrorHeading": "[ERROR] Some repositories could not be registered:"
+    },
     "byokKeys": {
       "title": "LLM API Key Management",
       "subtitle": "Configure per-installation provider keys (BYOK)",
@@ -346,6 +373,9 @@
     "llmKeyRotated": "[OK] Key rotated.",
     "llmKeyRotateFailed": "[FAIL] Failed to rotate key.",
     "llmKeyDeleted": "[OK] Key removed.",
-    "llmKeyDeleteFailed": "[FAIL] Failed to remove key."
+    "llmKeyDeleteFailed": "[FAIL] Failed to remove key.",
+    "reposRegistered": "[OK] Repositories registered.",
+    "reposPartialFailure": "[WARN] Some repositories could not be registered.",
+    "reposRegisterFailed": "[FAIL] Failed to register repositories."
   }
 }

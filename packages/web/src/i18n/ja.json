@@ -146,7 +146,15 @@
       "fieldInstallations": "インストール数",
       "fieldRegion": "リージョン",
       "fieldProvider": "プロバイダー",
-      "fieldModel": "モデル"
+      "fieldModel": "モデル",
+      "connectGithub": "[GitHub を接続]",
+      "errorDismiss": "[×]",
+      "errorSetupCancelled": "[エラー] GitHub App のインストールがキャンセルされました。",
+      "errorPendingAdminApproval": "[エラー] インストールを有効化するには、Org 管理者の承認が必要です。",
+      "errorSetupFailed": "[エラー] GitHub App のセットアップ中に予期しないエラーが発生しました。もう一度お試しください。",
+      "errorValidationError": "[エラー] セットアップリクエストが無効です。もう一度 GitHub の接続をお試しください。",
+      "errorMissingStateCookie": "[エラー] GitHub App セットアップ中にセッションが期限切れになりました。もう一度お試しください。",
+      "errorStateMismatch": "[エラー] GitHub App セットアップ中にセキュリティチェックに失敗しました。もう一度お試しください。"
     },
     "history": {
       "title": "履歴",
@@ -264,6 +272,25 @@
       "providersSubtitle": "レビューワークフローを変えずに基盤 LLM を切り替え可能",
       "defaultBadge": "既定"
     },
+    "githubSetup": {
+      "title": "GitHub App セットアップ",
+      "subtitle": "インストール保留中",
+      "description": "GitHub App のインストールリクエストが送信されました。インストールが有効になるには、Org 管理者の承認が必要です。承認されると Webhook 通知が届きます。",
+      "backLink": "[← インテグレーションに戻る]"
+    },
+    "githubRepos": {
+      "title": "リポジトリを選択",
+      "subtitle": "インストール #{{installationId}}",
+      "loadingError": "[エラー] このインストールのリポジトリの読み込みに失敗しました。",
+      "emptyMessage": "[空] — リポジトリが見つかりません。",
+      "filterPlaceholder": "リポジトリ名で絞り込み",
+      "filterAriaLabel": "リポジトリ名で絞り込む",
+      "selectAll": "[全て選択]",
+      "badgePrivate": "[プライベート]",
+      "badgeRegistered": "[登録済]",
+      "addReposButton": "[リポジトリを追加]",
+      "partialErrorHeading": "[エラー] 一部のリポジトリを登録できませんでした:"
+    },
     "byokKeys": {
       "title": "LLM APIキー管理",
       "subtitle": "インストール別プロバイダーキーの設定 (BYOK)",
@@ -346,6 +373,9 @@
     "llmKeyRotated": "[OK] キーを再発行しました。",
     "llmKeyRotateFailed": "[失敗] キーの再発行に失敗しました。",
     "llmKeyDeleted": "[OK] キーを削除しました。",
-    "llmKeyDeleteFailed": "[失敗] キーの削除に失敗しました。"
+    "llmKeyDeleteFailed": "[失敗] キーの削除に失敗しました。",
+    "reposRegistered": "[OK] リポジトリを登録しました。",
+    "reposPartialFailure": "[警告] 一部のリポジトリを登録できませんでした。",
+    "reposRegisterFailed": "[失敗] リポジトリの登録に失敗しました。"
   }
 }
