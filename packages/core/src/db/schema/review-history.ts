@@ -6,6 +6,20 @@ export const REVIEW_HISTORY_FACT_TYPES = [
   'accepted_pattern',
   'rejected_finding',
   'arch_decision',
+  /**
+   * False-positive suppression rule (#155). Created automatically by the
+   * runner when the count of `rejected_finding` rows for the same
+   * `[fp:<fingerprint>]` key reaches the `feedback.suppress_after` threshold
+   * (default 3). Subsequent reviews skip any finding whose fingerprint matches
+   * an active suppression rule.
+   *
+   * **180-day TTL**: inherits the same `expires_at` default as other rows.
+   * Operators who want a permanent mute must re-create the row before it
+   * expires (or run `review-agent suppression remove` then let the system
+   * rebuild from fresh rejection signals). Documented in
+   * `docs/operations/feedback-suppression.md`.
+   */
+  'suppression_rule',
 ] as const;
 export type ReviewHistoryFactType = (typeof REVIEW_HISTORY_FACT_TYPES)[number];
 

@@ -10,7 +10,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],
-      include: ['scripts/severity-consistency-core.ts', 'scripts/llm-as-judge.ts'],
+      include: [
+        'scripts/severity-consistency-core.ts',
+        'scripts/llm-as-judge.ts',
+        'scripts/review-category-gate-core.ts',
+      ],
       thresholds: {
         lines: 95,
         functions: 95,

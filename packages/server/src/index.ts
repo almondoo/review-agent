@@ -5,6 +5,8 @@ export {
   handleCodecommitWebhook,
 } from './handlers/codecommit-webhook.js';
 export {
+  type ConversationHandlerInput,
+  type ConversationReplyOutcome,
   type FeedbackCommandOutcome,
   handleWebhook,
   recordFeedbackCommandOutcome,
@@ -18,6 +20,7 @@ export {
   bridgeFeedbackRateLimitToMetrics,
   bridgeHistoryReaderErrorsToMetrics,
   bridgePrunedRowsToMetrics,
+  bridgeSuppressionRulesCreatedToMetrics,
   getMetrics,
   type ReviewAgentMetrics,
 } from './metrics.js';

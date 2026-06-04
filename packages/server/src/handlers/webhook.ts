@@ -1,7 +1,7 @@
 import type { JobMessage, QueueClient } from '@review-agent/core';
-import { githubInstallations } from '@review-agent/core/db';
+import { githubInstallations, reviewState } from '@review-agent/core/db';
 import { type DbClient, type TenantTransaction, withTenant } from '@review-agent/db';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { getMetrics } from '../metrics.js';
 import type { FeedbackAuthzResult, GithubAuthzInput } from '../utils/feedback-authz.js';
@@ -9,7 +9,25 @@ import {
   type FeedbackCommand,
   parseCommand,
   parseFeedbackCommand,
+  parseSlashCommand,
 } from '../utils/parse-command.js';
+
+export type ConversationHandlerInput = {
+  readonly installationId: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  /** Root comment id (the `in_reply_to_id` from the reply event). */
+  readonly rootCommentId: number;
+  /** The id of the reply comment that triggered this event. */
+  readonly replyCommentId: number;
+  /** The comment body text containing the `@review-agent` mention. */
+  readonly body: string;
+  /** Diff hunk the original finding is anchored to, from the event payload. */
+  readonly diffHunk?: string;
+  /** Login of the user who sent the reply. */
+  readonly sender: string;
+};
 
 export type WebhookHandlerDeps = {
   readonly queue: QueueClient;
@@ -25,12 +43,66 @@ export type WebhookHandlerDeps = {
    */
   readonly checkAuthz?: (input: Omit<GithubAuthzInput, 'octokit'>) => Promise<FeedbackAuthzResult>;
   /**
+   * Optional handler for `@review-agent` mentions in inline reply threads
+   * (#149 conversation feature). When provided, `pull_request_review_comment`
+   * events that are thread replies containing `@review-agent` are routed here
+   * instead of (or before) the legacy `@review-agent review` command path.
+   *
+   * The handler is responsible for async dispatch (e.g., enqueuing to SQS)
+   * and returns a `ConversationReplyOutcome`. When absent, thread reply
+   * mentions fall through to the legacy command parser (which will
+   * treat `@review-agent <word>` as a command).
+   */
+  readonly handleConversation?: (
+    input: ConversationHandlerInput,
+  ) => Promise<ConversationReplyOutcome>;
+  /**
+   * Returns the bot's own GitHub login (e.g. `review-agent[bot]`). Used
+   * by the self-reply guard to block the agent from replying to itself.
+   *
+   * **Fail-closed**: when absent, or when it resolves to an empty string,
+   * the conversation reply path refuses to dispatch and returns
+   * `{ kind: 'ignored' }`. This prevents reply loops in misconfigured
+   * deployments. Operators MUST wire this for conversation replies to work.
+   */
+  readonly getBotLogin?: () => Promise<string>;
+  /**
    * Postgres client for persisting `installation` lifecycle events into
-   * `github_installations`. When omitted the handler falls back to the
+   * `github_installations` and for reading/writing `review_state` (pause
+   * flag, debounce check). When omitted the handler falls back to the
    * existing ACK-only behaviour so existing tests that do not supply a
    * DB continue to pass without modification.
    */
   readonly db?: DbClient;
+  /**
+   * Optional config surface for label-based triggers and skip (#157).
+   * When present, the handler consults `trigger_labels` and `skip_labels`
+   * on push events. When absent, label-based trigger/skip is disabled
+   * (fail-open for auto_review — pushes are still enqueued normally).
+   */
+  readonly triggerConfig?: {
+    readonly trigger_labels: ReadonlyArray<string>;
+    readonly skip_labels: ReadonlyArray<string>;
+  };
+  /**
+   * Debounce window in milliseconds (#157 idempotency).
+   *
+   * If the last `review_state.updated_at` for this PR is within this
+   * window, a duplicate command or push trigger is silently dropped.
+   * Defaults to 30 000 ms (30 seconds) when a `db` is wired; the check
+   * is skipped entirely when `db` is absent (no state to consult).
+   *
+   * Implementation rationale: SQS Standard queues do not natively
+   * deduplicate across messages with the same JobMessage content (only
+   * SQS FIFO with `MessageDeduplicationId` does). The existing
+   * `webhook_deliveries` table deduplicates at the per-delivery-id level
+   * (one GitHub webhook event → one enqueue), but a *human* issuing two
+   * `/review` commands in quick succession generates two distinct delivery
+   * IDs. Using `review_state.updated_at` as an in-process guard is the
+   * minimal correct approach: it is already maintained by the worker on
+   * every review run and does not require an extra DB column.
+   */
+  readonly debounceMs?: number;
 };
 
 type EventName =
@@ -44,7 +116,12 @@ type EventName =
   | 'installation_repositories'
   | 'ping';
 
+// Auto-review fires on these pull_request action types.
 const ENQUEUE_PR_ACTIONS = new Set(['opened', 'synchronize', 'reopened', 'ready_for_review']);
+
+// These pull_request action types are push-triggered (not command-triggered).
+// Label-based skip and [skip review] marker suppression apply only here.
+const PUSH_TRIGGERED_ACTIONS = new Set(['opened', 'synchronize', 'reopened']);
 
 type InstallationEventBody = {
   action?: string;
@@ -62,17 +139,42 @@ type PrEventBody = {
     number?: number;
     draft?: boolean;
     head?: { sha?: string };
+    title?: string;
+    body?: string | null;
+    labels?: Array<{ name?: string }>;
   };
   repository?: { owner?: { login?: string }; name?: string };
+  label?: { name?: string };
 };
 
 type CommentEventBody = PrEventBody & {
-  comment?: { body?: string; user?: { login?: string } };
+  comment?: {
+    body?: string;
+    user?: { login?: string };
+    id?: number;
+    in_reply_to_id?: number;
+    diff_hunk?: string;
+  };
   sender?: { login?: string };
   issue?: { pull_request?: object; number?: number };
 };
 
 export type FeedbackCommandOutcome = 'recorded' | 'unauthorized' | 'unresolved' | 'rate_limited';
+
+/**
+ * Outcome of routing a `pull_request_review_comment` reply that contains a
+ * `@review-agent` mention (#149).
+ *
+ * The webhook handler itself does NOT execute the LLM call — it hands off to
+ * `deps.handleConversation` (injected by the server layer) so the actual LLM
+ * invocation can happen asynchronously (SQS / Lambda) without blocking the
+ * webhook response.
+ *
+ * `dispatched` — the conversation handler was invoked and accepted the event.
+ * `unauthorized` — the commenter lacks write permission; silently ignored.
+ * `self_reply` — the sender is the bot itself; guard fired, no action.
+ */
+export type ConversationReplyOutcome = 'dispatched' | 'unauthorized' | 'self_reply';
 
 export type WebhookResult =
   | { kind: 'ignored'; reason: string }
@@ -89,6 +191,12 @@ export type WebhookResult =
       signal: 'thumbs_up' | 'thumbs_down' | 'dismissed';
       outcome: FeedbackCommandOutcome;
       fpPrefix?: string;
+      prNumber: number;
+    }
+  | {
+      kind: 'conversation_reply';
+      outcome: ConversationReplyOutcome;
+      commentId: number;
       prNumber: number;
     };
 
@@ -149,12 +257,88 @@ export async function handleWebhook(
   if (event === 'pull_request') {
     const pr = body as PrEventBody;
     const action = pr.action;
-    if (!action || !ENQUEUE_PR_ACTIONS.has(action)) {
+    if (!action) {
       return { kind: 'ignored', reason: `pull_request action '${action ?? 'unknown'}'` };
     }
+
+    // Label-based trigger: the `labeled` action fires when a label is applied.
+    // Handle this BEFORE the ENQUEUE_PR_ACTIONS guard because `labeled` is not
+    // in that set (it is not an automatic trigger — only named labels are).
+    if (action === 'labeled') {
+      if (!deps.triggerConfig) {
+        return { kind: 'ignored', reason: "pull_request action 'labeled'" };
+      }
+      const appliedLabel = (pr.label?.name ?? '').toLowerCase();
+      const triggerLabels = deps.triggerConfig.trigger_labels.map((l) => l.toLowerCase());
+      if (triggerLabels.includes(appliedLabel)) {
+        const msg = buildJobMessage(pr, 'comment.command', now());
+        if (!msg) return { kind: 'ignored', reason: 'missing repo/installation/pr fields' };
+        const r = await deps.queue.enqueue(msg);
+        return { kind: 'enqueued', messageId: r.messageId };
+      }
+      return { kind: 'ignored', reason: `label '${appliedLabel}' not in trigger_labels` };
+    }
+
+    if (!ENQUEUE_PR_ACTIONS.has(action)) {
+      return { kind: 'ignored', reason: `pull_request action '${action}'` };
+    }
+
     if (pr.pull_request?.draft) {
+      // `ready_for_review` fires when a draft is converted; the payload's
+      // `draft` field is already `false` at that point, so this guard only
+      // fires for still-draft PRs (e.g. a `synchronize` on a draft). This
+      // preserves the existing behaviour: drafts are skipped unless
+      // `auto_review.drafts: true` is configured (v1.0 #49).
       return { kind: 'ignored', reason: 'draft PR' };
     }
+
+    // [skip review] marker: if the PR title or body contains `[skip review]`
+    // (case-insensitive), suppress auto-review for all push-triggered events
+    // on this PR. Commands (`/review` etc.) are NOT affected — an explicit
+    // command always overrides this marker.
+    if (PUSH_TRIGGERED_ACTIONS.has(action)) {
+      const title = pr.pull_request?.title ?? '';
+      const prBody = pr.pull_request?.body ?? '';
+      if (hasSkipMarker(title) || hasSkipMarker(prBody)) {
+        return { kind: 'ignored', reason: '[skip review] marker in PR title/body' };
+      }
+    }
+
+    // Label-based skip: when the PR carries any label listed in
+    // `skip_labels`, suppress push-triggered auto-review. Only applies to
+    // push-triggered actions (opened/synchronize/reopened), not
+    // `ready_for_review` (explicit user action overrides skip_labels).
+    if (PUSH_TRIGGERED_ACTIONS.has(action) && deps.triggerConfig) {
+      const prLabels = (pr.pull_request?.labels ?? [])
+        .map((l) => (l.name ?? '').toLowerCase())
+        .filter((n) => n.length > 0);
+      const skipLabels = deps.triggerConfig.skip_labels.map((l) => l.toLowerCase());
+      const hasSkipLabel = skipLabels.some((sl) => prLabels.includes(sl));
+      if (hasSkipLabel) {
+        return { kind: 'ignored', reason: 'PR carries a skip_label' };
+      }
+    }
+
+    // Pause check: if the PR has been paused via `/skip`, suppress
+    // push-triggered auto-review until `/resume` clears the flag.
+    // Only applies to PUSH_TRIGGERED_ACTIONS (not `ready_for_review`):
+    // converting a draft to ready-for-review is an explicit user action
+    // that should fire regardless of the paused state.
+    // Fail-open on DB error — same policy as debounce.
+    if (PUSH_TRIGGERED_ACTIONS.has(action) && deps.db) {
+      const installationId = pr.installation?.id;
+      const owner = pr.repository?.owner?.login;
+      const repo = pr.repository?.name;
+      const number = pr.pull_request?.number;
+      if (typeof installationId === 'number' && owner && repo && number) {
+        const prId = `${owner}/${repo}#${number}`;
+        const paused = await readPausedState(deps.db, installationId, prId);
+        if (paused) {
+          return { kind: 'ignored', reason: 'PR is paused (skip)' };
+        }
+      }
+    }
+
     const msg = buildJobMessage(pr, `pull_request.${action}` as JobMessage['triggeredBy'], now());
     if (!msg) return { kind: 'ignored', reason: 'missing repo/installation/pr fields' };
     const r = await deps.queue.enqueue(msg);
@@ -170,29 +354,368 @@ export async function handleWebhook(
     if (event === 'issue_comment' && !ce.issue?.pull_request) {
       return { kind: 'ignored', reason: 'issue comment, not PR' };
     }
-    const text = ce.comment?.body ?? '';
+    const commentText = ce.comment?.body ?? '';
+
+    // #149: Inline thread reply conversation routing.
+    //
+    // When a `pull_request_review_comment` event is a reply
+    // (`comment.in_reply_to_id` is set) and the body mentions
+    // `@review-agent`, route to the conversation handler BEFORE the
+    // feedback/slash/legacy command parsers. This is the primary path
+    // for the conversational-reply feature. If no `handleConversation`
+    // is wired, fall through to the legacy command parser so existing
+    // `@review-agent review` commands in review-comment bodies still work.
+    if (
+      event === 'pull_request_review_comment' &&
+      deps.handleConversation &&
+      typeof ce.comment?.in_reply_to_id === 'number'
+    ) {
+      const prBody = body as {
+        action?: string;
+        comment?: {
+          id?: number;
+          in_reply_to_id?: number;
+          body?: string;
+          diff_hunk?: string;
+        };
+        sender?: { login?: string };
+        installation?: { id?: number };
+        repository?: { owner?: { login?: string }; name?: string };
+        pull_request?: { number?: number };
+      };
+      // Only process `created` actions (not `edited` / `deleted`).
+      if (prBody.action !== 'created') {
+        return { kind: 'ignored', reason: 'pull_request_review_comment action is not created' };
+      }
+      const mention = (prBody.comment?.body ?? '').toLowerCase();
+      if (!mention.includes('@review-agent')) {
+        return { kind: 'ignored', reason: 'no @review-agent mention in reply' };
+      }
+      const installationId = prBody.installation?.id;
+      const owner = prBody.repository?.owner?.login;
+      const repo = prBody.repository?.name;
+      const prNumber = prBody.pull_request?.number;
+      const sender = prBody.sender?.login ?? '';
+      const replyCommentId = prBody.comment?.id;
+      const rootCommentId = prBody.comment?.in_reply_to_id;
+
+      if (
+        typeof installationId !== 'number' ||
+        !owner ||
+        !repo ||
+        typeof prNumber !== 'number' ||
+        typeof replyCommentId !== 'number' ||
+        typeof rootCommentId !== 'number'
+      ) {
+        return { kind: 'ignored', reason: 'conversation reply: missing required fields' };
+      }
+
+      // Self-reply guard: never reply to our own comments.
+      //
+      // Fail-closed: if getBotLogin is absent or returns an empty string we
+      // cannot verify the sender's identity, so we refuse to dispatch rather
+      // than risk a reply loop. Only proceed when getBotLogin is wired AND
+      // returns a non-empty login that does not match the sender.
+      if (!deps.getBotLogin) {
+        return {
+          kind: 'ignored',
+          reason: 'conversation reply: getBotLogin not wired (fail-closed)',
+        };
+      }
+      const botLogin = await deps.getBotLogin();
+      if (!botLogin) {
+        return {
+          kind: 'ignored',
+          reason: 'conversation reply: getBotLogin returned empty (fail-closed)',
+        };
+      }
+      if (sender === botLogin) {
+        return {
+          kind: 'conversation_reply',
+          outcome: 'self_reply',
+          commentId: replyCommentId,
+          prNumber,
+        };
+      }
+
+      // Authorization: reuse the same write-permission check as commands.
+      const authz = await checkCommandAuthz(ce, deps);
+      if (!authz.allowed) {
+        return {
+          kind: 'conversation_reply',
+          outcome: 'unauthorized',
+          commentId: replyCommentId,
+          prNumber,
+        };
+      }
+
+      const outcome = await deps.handleConversation({
+        installationId,
+        owner,
+        repo,
+        prNumber,
+        rootCommentId,
+        replyCommentId,
+        body: prBody.comment?.body ?? '',
+        ...(prBody.comment?.diff_hunk !== undefined ? { diffHunk: prBody.comment.diff_hunk } : {}),
+        sender,
+      });
+      return {
+        kind: 'conversation_reply',
+        outcome,
+        commentId: replyCommentId,
+        prNumber,
+      };
+    }
 
     // v1.2 #95: recognise `/feedback ...` *before* the legacy
     // `@review-agent <cmd>` parser so the feedback path is the
     // primary surface for accept/reject/dismiss signals.
-    const fb = parseFeedbackCommand(text);
+    const fb = parseFeedbackCommand(commentText);
     if (fb) {
       return await handleFeedbackCommand('github', fb, ce, deps);
     }
 
-    const command = parseCommand(text);
-    if (!command) return { kind: 'ignored', reason: 'no agent command' };
-    if (command !== 'review') {
-      // pause/resume/ignore/explain/help dispatched in v0.2 #16 worker phase.
-      return { kind: 'noop', reason: `command '${command}' not yet implemented` };
+    // #157: slash commands (`/review`, `/skip`, `/resume`) take precedence
+    // over the legacy `@review-agent` prefix so the new vocabulary is the
+    // primary interface while the old one remains supported.
+    const slash = parseSlashCommand(commentText);
+    if (slash) {
+      return await handleSlashCommand(slash, ce, deps, now());
     }
-    const msg = buildJobMessage(ce, 'comment.command', now());
-    if (!msg) return { kind: 'ignored', reason: 'missing repo/installation/pr fields' };
-    const r = await deps.queue.enqueue(msg);
-    return { kind: 'enqueued', messageId: r.messageId };
+
+    const command = parseCommand(commentText);
+    if (!command) return { kind: 'ignored', reason: 'no agent command' };
+    if (command === 'review') {
+      // Legacy `@review-agent review` — enqueue like a slash /review.
+      // Auth-gated: only PR author and maintainers (write permission).
+      const authz = await checkCommandAuthz(ce, deps);
+      if (!authz.allowed) {
+        // Unauthorized command — silent ignore (no reply) per design
+        // decision in the dispatch prompt. Mirrors feedback-authz DoS safety.
+        return { kind: 'ignored', reason: 'unauthorized command' };
+      }
+      const debounced = await checkDebounce(ce, deps, now());
+      if (debounced) return { kind: 'ignored', reason: 'debounced: review already in flight' };
+      const msg = buildJobMessage(ce, 'comment.command', now());
+      if (!msg) return { kind: 'ignored', reason: 'missing repo/installation/pr fields' };
+      const r = await deps.queue.enqueue(msg);
+      return { kind: 'enqueued', messageId: r.messageId };
+    }
+    // pause/resume/ignore/explain/help not yet implemented via legacy prefix.
+    return { kind: 'noop', reason: `command '${command}' not yet implemented` };
   }
 
   return { kind: 'ignored', reason: `unhandled event '${event}'` };
+}
+
+// ---------------------------------------------------------------------------
+// #157 slash command handler
+// ---------------------------------------------------------------------------
+
+/**
+ * Handle a parsed slash command (`/review`, `/skip`, `/resume`).
+ *
+ * Authorization policy: all commands require write-equivalent permission
+ * on the repository (same gate as `/feedback`). Unauthorized issuers are
+ * **silently ignored** — no reply is posted. This prevents the
+ * comment-forward DoS vector (anyone spamming `/skip` triggering a reply
+ * storm) and is consistent with the `feedback-authz` design decision.
+ */
+async function handleSlashCommand(
+  slash: NonNullable<ReturnType<typeof parseSlashCommand>>,
+  ce: CommentEventBody,
+  deps: WebhookHandlerDeps,
+  now: Date,
+): Promise<WebhookResult> {
+  // Authz check: fail-closed when no checker is wired. The issue body asks
+  // for "PR author and org members with at least `write` permission"; the
+  // existing `checkAuthz` gate already enforces exactly that via
+  // `getCollaboratorPermissionLevel`.
+  const authz = await checkCommandAuthz(ce, deps);
+  if (!authz.allowed) {
+    return { kind: 'ignored', reason: 'unauthorized command' };
+  }
+
+  if (slash.kind === 'skip') {
+    // Set paused = true in review_state for this PR. Requires DB to be wired;
+    // without DB the command is acknowledged but has no persistent effect.
+    if (deps.db) {
+      const prId = buildPrId(ce);
+      const installationId = ce.installation?.id;
+      if (prId && typeof installationId === 'number') {
+        await withTenant(deps.db, installationId, async (tx: TenantTransaction) => {
+          await tx
+            .update(reviewState)
+            .set({ paused: true, updatedAt: now })
+            .where(
+              and(
+                eq(reviewState.installationId, BigInt(installationId)),
+                eq(reviewState.prId, prId),
+              ),
+            );
+        });
+      }
+    }
+    return { kind: 'noop', reason: 'PR paused (skip)' };
+  }
+
+  if (slash.kind === 'resume') {
+    // Set paused = false in review_state for this PR.
+    if (deps.db) {
+      const prId = buildPrId(ce);
+      const installationId = ce.installation?.id;
+      if (prId && typeof installationId === 'number') {
+        await withTenant(deps.db, installationId, async (tx: TenantTransaction) => {
+          await tx
+            .update(reviewState)
+            .set({ paused: false, updatedAt: now })
+            .where(
+              and(
+                eq(reviewState.installationId, BigInt(installationId)),
+                eq(reviewState.prId, prId),
+              ),
+            );
+        });
+      }
+    }
+    return { kind: 'noop', reason: 'PR resumed' };
+  }
+
+  // slash.kind === 'review'
+  // Debounce: check whether a review was recently started for this PR.
+  const debounced = await checkDebounce(ce, deps, now);
+  if (debounced) return { kind: 'ignored', reason: 'debounced: review already in flight' };
+
+  const msg = buildJobMessageWithScope(ce, 'comment.command', now, slash.pathScope);
+  if (!msg) return { kind: 'ignored', reason: 'missing repo/installation/pr fields' };
+  const r = await deps.queue.enqueue(msg);
+  return { kind: 'enqueued', messageId: r.messageId };
+}
+
+// ---------------------------------------------------------------------------
+// Auth helper for command events
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the command authorization check for a comment event.
+ *
+ * Fails closed when no `checkAuthz` is wired (same policy as feedback-authz).
+ */
+async function checkCommandAuthz(
+  ce: CommentEventBody,
+  deps: WebhookHandlerDeps,
+): Promise<FeedbackAuthzResult> {
+  const owner = ce.repository?.owner?.login;
+  const repo = ce.repository?.name;
+  const username = ce.sender?.login ?? ce.comment?.user?.login ?? '';
+
+  if (!owner || !repo || !username) {
+    return { allowed: false, reason: 'missing owner/repo/username from webhook payload' };
+  }
+  if (!deps.checkAuthz) {
+    return { allowed: false, reason: 'no checkAuthz wired (fail-closed)' };
+  }
+  return deps.checkAuthz({ owner, repo, username });
+}
+
+// ---------------------------------------------------------------------------
+// review_state reader — shared by pause check and debounce
+// ---------------------------------------------------------------------------
+
+type ReviewStateRow = { updatedAt: Date; paused: boolean };
+
+/**
+ * Read the current `review_state` row for a PR, scoped to the correct
+ * tenant via `withTenant`. Returns `null` when the row does not exist
+ * (PR has never been reviewed) or when a DB error occurs (fail-open).
+ */
+async function readReviewStateRow(
+  db: DbClient,
+  installationId: number,
+  prId: string,
+): Promise<ReviewStateRow | null> {
+  try {
+    const rows = await withTenant(db, installationId, (tx) =>
+      tx
+        .select({ updatedAt: reviewState.updatedAt, paused: reviewState.paused })
+        .from(reviewState)
+        .where(
+          and(eq(reviewState.installationId, BigInt(installationId)), eq(reviewState.prId, prId)),
+        )
+        .limit(1),
+    );
+    return rows[0] ?? null;
+  } catch {
+    // Fail open — callers treat null as "no state known".
+    return null;
+  }
+}
+
+/**
+ * Returns `true` when the PR's `review_state.paused` flag is set.
+ * Fail-open: returns `false` when the row is absent or DB errors.
+ */
+async function readPausedState(
+  db: DbClient,
+  installationId: number,
+  prId: string,
+): Promise<boolean> {
+  const row = await readReviewStateRow(db, installationId, prId);
+  return row?.paused ?? false;
+}
+
+// ---------------------------------------------------------------------------
+// Debounce helper
+// ---------------------------------------------------------------------------
+
+const DEFAULT_DEBOUNCE_MS = 30_000;
+
+/**
+ * Returns `true` when a review for this PR was last updated within the
+ * debounce window, indicating a run is likely still in flight.
+ *
+ * Without a DB the check always returns `false` (no debounce). This is
+ * intentional: the caller cannot know in-flight state and must rely on
+ * downstream SQS idempotency or job dedup instead.
+ */
+async function checkDebounce(
+  ce: CommentEventBody,
+  deps: WebhookHandlerDeps,
+  now: Date,
+): Promise<boolean> {
+  if (!deps.db) return false;
+  const installationId = ce.installation?.id;
+  const prId = buildPrId(ce);
+  if (typeof installationId !== 'number' || !prId) return false;
+
+  const windowMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const row = await readReviewStateRow(deps.db, installationId, prId);
+  if (!row) return false;
+  const age = now.getTime() - row.updatedAt.getTime();
+  return age < windowMs;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Build a canonical PR id string from an event body. */
+function buildPrId(ce: CommentEventBody): string | null {
+  const owner = ce.repository?.owner?.login;
+  const repo = ce.repository?.name;
+  const number = ce.pull_request?.number ?? ce.issue?.number;
+  if (!owner || !repo || !number) return null;
+  return `${owner}/${repo}#${number}`;
+}
+
+/**
+ * Returns `true` when `text` contains the `[skip review]` marker
+ * (case-insensitive). Only the exact phrase inside brackets is matched;
+ * surrounding content is ignored.
+ */
+function hasSkipMarker(text: string): boolean {
+  return /\[skip review\]/i.test(text);
 }
 
 /**
@@ -429,6 +952,15 @@ function buildJobMessage(
   triggeredBy: JobMessage['triggeredBy'],
   now: Date,
 ): JobMessage | null {
+  return buildJobMessageWithScope(body, triggeredBy, now, undefined);
+}
+
+function buildJobMessageWithScope(
+  body: PrEventBody | CommentEventBody,
+  triggeredBy: JobMessage['triggeredBy'],
+  now: Date,
+  pathScope: string | undefined,
+): JobMessage | null {
   const installationId = body.installation?.id;
   const owner = body.repository?.owner?.login;
   const repo = body.repository?.name;
@@ -447,5 +979,6 @@ function buildJobMessage(
     },
     triggeredBy,
     enqueuedAt: now.toISOString(),
+    ...(pathScope !== undefined ? { pathScope: [pathScope] } : {}),
   };
 }

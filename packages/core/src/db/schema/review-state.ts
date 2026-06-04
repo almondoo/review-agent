@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  boolean,
   jsonb,
   pgPolicy,
   pgTable,
@@ -20,6 +21,14 @@ export const reviewState = pgTable(
     headSha: text('head_sha').notNull(),
     state: jsonb('state').$type<ReviewState>().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+    /**
+     * Pause flag set by the `/skip` command and cleared by `/resume`.
+     * When `true`, auto-review is suppressed for all pushes on this PR
+     * until the PR author or a maintainer issues `/resume`.
+     * Defaults to `false` so existing rows (pre-migration-0009) are
+     * treated as active.
+     */
+    paused: boolean('paused').default(false).notNull(),
   },
   (t) => [
     uniqueIndex('review_state_installation_pr_idx').on(t.installationId, t.prId),

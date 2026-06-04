@@ -1,5 +1,5 @@
 import { type NewReviewHistoryRow, reviewHistory } from '@review-agent/core/db';
-import { and, desc, eq, gt, lt } from 'drizzle-orm';
+import { and, count, desc, eq, gt, lt } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
 
 /**
@@ -15,7 +15,11 @@ export function createReviewHistoryWriter(db: DbClient) {
   return async (input: {
     readonly installationId: bigint;
     readonly repo: string;
-    readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+    readonly factType:
+      | 'accepted_pattern'
+      | 'rejected_finding'
+      | 'arch_decision'
+      | 'suppression_rule';
     readonly factText: string;
   }): Promise<void> => {
     const row: NewReviewHistoryRow = {
@@ -84,4 +88,154 @@ export async function pruneExpiredReviewHistory(
   // some adapters surface it as `rowCount`, others as the array length.
   const r = result as unknown as { rowCount?: number; length?: number };
   return r.rowCount ?? r.length ?? 0;
+}
+
+// ---------------------------------------------------------------------------
+// Suppression rule helpers — #155 false-positive suppression
+// ---------------------------------------------------------------------------
+
+/**
+ * Count non-expired `rejected_finding` rows whose `factText` starts with
+ * `[fp:<fingerprint>]` for the given installation + repo.
+ *
+ * Used by the runner to decide whether the suppression threshold has been
+ * reached: if the count ≥ `suppress_after`, create a suppression rule.
+ */
+export async function countRejectionsByFingerprint(
+  db: DbClient,
+  q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+    readonly fingerprint: string;
+    readonly now?: Date;
+  },
+): Promise<number> {
+  const now = q.now ?? new Date();
+  const prefix = `[fp:${q.fingerprint}]`;
+  // Drizzle does not expose a `LIKE` helper in its top-level exports for
+  // all versions; use a raw SQL condition via the `sql` tag from drizzle-orm.
+  const { sql: sqlTag } = await import('drizzle-orm');
+  const rows = await db
+    .select({ n: count() })
+    .from(reviewHistory)
+    .where(
+      and(
+        eq(reviewHistory.installationId, q.installationId),
+        eq(reviewHistory.repo, q.repo),
+        eq(reviewHistory.factType, 'rejected_finding'),
+        gt(reviewHistory.expiresAt, now),
+        // Match rows whose factText starts with the `[fp:<fingerprint>]` prefix.
+        sqlTag`${reviewHistory.factText} LIKE ${`${prefix}%`}`,
+      ),
+    );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Create a single `suppression_rule` row for the given fingerprint. The
+ * caller is responsible for deduplication (i.e. check for an existing active
+ * rule first via `loadActiveSuppressionRules`). The `factText` format mirrors
+ * the existing `rejected_finding` convention: `[fp:<fingerprint>] <reason>`.
+ *
+ * Returns the auto-generated `id` of the newly-inserted row.
+ */
+export async function createSuppressionRule(
+  db: DbClient,
+  input: {
+    readonly installationId: bigint;
+    readonly repo: string;
+    readonly fingerprint: string;
+    readonly reason: string;
+  },
+): Promise<bigint> {
+  const factText = `[fp:${input.fingerprint}] ${input.reason}`;
+  const rows = await db
+    .insert(reviewHistory)
+    .values({
+      installationId: input.installationId,
+      repo: input.repo,
+      factType: 'suppression_rule',
+      factText,
+    } satisfies NewReviewHistoryRow)
+    .returning({ id: reviewHistory.id });
+  const inserted = rows[0];
+  if (inserted === undefined) {
+    throw new Error('createSuppressionRule: insert returned no rows');
+  }
+  return inserted.id as bigint;
+}
+
+/**
+ * Load all non-expired `suppression_rule` rows for an installation + repo.
+ * Returns the `factText` strings (each carries `[fp:<fingerprint>]`) plus
+ * the row `id` (needed by the CLI `suppression remove` command).
+ */
+export async function loadActiveSuppressionRules(
+  db: DbClient,
+  q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+    readonly now?: Date;
+  },
+): Promise<
+  ReadonlyArray<{
+    readonly id: bigint;
+    readonly factText: string;
+    readonly createdAt: Date;
+    readonly expiresAt: Date;
+  }>
+> {
+  const now = q.now ?? new Date();
+  const rows = await db
+    .select({
+      id: reviewHistory.id,
+      factText: reviewHistory.factText,
+      createdAt: reviewHistory.createdAt,
+      expiresAt: reviewHistory.expiresAt,
+    })
+    .from(reviewHistory)
+    .where(
+      and(
+        eq(reviewHistory.installationId, q.installationId),
+        eq(reviewHistory.repo, q.repo),
+        eq(reviewHistory.factType, 'suppression_rule'),
+        gt(reviewHistory.expiresAt, now),
+      ),
+    )
+    .orderBy(desc(reviewHistory.createdAt));
+  return rows.map((r) => ({
+    id: r.id as bigint,
+    factText: r.factText,
+    createdAt: r.createdAt,
+    expiresAt: r.expiresAt,
+  }));
+}
+
+/**
+ * Delete a single suppression rule by its `review_history.id`. The caller
+ * (CLI `suppression remove`) is responsible for verifying the row belongs
+ * to the correct installation + repo before calling this (multi-tenant
+ * safety). Returns `true` when a row was deleted, `false` when the id was
+ * not found (already expired / already removed — idempotent).
+ */
+export async function deleteSuppressionRule(
+  db: DbClient,
+  q: {
+    readonly id: bigint;
+    readonly installationId: bigint;
+    readonly repo: string;
+  },
+): Promise<boolean> {
+  const result = await db
+    .delete(reviewHistory)
+    .where(
+      and(
+        eq(reviewHistory.id, q.id),
+        eq(reviewHistory.installationId, q.installationId),
+        eq(reviewHistory.repo, q.repo),
+        eq(reviewHistory.factType, 'suppression_rule'),
+      ),
+    );
+  const r = result as unknown as { rowCount?: number; length?: number };
+  return (r.rowCount ?? r.length ?? 0) > 0;
 }

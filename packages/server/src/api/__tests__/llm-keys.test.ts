@@ -8,6 +8,10 @@
  * `tx` connection that withTenant set the GUC on — NOT on the pool `db`.
  * The regression test section at the bottom proves this with a spy that
  * captures which `db` instance was passed to `createByokStore`.
+ *
+ * Multi-tenant guard tests (issue #132):
+ *   - multiTenant=false (default): routes behave as today (no regression).
+ *   - multiTenant=true: routes return 501 before any withTenant/DB write.
  */
 import { BYOK_PROVIDERS, type BYOKProvider, type KmsClient } from '@review-agent/core';
 import type { AuditAppender, ByokProviderStatus, ByokStore } from '@review-agent/db';
@@ -146,6 +150,7 @@ function makeApi(opts: {
   auditAppender?: AuditAppender;
   dashboardToken?: string;
   kmsKeyId?: string;
+  multiTenant?: boolean;
 }) {
   const db = fakeDb();
   return {
@@ -159,6 +164,7 @@ function makeApi(opts: {
       kmsClient: opts.kmsClient ?? fakeKmsClient(),
       auditAppender: opts.auditAppender,
       kmsKeyId: opts.kmsKeyId ?? 'arn:aws:kms:us-east-1:111:key/test-cmk',
+      ...(opts.multiTenant !== undefined ? { multiTenant: opts.multiTenant } : {}),
     }),
     db,
   };
@@ -871,5 +877,103 @@ describe('503 with WARN when kmsClient present but kmsKeyId absent', () => {
       headers: { Authorization: 'Bearer tok' },
     });
     expect(res.status).toBe(503);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-tenant guard tests (issue #132)
+// ---------------------------------------------------------------------------
+
+describe('multi-tenant guard: GET /integrations/llm-keys (list)', () => {
+  it('multiTenant=false (default): route proceeds normally (no regression)', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+      multiTenant: false,
+    });
+    const res = await api.request('http://host/integrations/llm-keys?installationId=1', {
+      headers: AUTH,
+    });
+    expect(res.status).toBe(200);
+    // DB read was exercised (listProviders was called)
+    expect(store.listProviders).toHaveBeenCalledOnce();
+  });
+
+  it('multiTenant=true: returns 501 with correct error envelope', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+      multiTenant: true,
+    });
+    const res = await api.request('http://host/integrations/llm-keys?installationId=1', {
+      headers: AUTH,
+    });
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(typeof body.error).toBe('string');
+    expect(body.error).toContain('per_installation_authz_not_implemented');
+  });
+
+  it('multiTenant=true: withTenant / DB read is NOT performed', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+      multiTenant: true,
+    });
+    await api.request('http://host/integrations/llm-keys?installationId=1', {
+      headers: AUTH,
+    });
+    // listProviders must NOT have been called
+    expect(store.listProviders).not.toHaveBeenCalled();
+  });
+});
+
+describe('multi-tenant guard: POST /integrations/llm-keys (upsert)', () => {
+  it('multiTenant=false (default): route proceeds normally (no regression)', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+      multiTenant: false,
+    });
+    const res = await api.request('http://host/integrations/llm-keys', {
+      method: 'POST',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 1, provider: 'openai', apiKey: 'sk-x' }),
+    });
+    expect(res.status).toBe(200);
+    expect(store.upsert).toHaveBeenCalledOnce();
+  });
+
+  it('multiTenant=true: returns 501 before DB write', async () => {
+    const store = fakeBYOKStore();
+    currentStoreFactory = () => store;
+    const { appender } = fakeAuditAppender();
+    const { api } = makeApi({
+      auditAppender: appender,
+      dashboardToken: 'test-token',
+      multiTenant: true,
+    });
+    const res = await api.request('http://host/integrations/llm-keys', {
+      method: 'POST',
+      headers: { ...AUTH, ...JSON_CT },
+      body: JSON.stringify({ installationId: 1, provider: 'openai', apiKey: 'sk-x' }),
+    });
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(body.error).toContain('per_installation_authz_not_implemented');
+    // DB write must NOT have been performed
+    expect(store.upsert).not.toHaveBeenCalled();
   });
 });

@@ -6,9 +6,9 @@ If you discover a security vulnerability in this project, please report it
 privately via [GitHub Security Advisories](https://github.com/almondoo/review-agent/security/advisories/new).
 
 Do **not** report security issues through public channels (forks, discussions,
-or social media) until they have been addressed. As this is a personal
-project, response times are best-effort but you can expect an initial
-acknowledgement within a reasonable timeframe.
+or social media) until they have been addressed. You can expect an initial
+acknowledgement within **24 hours** of a report being filed (best-effort; this
+is a personal project).
 
 **Escalation contact**: the project maintainer ([@almondoo](https://github.com/almondoo)).
 For multi-tenant operators running their own deployment, *you* are the
@@ -51,7 +51,7 @@ Adversaries can attempt:
 | Container escape | Non-root `agent` user; `REVIEW_AGENT_SANDBOXED=1`; minimal alpine base; no host mounts in the default Action | §15.1 |
 | Bot author abuse | `ignore_authors` defaults skip `dependabot[bot]` / `renovate[bot]` / `github-actions[bot]` | §10 |
 | Cross-tenant data leak | Postgres RLS `tenant_isolation` policy on every tenant-scoped table; fails closed when GUC unset | §16.1 |
-| Provider-key compromise scope | Per-installation BYOK with KMS envelope encryption (AES-256-GCM data key wrapped under per-installation CMK) | §8.5 |
+| Provider-key compromise scope | Per-installation BYOK with KMS envelope encryption (AES-256-GCM data key wrapped under per-installation CMK). See [BYOK key storage & incident response](./docs/security/byok.md) for the storage model, rotation, and leak runbook. | §8.5 |
 
 ## Operational guidance
 

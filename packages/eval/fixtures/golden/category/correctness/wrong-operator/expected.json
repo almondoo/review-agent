@@ -1,0 +1,22 @@
+{
+  "review_category": "correctness",
+  "bug_class": "wrong-operator",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "wrong-operator-is-in-range",
+      "must_contain_any": [
+        "&&",
+        "||",
+        "AND",
+        "OR",
+        "always true",
+        "always returns",
+        "logic",
+        "wrong operator"
+      ],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Changed `&&` to `||` in the range check. `value >= min || value <= max` is true for any real number (every value satisfies at least one bound), making `isInRange` always return `true`."
+}

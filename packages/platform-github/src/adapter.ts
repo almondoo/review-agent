@@ -26,6 +26,7 @@ export const GITHUB_CAPABILITIES: VcsCapabilities = {
   stateComment: 'native',
   approvalEvent: 'github',
   commitMessages: true,
+  conversationReply: true,
 };
 
 import { cloneWithStrategy, defaultRunGit, type RunGit } from './clone.js';
@@ -305,6 +306,18 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
     return { commentId: String(data.id) };
   };
 
+  const postReply = async (ref: PRRef, commentId: string | number, body: string): Promise<void> => {
+    ensureGithub(ref);
+    const id = typeof commentId === 'string' ? Number(commentId) : commentId;
+    await octokit.rest.pulls.createReplyForReviewComment({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.number,
+      comment_id: id,
+      body,
+    });
+  };
+
   const getExistingComments = async (ref: PRRef): Promise<ReadonlyArray<ExistingComment>> => {
     ensureGithub(ref);
     const review = await octokit.paginate(octokit.rest.pulls.listReviewComments, {
@@ -380,6 +393,7 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
     cloneRepo,
     postReview,
     postSummary,
+    postReply,
     getExistingComments,
     getStateComment,
     upsertStateComment,

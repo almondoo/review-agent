@@ -67,6 +67,7 @@ describe('githubPlatform — registry registration', () => {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
     });
   });
 });

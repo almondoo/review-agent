@@ -26,10 +26,11 @@ function recordingIo() {
 }
 
 describe('buildProgram', () => {
-  it('exposes the top-level commands including setup', () => {
+  it('exposes the top-level commands including setup and dry-run', () => {
     const program = buildProgram({ io: recordingIo(), env: {}, version: 'test' });
     const names = program.commands.map((c) => c.name());
     expect(names).toContain('review');
+    expect(names).toContain('dry-run');
     expect(names).toContain('config');
     expect(names).toContain('eval');
     expect(names).toContain('setup');
@@ -39,6 +40,7 @@ describe('buildProgram', () => {
     const subNames = config?.commands.map((c) => c.name());
     expect(subNames).toContain('validate');
     expect(subNames).toContain('schema');
+    expect(subNames).toContain('presets');
     const setup = program.commands.find((c) => c.name() === 'setup');
     expect(setup?.commands.map((c) => c.name())).toContain('workspace');
     const audit = program.commands.find((c) => c.name() === 'audit');
@@ -54,6 +56,17 @@ describe('buildProgram', () => {
     const text = io.out.join('');
     expect(text.length).toBeGreaterThan(0);
     expect(() => JSON.parse(text)).not.toThrow();
+    expect(io.exitCode).toBe(0);
+  });
+
+  it('wires `config presets list` to print preset names to stdout', async () => {
+    const io = recordingIo();
+    const program = buildProgram({ io, env: {}, version: 'test' });
+    await program.parseAsync(['config', 'presets', 'list'], { from: 'user' });
+    const text = io.out.join('');
+    expect(text).toContain('recommended');
+    expect(text).toContain('strict');
+    expect(text).toContain('security-focused');
     expect(io.exitCode).toBe(0);
   });
 
@@ -645,5 +658,38 @@ describe('buildProgram', () => {
       if (prevGh !== undefined) process.env.GITHUB_TOKEN = prevGh;
       if (prevAnthropic !== undefined) process.env.ANTHROPIC_API_KEY = prevAnthropic;
     }
+  });
+
+  it('dry-run command without --pr exits 0 (config_only status)', async () => {
+    // Exercises the action body (lines 85-93): opts.pr is undefined so the
+    // spread `...(opts.pr !== undefined ? { pr: opts.pr } : {})` takes the
+    // falsy arm, and `result.status === 'config_only' → io.exit(0)`.
+    const io = recordingIo();
+    const program = buildProgram({ io, env: {}, version: 'test' });
+    await program.parseAsync(['dry-run'], { from: 'user' });
+    expect(io.exitCode).toBe(0);
+    expect(io.out.join('')).toContain('=== Effective Config (dry-run) ===');
+  });
+
+  it('dry-run command with --pr exits 1 when missing auth (auth_failed status → exit 1)', async () => {
+    // Exercises the truthy arm of `opts.pr !== undefined` spread and the
+    // `result.status !== 'config_only' && !== 'reviewed' → io.exit(1)` arm.
+    const io = recordingIo();
+    const program = buildProgram({ io, env: {}, version: 'test' });
+    await program.parseAsync(['dry-run', '--pr', 'o/r#1'], { from: 'user' });
+    expect(io.exitCode).toBe(1);
+    expect(io.err.join('')).toContain('REVIEW_AGENT_GH_TOKEN');
+  });
+
+  it('dry-run command with --lang and --profile exercises optional spreads', async () => {
+    // Truthy arms of `opts.lang ? { language } : {}` and
+    // `opts.profile ? { profile } : {}`. Action still returns config_only
+    // (no --pr) → exit 0.
+    const io = recordingIo();
+    const program = buildProgram({ io, env: {}, version: 'test' });
+    await program.parseAsync(['dry-run', '--lang', 'ja-JP', '--profile', 'chill'], {
+      from: 'user',
+    });
+    expect(io.exitCode).toBe(0);
   });
 });

@@ -1,11 +1,14 @@
 import {
+  type Category,
   CONFIDENCES,
   type Confidence,
   computeReviewEvent,
   createReviewOutputSchema,
   globToRegExp,
   SchemaValidationError,
+  SEVERITY_RANK,
   SecretLeakAbortedError,
+  type Severity,
   URL_ALLOWLIST_ISSUE_PREFIX,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
@@ -33,6 +36,8 @@ import { composeSystemPrompt, MAX_LEARNED_FACTS } from './prompts/system-prompt.
 import { wrapUntrusted } from './prompts/untrusted.js';
 import { createAiSdkToolset, MAX_TOOL_CALLS, type ToolName } from './tools.js';
 import type {
+  ExcludedFile,
+  ExclusionReport,
   Middleware,
   MiddlewareCtx,
   ReviewAbortReason,
@@ -43,6 +48,19 @@ import type {
 
 const RETRY_PROMPT_SUFFIX =
   '\n\nIMPORTANT: your previous response failed schema validation. Produce strictly valid output that matches the configured schema.';
+
+/**
+ * Default category assigned to findings that carry no `category` field.
+ * Findings without a category are always assigned this value before the
+ * ruleset filter runs, so every finding is subject to a deterministic
+ * policy (never silently dropped without a defined rule — spec §10.1).
+ *
+ * `'bug'` is the documented default: a finding without a category is
+ * most likely a correctness issue (the most conservative assumption).
+ * This constant is exported so tests can assert the documented default
+ * without hard-coding the string.
+ */
+export const DEFAULT_RULESET_CATEGORY: Category = 'bug';
 
 /**
  * Operator-facing summary text for the two retry-then-abort cases
@@ -97,6 +115,7 @@ function buildCapSkipResult(
   provider: LlmProvider,
   reason: ReviewAbortReason,
   summary: string,
+  exclusionReport: ExclusionReport,
 ): RunnerResult {
   return {
     comments: [],
@@ -106,9 +125,11 @@ function buildCapSkipResult(
     model: provider.model,
     provider: provider.name,
     droppedDuplicates: 0,
+    droppedByRuleset: 0,
     toolCalls: 0,
     reviewEvent: 'COMMENT',
     aborted: { reason, internalIssues: [] },
+    exclusionReport,
   };
 }
 
@@ -129,11 +150,70 @@ function classifyAbort(err: SchemaValidationError): {
   return { reason: 'schema_violation', summary: SCHEMA_ABORT_SUMMARY };
 }
 
+/**
+ * Apply the operator's `ruleset` configuration to the kept comment list.
+ * Three-step pipeline:
+ *
+ *   1. Assign `DEFAULT_RULESET_CATEGORY` to any comment whose `category`
+ *      field is absent or undefined, so every finding is subject to a
+ *      deterministic policy (never silently dropped without a defined rule).
+ *   2. Suppress findings whose effective category has `enabled: false`.
+ *   3. Suppress findings whose `severity` rank is strictly below the
+ *      `min_severity` floor configured for their effective category.
+ *
+ * When `ruleset` is absent or empty (`{}`), no filtering is applied and
+ * the function returns the input list unchanged (zero cost).
+ */
+function applyRulesetFilter(
+  comments: ReadonlyArray<import('@review-agent/core').InlineComment>,
+  ruleset: ReviewJob['ruleset'],
+): { kept: ReadonlyArray<import('@review-agent/core').InlineComment>; dropped: number } {
+  if (!ruleset || Object.keys(ruleset).length === 0) {
+    return { kept: comments, dropped: 0 };
+  }
+  let dropped = 0;
+  const kept: Array<import('@review-agent/core').InlineComment> = [];
+  for (const comment of comments) {
+    // Step 1: assign default category when absent.
+    const effectiveCategory: Category = comment.category ?? DEFAULT_RULESET_CATEGORY;
+    const entry = ruleset[effectiveCategory];
+    // No entry for this category → no filtering (default pass).
+    if (entry === undefined) {
+      kept.push(comment);
+      continue;
+    }
+    // Step 2: suppress disabled categories.
+    if (!entry.enabled) {
+      dropped += 1;
+      continue;
+    }
+    // Step 3: suppress below min_severity floor.
+    const commentRank = SEVERITY_RANK[comment.severity as Severity];
+    const floorRank = SEVERITY_RANK[entry.min_severity as Severity];
+    if (commentRank < floorRank) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(comment);
+  }
+  return { kept, dropped };
+}
+
 async function runReviewInner(
   job: ReviewJob,
   provider: LlmProvider,
   deps: RunReviewDeps,
 ): Promise<RunnerResult> {
+  // Fire the config resolution hook before any LLM call or gitleaks
+  // scan. This gives callers (action, server, CLI) an opportunity to
+  // log the effective-config provenance per-run for audit and
+  // reproducibility (issue #146 AC2). The hook is optional — callers
+  // that do not supply `onConfigResolution` or do not pass
+  // `resolutionLog` on the job simply skip this block.
+  if (job.resolutionLog !== undefined && deps.onConfigResolution !== undefined) {
+    deps.onConfigResolution(job.resolutionLog);
+  }
+
   // Incremental review fields flow from the action / cli call site
   // (see packages/action/src/run.ts where computeDiffStrategy decides
   // sinceSha). When the diff is incremental, the system prompt warns
@@ -201,6 +281,22 @@ async function runReviewInner(
     (promptOptions as { learnedFacts?: typeof learnedFacts }).learnedFacts = learnedFacts;
   }
 
+  // #155 false-positive suppression: load active suppression_rule rows for
+  // this repo. The runner applies these after dedup + confidence + ruleset
+  // filters to drop findings whose fingerprint is muted. Failures bubble up
+  // (same rationale as historyReader above — operator-visible transient DB
+  // errors must not silently skip suppression enforcement).
+  let suppressedFingerprints: ReadonlyArray<string> = [];
+  if (deps.suppressionLoader && deps.evalContext) {
+    const suppressionRows = await deps.suppressionLoader({
+      installationId: deps.evalContext.installationId,
+      repo: normalizeRepoKey(job.prRepo, deps.evalContext.installationId),
+    });
+    suppressedFingerprints = suppressionRows
+      .map((r) => extractFingerprint(r.factText))
+      .filter((fp): fp is string => fp !== null);
+  }
+
   const systemPrompt = composeSystemPrompt(promptOptions);
   const fileReader = deps.fileReader ?? (async () => '');
   // Bind the operator's `privacy.redact_patterns` into the default
@@ -249,19 +345,49 @@ async function runReviewInner(
   // a "still fetch siblings but hide the change" one).
   const parsedDiff = parseDiffByFile(job.diffText);
   const filteredDiff = applyPathFilters(parsedDiff, job.pathFilters);
+
+  // Collect files removed by path_filters so they appear in the
+  // exclusionReport regardless of whether a cap also fires.
+  const pathFilterExclusions: ReadonlyArray<ExcludedFile> =
+    filteredDiff !== parsedDiff
+      ? parsedDiff.files
+          .filter((f) => !filteredDiff.files.some((kf) => kf.path === f.path))
+          .map((f) => ({ path: f.path, reason: 'path_filter' as const }))
+      : [];
+
   if (filteredDiff.files.length > job.maxFiles) {
+    // All remaining files (post-filter) are "excluded" by the cap.
+    const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
+      path: f.path,
+      reason: 'max_files_cap' as const,
+    }));
+    const exclusionReport: ExclusionReport = {
+      excludedFiles: [...pathFilterExclusions, ...capExclusions],
+      capsApplied: ['max_files'],
+    };
     return buildCapSkipResult(
       provider,
       'max_files_exceeded',
       maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
+      exclusionReport,
     );
   }
   const diffLineCount = countDiffLines(filteredDiff);
   if (diffLineCount > job.maxDiffLines) {
+    // All remaining files (post-filter) are "excluded" by the cap.
+    const capExclusions: ReadonlyArray<ExcludedFile> = filteredDiff.files.map((f) => ({
+      path: f.path,
+      reason: 'max_diff_lines_cap' as const,
+    }));
+    const exclusionReport: ExclusionReport = {
+      excludedFiles: [...pathFilterExclusions, ...capExclusions],
+      capsApplied: ['max_diff_lines'],
+    };
     return buildCapSkipResult(
       provider,
       'max_diff_lines_exceeded',
       maxDiffLinesSkipSummary(diffLineCount, job.maxDiffLines),
+      exclusionReport,
     );
   }
   const filtersApplied = filteredDiff !== parsedDiff;
@@ -338,6 +464,11 @@ async function runReviewInner(
   });
   const diffPayload = `${wrappedMetadata}\n\n${effectiveDiffText}`;
 
+  // Use job.maxSteps when explicitly set (operator-configured via YAML or
+  // env REVIEW_AGENT_MAX_STEPS); fall back to the hard-coded MAX_TOOL_CALLS
+  // constant (20) for back-compat with callers that pre-date #156.
+  const effectiveMaxSteps = job.maxSteps ?? MAX_TOOL_CALLS;
+
   const baseInput: ReviewInput = {
     systemPrompt,
     diffText: diffPayload,
@@ -345,7 +476,7 @@ async function runReviewInner(
     fileReader,
     language: job.language,
     tools,
-    maxToolCalls: MAX_TOOL_CALLS,
+    maxToolCalls: effectiveMaxSteps,
   };
 
   const costState: CostState = { totalCostUsd: 0 };
@@ -394,6 +525,10 @@ async function runReviewInner(
   } catch (err) {
     if (err instanceof SchemaValidationError) {
       const { reason, summary } = classifyAbort(err);
+      const abortExclusionReport: ExclusionReport | undefined =
+        pathFilterExclusions.length > 0
+          ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+          : undefined;
       return {
         comments: [],
         // The summary is the ONLY string that will reach a public
@@ -409,12 +544,14 @@ async function runReviewInner(
         model: provider.model,
         provider: provider.name,
         droppedDuplicates: 0,
+        droppedByRuleset: 0,
         toolCalls: toolCallCounter,
         reviewEvent: 'COMMENT',
         aborted: {
           reason,
           internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
         },
+        ...(abortExclusionReport !== undefined ? { exclusionReport: abortExclusionReport } : {}),
       };
     }
     throw err;
@@ -430,7 +567,33 @@ async function runReviewInner(
   // do not "remember" we suppressed them, by design — operator wants
   // them silent, not memoized).
   const minConfidence = job.minConfidence ?? 'low';
-  const filteredKept = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+  const afterConfidence = dedup.kept.filter((c) => meetsConfidence(c.confidence, minConfidence));
+
+  // Apply the operator-configured ruleset filter *after* the confidence
+  // filter. The ruleset is the §10.1 category/severity enforcement layer:
+  //   1. Findings with no `category` get DEFAULT_RULESET_CATEGORY ('bug').
+  //   2. Findings in a disabled category are suppressed.
+  //   3. Findings below the category's `min_severity` floor are suppressed.
+  const rulesetResult = applyRulesetFilter(afterConfidence, job.ruleset);
+
+  // #155 false-positive suppression: drop findings whose fingerprint matches
+  // an active suppression_rule. Applied after all other filters so the
+  // suppression count reflects exactly what the user would have seen without
+  // it. The suppressed set is post-dedup/confidence/ruleset — this is the
+  // final gate before secret scanning.
+  const suppressionSet = new Set(suppressedFingerprints);
+  let droppedBySuppression = 0;
+  const afterSuppression =
+    suppressionSet.size === 0
+      ? rulesetResult.kept
+      : rulesetResult.kept.filter((c) => {
+          if (suppressionSet.has(c.fingerprint)) {
+            droppedBySuppression += 1;
+            return false;
+          }
+          return true;
+        });
+  const filteredKept = afterSuppression;
 
   const scannedText = [result.summary, ...filteredKept.map((c) => c.body)].join('\n\n');
   const outputFindings = [...scanContent(scannedText)];
@@ -472,6 +635,15 @@ async function runReviewInner(
   // request changes on findings that aren't actually being posted.
   const reviewEvent = computeReviewEvent(comments, job.requestChangesOn ?? 'critical');
 
+  // Build exclusionReport when path filters removed at least one file.
+  // For the successful (non-cap-skip) path, no cap fired so `capsApplied`
+  // is always empty; the report is omitted entirely when no files were
+  // excluded (the undefined-means-no-exclusions contract on RunnerResult).
+  const exclusionReport: ExclusionReport | undefined =
+    pathFilterExclusions.length > 0
+      ? { excludedFiles: pathFilterExclusions, capsApplied: [] }
+      : undefined;
+
   return {
     comments,
     summary,
@@ -481,8 +653,16 @@ async function runReviewInner(
     provider: provider.name,
     droppedDuplicates: dedup.droppedCount,
     droppedByFeedback: dedup.droppedByFeedback,
+    droppedByRuleset: rulesetResult.dropped,
+    // #155: only populate droppedBySuppression when the feature is active
+    // (suppressionLoader was wired) so callers can distinguish "off" from
+    // "on but 0 suppressed". When the suppressionLoader is absent,
+    // suppressedFingerprints is empty but we still leave the field undefined
+    // to honor the back-compat contract.
+    ...(deps.suppressionLoader !== undefined ? { droppedBySuppression } : {}),
     toolCalls,
     reviewEvent,
+    ...(exclusionReport !== undefined ? { exclusionReport } : {}),
   };
 }
 

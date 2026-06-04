@@ -1,0 +1,19 @@
+{
+  "review_category": "correctness",
+  "bug_class": "missing-return",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "missing-return-find-first",
+      "must_contain_any": [
+        "return",
+        "missing return",
+        "no-op",
+        "statement has no effect",
+        "unused expression"
+      ],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Replaced `return item` with a bare `item` expression statement. The matching item is discarded and the function always returns `undefined`, silently breaking all callers that depend on the found value."
+}

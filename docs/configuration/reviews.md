@@ -1,12 +1,13 @@
-# `reviews.{path_filters,max_files,max_diff_lines}` — review scope caps
+# `reviews.{path_filters,max_files,max_diff_lines,max_steps}` — review scope and pipeline caps
 
-`reviews.path_filters` plus the two cap fields (`reviews.max_files`,
-`reviews.max_diff_lines`) decide **which files in a PR the agent
-reviews at all** and **how big a PR may grow before the agent
-declines to review it**. They are the operator's primary knobs for
-controlling cost, scope, and reviewer signal-to-noise.
+`reviews.path_filters` plus the cap fields (`reviews.max_files`,
+`reviews.max_diff_lines`, `reviews.max_steps`) decide **which files in a PR
+the agent reviews at all**, **how big a PR may grow before the agent declines
+to review it**, and **how many LLM round-trips the agent may spend** per
+review. They are the operator's primary knobs for controlling cost, scope, and
+reviewer signal-to-noise.
 
-Spec reference: §10 (review scope rules).
+Spec reference: §10 (review scope rules), §10.2 (precedence).
 
 ## TL;DR
 
@@ -26,6 +27,10 @@ reviews:
   # Hard cap on total `+` / `-` diff lines after path_filters apply.
   # Default 3000.
   max_diff_lines: 3000
+
+  # Maximum agent steps (LLM round-trips including tool-call
+  # round-trips) before the agent stops. Default 20. Range 1–50.
+  max_steps: 20
 ```
 
 When either cap is exceeded, the agent **skips the review** without
@@ -265,6 +270,63 @@ principle" reason for the skip ("too many files" before "too many
 lines"), and the priority is pinned by `agent.test.ts` →
 `"checks max_files BEFORE max_diff_lines (file-count over-cap takes precedence)"`.
 
+## `max_steps`
+
+Hard cap on the number of **agent steps** — LLM round-trips including any
+tool-call (`read_file` / `glob` / `grep`) round-trips within one review. Maps
+to the Vercel AI SDK's `stopWhen: stepCountIs(N)`. Default `20`.
+
+```yaml
+reviews:
+  max_steps: 20    # default (historical MAX_TOOL_CALLS constant)
+```
+
+Tune lower to keep latency and cost predictable; tune higher (up to 50) when
+reviews of very large or multi-faceted PRs are hitting the cap too early and
+the LLM is producing incomplete results.
+
+### Env-var fallback: `REVIEW_AGENT_MAX_STEPS`
+
+When the YAML does **not** set `reviews.max_steps`, the env var
+`REVIEW_AGENT_MAX_STEPS` provides a deployment-level fallback:
+
+```
+REVIEW_AGENT_MAX_STEPS=30
+```
+
+**Precedence (highest → lowest):**
+
+1. `reviews.max_steps` in `.review-agent.yml` (repo or org YAML).
+2. `REVIEW_AGENT_MAX_STEPS` environment variable (only when YAML key is absent).
+3. Built-in default: `20`.
+
+This is the only `REVIEW_AGENT_*` env var that correctly implements the
+§10.2 config-wins-over-env rule from the start. Other env vars (`LANGUAGE`,
+`PROVIDER`, `MODEL`, `MAX_USD_PER_PR`) currently apply on top of the YAML —
+a known precedence inversion that will be unified in a future follow-up.
+
+**Out-of-range values** (below 1 or above 50) are rejected at config-load
+time with an actionable error:
+
+```
+REVIEW_AGENT_MAX_STEPS='100' must be an integer between 1 and 50.
+```
+
+### `extends: org` merge behaviour
+
+`reviews.max_steps` is a scalar: **repo overrides org**, same rule as
+`max_files` and `max_diff_lines`. If the repo config does not set it, the
+org default applies.
+
+### Effective-config observability
+
+The effective `max_steps` value is visible in the run's
+`ConfigResolutionLog` (issue #146) output via the `reviews` section source:
+
+```
+config resolved: primary=repo-yaml org=false env=false [... reviews:repo-yaml ...]
+```
+
 ## Defaults
 
 | Field             | Default | Spec ref          |
@@ -272,6 +334,7 @@ lines"), and the priority is pinned by `agent.test.ts` →
 | `path_filters`    | `[]`    | §10 L1435         |
 | `max_files`       | `50`    | §10 L1449         |
 | `max_diff_lines`  | `3000`  | §10 L1450         |
+| `max_steps`       | `20`    | §10 (§6.2 pattern) |
 
 The defaults exist to give a brand-new operator a sensible review
 budget on day one. They are **deliberately conservative** — most
@@ -281,14 +344,15 @@ usually a "split me first" signal.
 ## `extends: org` merge behaviour
 
 For the [org-config layer](./extends.md), `reviews.path_filters`,
-`reviews.max_files`, and `reviews.max_diff_lines` follow different
-merge rules:
+`reviews.max_files`, `reviews.max_diff_lines`, and `reviews.max_steps` follow
+different merge rules:
 
 | Field             | Merge rule                                                           |
 |-------------------|----------------------------------------------------------------------|
 | `path_filters`    | **Concatenated + de-duplicated** — `[...org, ...repo]` then `new Set`. Matches `privacy.deny_paths` / `privacy.allowed_url_prefixes` / `privacy.redact_patterns` (all globs-or-sets-of-strings follow this rule). |
 | `max_files`       | **Repo overrides org.** Same as `cost.max_usd_per_pr`.               |
 | `max_diff_lines`  | **Repo overrides org.** Same as `cost.max_usd_per_pr`.               |
+| `max_steps`       | **Repo overrides org.** Same scalar rule as `max_files`.             |
 
 ### Why scalars are "repo wins" and not "stricter wins"
 

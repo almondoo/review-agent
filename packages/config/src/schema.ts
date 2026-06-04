@@ -1,8 +1,10 @@
 import {
+  CATEGORIES,
   CONFIDENCES,
   isValidGlob,
   isValidRegex,
   REQUEST_CHANGES_THRESHOLDS,
+  SEVERITIES,
   WORKSPACE_STRATEGIES,
 } from '@review-agent/core';
 import { z } from 'zod';
@@ -35,6 +37,21 @@ const AutoReviewSchema = z
     drafts: z.boolean().default(false),
     base_branches: z.array(z.string().min(1)).default(['main', 'master', 'develop']),
     paths: z.array(z.string().min(1)).default([]),
+    /**
+     * Label-based trigger (#157): review fires when *any* of these labels
+     * is applied to the PR (`labeled` action). An empty list (default)
+     * means label-based triggering is disabled; push/command triggers still
+     * apply normally.
+     */
+    trigger_labels: z.array(z.string().min(1)).default([]),
+    /**
+     * Label-based skip (#157): auto-review is suppressed when *any* of
+     * these labels is currently on the PR. Checked on every push-triggered
+     * auto-review; commands (`/review`) are **not** affected by skip_labels
+     * (an explicit command always wins). An empty list (default) means no
+     * labels suppress review.
+     */
+    skip_labels: z.array(z.string().min(1)).default([]),
   })
   .strict();
 
@@ -96,6 +113,24 @@ const ReviewsSchema = z
     // release branch), or `'never'` to disable the mapping entirely
     // (every review posts `COMMENT`, regardless of severity).
     request_changes_on: z.enum(REQUEST_CHANGES_THRESHOLDS).default('critical'),
+    // Maximum number of agent steps (LLM round-trips + tool-call
+    // round-trips) before the runner terminates the loop. Maps to
+    // `stopWhen: stepCountIs(N)` in the Vercel AI SDK call. Bounds
+    // (1–50) are enforced at parse time so an out-of-range YAML value
+    // is rejected immediately with an actionable error. Default 20
+    // matches the historical hard-coded `MAX_TOOL_CALLS` constant in
+    // `packages/runner/src/tools.ts` — preserves existing behaviour
+    // for operators who have not set this key. Precedence:
+    //   repo/org YAML > env REVIEW_AGENT_MAX_STEPS > built-in default
+    // (see `loader.ts` `mergeWithEnvMaxSteps`).
+    max_steps: z.number().int().min(1).max(50).default(20),
+    // Maximum back-and-forth conversation turns on a single inline-comment
+    // thread (#149) before the agent posts a single "conversation limit
+    // reached" note and stops replying. A "turn" is one agent reply to a
+    // human `@review-agent` mention on the agent's own finding. Bounded
+    // (1–50) and cost-capped (turns count against the PR cost ledger).
+    // Default 5 keeps threads bounded without feeling abrupt.
+    max_conversation_turns: z.number().int().min(1).max(50).default(5),
   })
   .strict();
 
@@ -224,14 +259,86 @@ const CoordinationSchema = z
   })
   .strict();
 
-// `extends: 'org'` (§10.2 layer 3) opts the repo into merging the
-// `<org>/.github/review-agent.yml` central config underneath this
-// file. Without `extends`, the org file is consulted only as a
-// silent fallback when the repo file is absent. We accept the
-// keyword form (mirrors ESLint / Prettier) plus the explicit
-// `null` to mean "no inheritance", which lets a tenant override
-// inherited org config back to defaults.
-const ExtendsSchema = z.literal('org').or(z.null()).optional();
+// Feedback-loop tuning (#155). `suppress_after` is the number of distinct
+// 👎 / `/feedback reject` signals on the same finding fingerprint before a
+// persistent suppression rule is created (stored as a `suppression_rule`
+// row in `review_history`). Once suppressed, matching findings are dropped
+// from future reviews until an operator runs `review-agent suppression
+// remove`. Default 3 requires repeated rejection before muting, so a single
+// dismissal never permanently hides a class of finding.
+const FeedbackSchema = z
+  .object({
+    suppress_after: z.number().int().min(1).default(3),
+  })
+  .strict();
+
+export type Feedback = z.infer<typeof FeedbackSchema>;
+
+// Per-category ruleset entry. Each named category can be toggled on/off
+// and can enforce a minimum severity floor. Findings whose severity is
+// strictly below `min_severity` are suppressed for that category; findings
+// whose category has `enabled: false` are suppressed entirely.
+//
+// Category keys must be one of the values in `CATEGORIES` from
+// `@review-agent/core`. Unknown keys are rejected at parse time with a
+// Zod "Unrecognized key(s)" error so operators get an actionable message
+// (e.g. "ruleset.correctness: Unrecognized key(s)") rather than a silent
+// no-op. The known categories are:
+//   bug, security, performance, maintainability, style, docs, test
+//
+// NOTE: the issue body mentions `security/performance/style/tests/correctness`
+// as examples. This implementation uses the canonical CATEGORIES from core:
+//   - `test` (not `tests`) — matches the core taxonomy.
+//   - `bug` + `maintainability` cover what the issue called `correctness`.
+// Operators who want to gate on "correctness-class" findings should use
+// `bug: { min_severity: major }` and/or `maintainability: { enabled: false }`.
+const RulesetCategorySchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    // Severity floor: findings strictly below this rank are suppressed for
+    // this category. Default `'info'` means "post everything" (info is the
+    // lowest rank so nothing is filtered out by default). Rank order:
+    //   critical (3) > major (2) > minor (1) > info (0).
+    min_severity: z.enum(SEVERITIES).default('info'),
+  })
+  .strict();
+
+export type RulesetCategory = z.infer<typeof RulesetCategorySchema>;
+
+// The full ruleset block. Each key is a known category; unknown keys are
+// rejected by `.strict()` on the wrapper (via `z.record` + explicit key
+// constraint below). We use `z.record(z.enum(CATEGORIES), ...)` so Zod
+// rejects unknown category names at parse time.
+//
+// An empty ruleset (`ruleset: {}`) is valid — all categories default to
+// `{ enabled: true, min_severity: 'info' }` which is a no-op filter.
+export const RulesetSchema = z.record(z.enum(CATEGORIES), RulesetCategorySchema).default({});
+
+export type Ruleset = z.infer<typeof RulesetSchema>;
+
+// `extends:` (§10.2 / #151) supports three forms:
+//
+//   extends: org               — org-merge keyword (§10.2 layer 3). Merges
+//                                the org `.github/review-agent.yml` below this
+//                                config. Backward-compatible with the original
+//                                single-keyword form.
+//
+//   extends: recommended       — a single bundled preset name. The preset is
+//                                deep-merged as a base; this config overrides it.
+//
+//   extends: [recommended, strict]  — a list of preset names. Presets are
+//                                merged left-to-right; this config is applied
+//                                last (highest priority).
+//
+//   extends: null              — explicit "no inheritance" opt-out.
+//
+// NOTE: mixing 'org' inside an array (e.g. [org, recommended]) is not
+// supported. 'org' must appear as a scalar keyword. The preset loader
+// (`preset-loader.ts`) raises an actionable error if 'org' appears in an
+// array extends list.
+const ExtendsSchema = z
+  .union([z.literal('org'), z.string().min(1), z.array(z.string().min(1)), z.null()])
+  .optional();
 
 export const ConfigSchema = z
   .object({
@@ -248,6 +355,17 @@ export const ConfigSchema = z
     coordination: CoordinationSchema.default({}),
     server: ServerSchema.default({}),
     codecommit: CodecommitSchema.default({}),
+    // Per-category ruleset block. Keys are `CATEGORIES` values; each entry
+    // has `enabled` (default true) and `min_severity` (default 'info').
+    // Findings whose category has `enabled: false` are suppressed; findings
+    // below `min_severity` for their category are also suppressed. The runner
+    // applies this filter after dedup and min_confidence. An absent `ruleset`
+    // key is identical to `ruleset: {}` — no filtering.
+    ruleset: RulesetSchema,
+    // Feedback-loop tuning (#155): `feedback.suppress_after` controls how many
+    // 👎/reject signals on a finding fingerprint trigger a persistent
+    // suppression rule. Absent `feedback` key == defaults (suppress_after: 3).
+    feedback: FeedbackSchema.default({}),
   })
   .strict();
 

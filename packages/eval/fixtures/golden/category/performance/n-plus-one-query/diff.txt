@@ -1,0 +1,16 @@
+--- a/src/api/posts.ts
++++ b/src/api/posts.ts
+@@ -1,9 +1,11 @@
+ export async function listPostsWithAuthors() {
+   const posts = await db.posts.findAll();
+-  const authorIds = [...new Set(posts.map((p) => p.authorId))];
+-  const authors = await db.users.findByIds(authorIds);
+-  const authorMap = new Map(authors.map((a) => [a.id, a]));
+-  return posts.map((p) => ({ ...p, author: authorMap.get(p.authorId) }));
++  return Promise.all(
++    posts.map(async (p) => ({
++      ...p,
++      author: await db.users.findById(p.authorId),
++    })),
++  );
+ }

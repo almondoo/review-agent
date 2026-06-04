@@ -128,6 +128,18 @@ describe('handleWebhook', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  it('ignores pull_request with no action (undefined action field)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      { ...baseRepo, pull_request: { number: 7 } },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('ignores issue_comment when not on a PR', async () => {
     const { queue, enqueue } = makeQueue();
     const r = await handleWebhook(
@@ -140,17 +152,19 @@ describe('handleWebhook', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
-  it('enqueues @review-agent review command', async () => {
+  it('enqueues @review-agent review command when authorized', async () => {
     const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
     const r = await handleWebhook(
       ctx,
       'issue_comment',
       {
         ...baseRepo,
-        comment: { body: 'thanks! @review-agent review' },
+        sender: { login: 'alice' },
+        comment: { body: 'thanks! @review-agent review', user: { login: 'alice' } },
         issue: { number: 9, pull_request: {} },
       },
-      { queue },
+      { queue, checkAuthz },
     );
     expect(r.kind).toBe('enqueued');
     expect(enqueue).toHaveBeenCalledOnce();
@@ -177,15 +191,17 @@ describe('handleWebhook', () => {
 
   it('command parsing is case-insensitive', async () => {
     const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
     const r = await handleWebhook(
       ctx,
       'issue_comment',
       {
         ...baseRepo,
-        comment: { body: '@ReView-AGent REVIEW' },
+        sender: { login: 'alice' },
+        comment: { body: '@ReView-AGent REVIEW', user: { login: 'alice' } },
         issue: { number: 9, pull_request: {} },
       },
-      { queue },
+      { queue, checkAuthz },
     );
     expect(r.kind).toBe('enqueued');
     expect(enqueue).toHaveBeenCalledOnce();
@@ -270,6 +286,23 @@ describe('handleWebhook', () => {
       { queue },
     );
     expect(r).toEqual({ kind: 'feedback', signal: 'dismissed', commentId: 555 });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('classifies +1 reaction on a review summary (review.id, no comment.id) as thumbs_up', async () => {
+    // Covers the `b.review?.id` fallback branch (line 721) in classifyReactionPayload.
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'reaction',
+      {
+        action: 'created',
+        review: { id: 999 },
+        reaction: { content: '+1' },
+      },
+      { queue },
+    );
+    expect(r).toEqual({ kind: 'feedback', signal: 'thumbs_up', commentId: 999 });
     expect(enqueue).not.toHaveBeenCalled();
   });
 
@@ -362,6 +395,31 @@ describe('handleWebhook', () => {
       kind: 'feedback_command',
       signal: 'thumbs_up',
       outcome: 'unauthorized',
+      prNumber: 9,
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('propagates fpPrefix on unauthorized /feedback accept with fp_prefix', async () => {
+    // Covers the `fpPrefix` spread in the unauthorized branch (line 650).
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only user' });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'eve' },
+        comment: { body: '/feedback accept abcd1234', user: { login: 'eve' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r).toMatchObject({
+      kind: 'feedback_command',
+      signal: 'thumbs_up',
+      outcome: 'unauthorized',
+      fpPrefix: 'abcd1234',
       prNumber: 9,
     });
     expect(enqueue).not.toHaveBeenCalled();
@@ -488,6 +546,811 @@ describe('handleWebhook', () => {
     );
     // Falls through to the comment-command parser, which sees no
     // `comment.body` and treats it as 'ignored'.
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: slash commands
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — slash commands (#157)', () => {
+  it('enqueues /review command when authorized (no DB needed)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+    const call = enqueue.mock.calls[0]?.[0];
+    expect(call.triggeredBy).toBe('comment.command');
+    expect(call.pathScope).toBeUndefined();
+    expect(checkAuthz).toHaveBeenCalledWith({ owner: 'o', repo: 'r', username: 'alice' });
+  });
+
+  it('enqueues /review with pathScope when a glob path is provided', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review src/**', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    const call = enqueue.mock.calls[0]?.[0];
+    expect(call.pathScope).toEqual(['src/**']);
+  });
+
+  it('silently ignores /review from unauthorized user (no reply)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'eve' },
+        comment: { body: '/review', user: { login: 'eve' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('silently ignores /review when no checkAuthz is wired (fail-closed)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns noop for /skip command (authorized)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/skip', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('noop');
+    if (r.kind === 'noop') expect(r.reason).toContain('skip');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('silently ignores /skip from unauthorized user', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'eve' },
+        comment: { body: '/skip', user: { login: 'eve' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('returns noop for /resume command (authorized)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/resume', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('noop');
+    if (r.kind === 'noop') expect(r.reason).toContain('resume');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('slash commands are case-insensitive', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/REVIEW', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('slash commands work from pull_request_review_comment event', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'pull_request_review_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review src/**', user: { login: 'alice' } },
+        pull_request: { number: 5 },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+    const call = enqueue.mock.calls[0]?.[0];
+    expect(call.pathScope).toEqual(['src/**']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: /skip and /resume with DB (paused flag)
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — /skip and /resume with DB', () => {
+  it('/skip writes paused=true to review_state via DB', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/skip', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, db, checkAuthz },
+    );
+    expect(tx.update).toHaveBeenCalledOnce();
+    const setArg = tx.update.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(setArg?.paused).toBe(true);
+  });
+
+  it('/resume writes paused=false to review_state via DB', async () => {
+    const { queue } = makeQueue();
+    const { db, tx } = makeDb();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/resume', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, db, checkAuthz },
+    );
+    expect(tx.update).toHaveBeenCalledOnce();
+    const setArg = tx.update.mock.results[0]?.value?.set?.mock?.calls?.[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(setArg?.paused).toBe(false);
+  });
+
+  it('/skip does not write to DB when db is not wired', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/skip', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    // No DB wired → still returns noop (command acknowledged without persistence).
+    expect(r.kind).toBe('noop');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: [skip review] marker
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — [skip review] marker', () => {
+  it('suppresses auto-review when [skip review] is in the PR title', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false, title: '[skip review] my PR', body: '' },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') expect(r.reason).toContain('[skip review]');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('suppresses auto-review when [skip review] is in the PR body', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'opened',
+        ...baseRepo,
+        pull_request: {
+          number: 7,
+          draft: false,
+          title: 'normal title',
+          body: 'please [skip review] for now',
+        },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('[skip review] matching is case-insensitive', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false, title: '[SKIP REVIEW]', body: '' },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does NOT suppress ready_for_review even when [skip review] marker present (explicit conversion)', async () => {
+    // `ready_for_review` is not in PUSH_TRIGGERED_ACTIONS — the [skip review]
+    // check does not apply because the user explicitly converted the draft.
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'ready_for_review',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false, title: '[skip review] draft done', body: '' },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: label-based triggers
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — label triggers (#157)', () => {
+  it('fires review when a trigger_label is applied to the PR', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'labeled',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+        label: { name: 'needs-review' },
+      },
+      { queue, triggerConfig: { trigger_labels: ['needs-review'], skip_labels: [] } },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('ignores labeled event when label is not in trigger_labels', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'labeled',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+        label: { name: 'bug' },
+      },
+      { queue, triggerConfig: { trigger_labels: ['needs-review'], skip_labels: [] } },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores labeled event when triggerConfig is not wired', async () => {
+    // When triggerConfig is absent, labeled events are not in ENQUEUE_PR_ACTIONS
+    // so they fall through to the standard action filter.
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'labeled',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+        label: { name: 'needs-review' },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('trigger_labels matching is case-insensitive', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'labeled',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+        label: { name: 'Needs-Review' },
+      },
+      { queue, triggerConfig: { trigger_labels: ['needs-review'], skip_labels: [] } },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('suppresses push-triggered review when PR carries a skip_label', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: {
+          number: 7,
+          draft: false,
+          labels: [{ name: 'no-review' }],
+        },
+      },
+      { queue, triggerConfig: { trigger_labels: [], skip_labels: ['no-review'] } },
+    );
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') expect(r.reason).toContain('skip_label');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('skip_labels matching is case-insensitive', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'opened',
+        ...baseRepo,
+        pull_request: {
+          number: 7,
+          draft: false,
+          labels: [{ name: 'NO-REVIEW' }],
+        },
+      },
+      { queue, triggerConfig: { trigger_labels: [], skip_labels: ['no-review'] } },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does not apply skip_labels check to ready_for_review', async () => {
+    // ready_for_review is not in PUSH_TRIGGERED_ACTIONS, so skip_labels don't block it.
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'ready_for_review',
+        ...baseRepo,
+        pull_request: {
+          number: 7,
+          draft: false,
+          labels: [{ name: 'no-review' }],
+        },
+      },
+      { queue, triggerConfig: { trigger_labels: [], skip_labels: ['no-review'] } },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: draft PR and ready_for_review
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — draft PR / ready_for_review (#157)', () => {
+  it('enqueues ready_for_review when draft is converted (existing behaviour confirmed)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'ready_for_review',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false, head: { sha: 'abc1234' } },
+      },
+      { queue },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+    const call = enqueue.mock.calls[0]?.[0];
+    expect(call.triggeredBy).toBe('pull_request.ready_for_review');
+  });
+
+  it('still ignores draft synchronize (draft flag true)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      { action: 'synchronize', ...baseRepo, pull_request: { number: 7, draft: true } },
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: legacy @review-agent review — auth-gated
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — legacy @review-agent review with auth gate (#157)', () => {
+  it('silently ignores unauthorized @review-agent review (no reply)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'eve' },
+        comment: { body: '@review-agent review', user: { login: 'eve' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('silently ignores @review-agent review when no authz checker wired', async () => {
+    const { queue, enqueue } = makeQueue();
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '@review-agent review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      // No checkAuthz wired → fail-closed.
+      { queue },
+    );
+    expect(r.kind).toBe('ignored');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues @review-agent review when checkAuthz allows it', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '@review-agent review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: debounce
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — debounce (#157)', () => {
+  function makeDbWithReviewState(updatedAt: Date) {
+    // Returns a fake DB that simulates finding a review_state row with the
+    // given `updatedAt`. The select chain returns one row.
+    const selectResult = {
+      from: vi.fn(),
+    };
+    const whereResult = {
+      limit: vi.fn(),
+    };
+    const limitResult = [{ updatedAt, paused: false }];
+
+    whereResult.limit.mockResolvedValue(limitResult);
+    selectResult.from.mockReturnValue({ where: vi.fn().mockReturnValue(whereResult) });
+
+    const tx = {
+      select: vi.fn().mockReturnValue(selectResult),
+      update: vi.fn().mockReturnValue({
+        set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+      }),
+      execute: vi.fn().mockResolvedValue([{ tenant: '11' }]),
+    };
+
+    const db = {
+      transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
+    } as unknown as DbClient;
+
+    return { db, tx };
+  }
+
+  it('debounces /review when a review was updated within the window', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const nowDate = new Date('2026-06-04T12:00:30Z');
+    // Simulate updatedAt 5 seconds ago (within 30s window).
+    const { db } = makeDbWithReviewState(new Date('2026-06-04T12:00:25Z'));
+
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz, db, now: () => nowDate },
+    );
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') expect(r.reason).toContain('debounced');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('does NOT debounce /review when review was updated outside the window', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const nowDate = new Date('2026-06-04T12:01:00Z');
+    // Simulate updatedAt 60 seconds ago (outside 30s window).
+    const { db } = makeDbWithReviewState(new Date('2026-06-04T12:00:00Z'));
+
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz, db, now: () => nowDate },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('does not debounce when no DB is wired (fail-open)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('does not debounce when DB throws (fail-open on DB error)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const nowDate = new Date('2026-06-04T12:00:30Z');
+
+    // Simulate a DB that throws during the select.
+    const db = {
+      transaction: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    } as unknown as DbClient;
+
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        ...baseRepo,
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz, db, now: () => nowDate },
+    );
+    // Even though the DB threw, we fail-open and do NOT debounce.
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 trigger control: paused state check on push events
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — paused PR suppresses push-triggered auto-review (#157)', () => {
+  /** Build a fake DB whose review_state select returns paused=<value>. */
+  function makeDbWithPaused(paused: boolean) {
+    const limitResult = [{ updatedAt: new Date('2026-06-01T00:00:00Z'), paused }];
+    const whereResult = { limit: vi.fn().mockResolvedValue(limitResult) };
+    const selectResult = {
+      from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue(whereResult) }),
+    };
+    const tx = {
+      select: vi.fn().mockReturnValue(selectResult),
+      execute: vi.fn().mockResolvedValue([{ tenant: '11' }]),
+    };
+    const db = {
+      transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(tx)),
+    } as unknown as DbClient;
+    return { db };
+  }
+
+  it('suppresses push (synchronize) when review_state.paused=true', async () => {
+    const { queue, enqueue } = makeQueue();
+    const { db } = makeDbWithPaused(true);
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+      },
+      { queue, db },
+    );
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') expect(r.reason).toContain('paused');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues push (synchronize) when review_state.paused=false (resumed)', async () => {
+    const { queue, enqueue } = makeQueue();
+    const { db } = makeDbWithPaused(false);
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+      },
+      { queue, db },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('fail-open: enqueues push when paused DB read throws', async () => {
+    const { queue, enqueue } = makeQueue();
+    const db = {
+      transaction: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+    } as unknown as DbClient;
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'synchronize',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+      },
+      { queue, db },
+    );
+    // DB error → fail-open → review proceeds normally.
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+
+  it('does NOT suppress ready_for_review even when review_state.paused=true', async () => {
+    // ready_for_review is not in PUSH_TRIGGERED_ACTIONS so the paused
+    // check does not apply — explicit draft conversion always fires.
+    const { queue, enqueue } = makeQueue();
+    const { db } = makeDbWithPaused(true);
+    const r = await handleWebhook(
+      ctx,
+      'pull_request',
+      {
+        action: 'ready_for_review',
+        ...baseRepo,
+        pull_request: { number: 7, draft: false },
+      },
+      { queue, db },
+    );
+    expect(r.kind).toBe('enqueued');
+    expect(enqueue).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #157 authz: missing owner/repo/username edge case
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — command authz missing fields (#157)', () => {
+  it('silently ignores slash /review when repository fields are missing from payload', async () => {
+    // Covers the `!owner || !repo || !username` branch of checkCommandAuthz.
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const r = await handleWebhook(
+      ctx,
+      'issue_comment',
+      {
+        // Omit repository entirely — owner/repo will be undefined.
+        installation: { id: 11 },
+        sender: { login: 'alice' },
+        comment: { body: '/review', user: { login: 'alice' } },
+        issue: { number: 9, pull_request: {} },
+      },
+      { queue, checkAuthz },
+    );
     expect(r.kind).toBe('ignored');
     expect(enqueue).not.toHaveBeenCalled();
   });
@@ -642,5 +1505,260 @@ describe('handleWebhook — installation events with db', () => {
     const r = await handleWebhook(ctx, 'installation_repositories', {}, { queue, db });
     expect(r.kind).toBe('noop');
     expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #149 conversation reply routing
+// ---------------------------------------------------------------------------
+
+describe('handleWebhook — conversation reply (#149)', () => {
+  const baseConversationBody = {
+    action: 'created',
+    installation: { id: 11 },
+    repository: { owner: { login: 'o' }, name: 'r' },
+    pull_request: { number: 42 },
+    sender: { login: 'alice' },
+    comment: {
+      id: 200,
+      in_reply_to_id: 100,
+      body: 'Hey @review-agent, is this actually a bug?',
+      diff_hunk: '@@ -1,3 +1,4 @@\n+code here',
+    },
+  };
+
+  it('happy path: routes to handleConversation and returns conversation_reply dispatched', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+      expect(r.commentId).toBe(200);
+      expect(r.prNumber).toBe(42);
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
+    const callArg = handleConversation.mock.calls[0]?.[0];
+    expect(callArg.installationId).toBe(11);
+    expect(callArg.owner).toBe('o');
+    expect(callArg.repo).toBe('r');
+    expect(callArg.prNumber).toBe(42);
+    expect(callArg.rootCommentId).toBe(100);
+    expect(callArg.replyCommentId).toBe(200);
+    expect(callArg.sender).toBe('alice');
+    expect(callArg.diffHunk).toBe('@@ -1,3 +1,4 @@\n+code here');
+  });
+
+  it('self-reply guard: returns self_reply when sender matches bot login', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const body = { ...baseConversationBody, sender: { login: 'review-agent[bot]' } };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('self_reply');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('self-reply guard: passes through when sender does not match bot login', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
+  });
+
+  it('unauthorized: returns unauthorized outcome when checkAuthz denies', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: false, reason: 'read-only' });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('unauthorized');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('ignores when no @review-agent mention in reply body', async () => {
+    const { queue } = makeQueue();
+    const handleConversation = vi.fn();
+    const body = {
+      ...baseConversationBody,
+      comment: { ...baseConversationBody.comment, body: 'looks good to me' },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('ignores when event action is not created (e.g. edited)', async () => {
+    const { queue } = makeQueue();
+    const handleConversation = vi.fn();
+    const body = { ...baseConversationBody, action: 'edited' };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('falls through to legacy command parser when no in_reply_to_id (top-level review comment)', async () => {
+    // A top-level pull_request_review_comment (not a reply) should NOT
+    // be treated as a conversation event — fall through to legacy @review-agent parsing.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn();
+    const body = {
+      action: 'created',
+      installation: { id: 11 },
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 42 },
+      sender: { login: 'alice' },
+      // No in_reply_to_id — this is a top-level review comment
+      comment: { id: 300, body: '@review-agent review', user: { login: 'alice' } },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    // Falls through to legacy @review-agent review command → enqueued
+    expect(r.kind).toBe('enqueued');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('falls through to feedback/slash/legacy parser when handleConversation not wired', async () => {
+    // Without handleConversation wired, even an inline reply should fall
+    // through to the existing command parsers.
+    const { queue, enqueue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    // No handleConversation in deps
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+    });
+    // Falls through to legacy parser: '@review-agent' + random word → ignored/noop
+    expect(['ignored', 'noop'].includes(r.kind)).toBe(true);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('ignores when missing required fields (no installation id)', async () => {
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn();
+    const body = {
+      action: 'created',
+      // no installation
+      repository: { owner: { login: 'o' }, name: 'r' },
+      pull_request: { number: 42 },
+      sender: { login: 'alice' },
+      comment: { id: 200, in_reply_to_id: 100, body: '@review-agent explain this' },
+    };
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', body, {
+      queue,
+      checkAuthz,
+      handleConversation,
+    });
+    expect(r.kind).toBe('ignored');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #149 / security: fail-closed self-reply guard
+  // ---------------------------------------------------------------------------
+
+  it('fail-closed: returns ignored and does NOT dispatch when getBotLogin is absent', async () => {
+    // handleConversation is wired but getBotLogin is not — we cannot verify
+    // bot identity, so the guard must refuse dispatch rather than risk a loop.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    // No getBotLogin in deps
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      // getBotLogin intentionally omitted
+    });
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') {
+      expect(r.reason).toContain('getBotLogin not wired');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: returns ignored and does NOT dispatch when getBotLogin returns empty string', async () => {
+    // getBotLogin resolves to '' (e.g. env var not set, API returned blank) —
+    // cannot verify identity, must fail-closed.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('ignored');
+    if (r.kind === 'ignored') {
+      expect(r.reason).toContain('getBotLogin returned empty');
+    }
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  it('fail-closed: dispatches when getBotLogin is wired, returns non-empty, and sender is not the bot', async () => {
+    // Positive control: getBotLogin wired with a real login, sender is a human.
+    const { queue } = makeQueue();
+    const checkAuthz = vi.fn().mockResolvedValue({ allowed: true });
+    const handleConversation = vi.fn().mockResolvedValue('dispatched');
+    const getBotLogin = vi.fn().mockResolvedValue('review-agent[bot]');
+    const r = await handleWebhook(ctx, 'pull_request_review_comment', baseConversationBody, {
+      queue,
+      checkAuthz,
+      handleConversation,
+      getBotLogin,
+    });
+    expect(r.kind).toBe('conversation_reply');
+    if (r.kind === 'conversation_reply') {
+      expect(r.outcome).toBe('dispatched');
+    }
+    expect(handleConversation).toHaveBeenCalledOnce();
   });
 });

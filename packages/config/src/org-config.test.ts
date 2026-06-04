@@ -210,6 +210,57 @@ reviews:
     expect(merged.reviews.path_filters).toEqual(['vendor/**', 'dist/**', 'node_modules/**']);
   });
 
+  it('merges ruleset: org base, repo overrides per-category (#148)', () => {
+    // Org sets security min_severity=major and disables style.
+    // Repo enables style with a different min_severity and adds performance.
+    const org = loadConfigFromYaml(
+      `ruleset:
+  security:
+    enabled: true
+    min_severity: major
+  style:
+    enabled: false
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+ruleset:
+  style:
+    enabled: true
+    min_severity: minor
+  performance:
+    enabled: true
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    // security: org only — inherited unchanged.
+    expect(merged.ruleset.security).toEqual({ enabled: true, min_severity: 'major' });
+    // style: repo overrides org entry entirely (repo wins per §10.2).
+    expect(merged.ruleset.style).toEqual({ enabled: true, min_severity: 'minor' });
+    // performance: repo only.
+    expect(merged.ruleset.performance).toEqual({ enabled: true, min_severity: 'info' });
+  });
+
+  it('repo ruleset fully shadows org ruleset entry when keys overlap', () => {
+    const org = loadConfigFromYaml(
+      `ruleset:
+  bug:
+    enabled: false
+    min_severity: critical
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+ruleset:
+  bug:
+    enabled: true
+    min_severity: major
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.ruleset.bug).toEqual({ enabled: true, min_severity: 'major' });
+  });
+
   it('dedups privacy.redact_patterns across org and repo (#87)', () => {
     // The org and repo both declare the same AWS access-key pattern;
     // without dedup the runner would lift two identical custom rules
@@ -236,5 +287,50 @@ privacy:
       'ghp_[A-Za-z0-9]{36}',
       'xoxb-[A-Za-z0-9-]+',
     ]);
+  });
+
+  // #157: trigger_labels / skip_labels merge semantics
+  it('concatenates trigger_labels from org and repo, deduplicating', () => {
+    const org = loadConfigFromYaml(
+      `reviews:
+  auto_review:
+    trigger_labels: ["needs-review"]
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+reviews:
+  auto_review:
+    trigger_labels: ["needs-review", "ready"]
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.trigger_labels).toEqual(['needs-review', 'ready']);
+  });
+
+  it('concatenates skip_labels from org and repo, deduplicating', () => {
+    const org = loadConfigFromYaml(
+      `reviews:
+  auto_review:
+    skip_labels: ["wip"]
+`,
+    );
+    const repo = loadConfigFromYaml(
+      `extends: org
+reviews:
+  auto_review:
+    skip_labels: ["wip", "no-review"]
+`,
+    );
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.skip_labels).toEqual(['wip', 'no-review']);
+  });
+
+  it('trigger_labels / skip_labels default to empty arrays when absent', () => {
+    const org = loadConfigFromYaml('language: ja-JP\n');
+    const repo = loadConfigFromYaml('extends: org\n');
+    const merged = mergeOrgIntoRepo(org, repo);
+    expect(merged.reviews.auto_review.trigger_labels).toEqual([]);
+    expect(merged.reviews.auto_review.skip_labels).toEqual([]);
   });
 });

@@ -1,0 +1,13 @@
+{
+  "review_category": "performance",
+  "bug_class": "n-plus-one-query",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "n-plus-one-posts-authors",
+      "must_contain_any": ["N+1", "N + 1", "per-row", "batched", "batch", "one query per"],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Replaced a batched author lookup (one query for all unique authorIds) with a per-row `findById` call inside `Promise.all`. For N posts this fires N+1 database queries instead of 2, causing linear latency growth."
+}

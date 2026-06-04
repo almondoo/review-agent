@@ -56,7 +56,28 @@ export type ApiDeps = {
    * Spec §8.2.4.
    */
   readonly appAuthClient?: AppAuthClient;
+  /**
+   * When true the six installationId-input /api endpoints are disabled (501)
+   * before any token mint or DB write. Sourced from env
+   * `REVIEW_AGENT_MULTI_TENANT` (only the string 'true', case-insensitive,
+   * trimmed, resolves to true; anything else including unset → false).
+   *
+   * Default: false (single-operator, unchanged behaviour).
+   *
+   * See docs/security/multi-tenant-authz.md and issue #132.
+   */
+  readonly multiTenant?: boolean;
 };
+
+/**
+ * Parse the REVIEW_AGENT_MULTI_TENANT env var strictly.
+ * Only the string 'true' (case-insensitive, trimmed) resolves to true.
+ * Anything else, including unset / empty, resolves to false.
+ */
+function parseMultiTenantEnv(): boolean {
+  const raw = typeof process !== 'undefined' ? process.env.REVIEW_AGENT_MULTI_TENANT : undefined;
+  return raw !== undefined && raw.trim().toLowerCase() === 'true';
+}
 
 /**
  * Assemble the `/api` Hono sub-application.
@@ -67,6 +88,9 @@ export type ApiDeps = {
  */
 export function createApi(deps: ApiDeps): Hono {
   const api = new Hono();
+
+  // Resolve multiTenant flag: caller wins; fall back to env.
+  const multiTenant = deps.multiTenant ?? parseMultiTenantEnv();
 
   // Dev-only CORS — no-op in production
   api.use('/*', devCors(deps.env));
@@ -123,6 +147,7 @@ export function createApi(deps: ApiDeps): Hono {
         kms,
         auditAppender: resolvedAuditAppender,
         kmsKeyId,
+        multiTenant,
       }),
     );
   } else {
@@ -161,6 +186,7 @@ export function createApi(deps: ApiDeps): Hono {
       ...(deps.appAuthClient !== undefined
         ? { appAuth: { appAuthClient: deps.appAuthClient } }
         : {}),
+      multiTenant,
     }),
   );
 

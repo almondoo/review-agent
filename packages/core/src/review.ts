@@ -132,7 +132,7 @@ export type RequestChangesThreshold = (typeof REQUEST_CHANGES_THRESHOLDS)[number
 export const WORKSPACE_STRATEGIES = ['sparse-clone', 'contents-api', 'none'] as const;
 export type WorkspaceStrategy = (typeof WORKSPACE_STRATEGIES)[number];
 
-const SEVERITY_RANK: Readonly<Record<Severity, number>> = {
+export const SEVERITY_RANK: Readonly<Record<Severity, number>> = {
   critical: 3,
   major: 2,
   minor: 1,

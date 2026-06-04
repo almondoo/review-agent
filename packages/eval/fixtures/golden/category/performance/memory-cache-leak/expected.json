@@ -1,0 +1,21 @@
+{
+  "review_category": "performance",
+  "bug_class": "memory-leak",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "cache-entry-never-expires",
+      "must_contain_any": [
+        "leak",
+        "evict",
+        "TTL",
+        "expire",
+        "never.*removed",
+        "grow.*unbounded",
+        "memory"
+      ],
+      "severity": "major"
+    }
+  ],
+  "rationale": "Setting `expiresAt: Infinity` means cache entries are never invalidated or evicted. In a long-running process, `cache` will accumulate every user ever looked up, causing unbounded memory growth."
+}

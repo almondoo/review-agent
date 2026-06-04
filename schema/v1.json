@@ -1,4 +1,5 @@
 {
+  "$id": "https://review-agent.dev/schema/v1.json",
   "$ref": "#/definitions/ReviewAgentConfig",
   "definitions": {
     "ReviewAgentConfig": {
@@ -9,6 +10,17 @@
             {
               "type": "string",
               "const": "org"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             {
               "type": "null"
@@ -116,6 +128,22 @@
                     "minLength": 1
                   },
                   "default": []
+                },
+                "trigger_labels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "default": []
+                },
+                "skip_labels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "default": []
                 }
               },
               "additionalProperties": false,
@@ -140,6 +168,24 @@
                   "instructions": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "auto_fetch": {
+                    "type": "object",
+                    "properties": {
+                      "tests": {
+                        "type": "boolean",
+                        "default": true
+                      },
+                      "types": {
+                        "type": "boolean",
+                        "default": true
+                      },
+                      "siblings": {
+                        "type": "boolean",
+                        "default": false
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "required": ["path", "instructions"],
@@ -164,6 +210,28 @@
                 "minLength": 1
               },
               "default": ["dependabot[bot]", "renovate[bot]", "github-actions[bot]"]
+            },
+            "min_confidence": {
+              "type": "string",
+              "enum": ["high", "medium", "low"],
+              "default": "low"
+            },
+            "request_changes_on": {
+              "type": "string",
+              "enum": ["critical", "major", "never"],
+              "default": "critical"
+            },
+            "max_steps": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            },
+            "max_conversation_turns": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5
             }
           },
           "additionalProperties": false,
@@ -270,6 +338,64 @@
                 "minLength": 1
               },
               "default": []
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "server": {
+          "type": "object",
+          "properties": {
+            "workspace_strategy": {
+              "type": "string",
+              "enum": ["sparse-clone", "contents-api", "none"],
+              "default": "none"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "codecommit": {
+          "type": "object",
+          "properties": {
+            "approvalState": {
+              "type": "string",
+              "enum": ["managed", "off"],
+              "default": "off"
+            }
+          },
+          "additionalProperties": false,
+          "default": {}
+        },
+        "ruleset": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": ["critical", "major", "minor", "info"],
+                "default": "info"
+              }
+            },
+            "additionalProperties": false
+          },
+          "propertyNames": {
+            "enum": ["bug", "security", "performance", "maintainability", "style", "docs", "test"]
+          },
+          "default": {}
+        },
+        "feedback": {
+          "type": "object",
+          "properties": {
+            "suppress_after": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
             }
           },
           "additionalProperties": false,

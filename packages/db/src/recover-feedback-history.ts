@@ -1,4 +1,4 @@
-import { reviewHistory } from '@review-agent/core/db';
+import { type ReviewHistoryFactType, reviewHistory } from '@review-agent/core/db';
 import { and, eq } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
 
@@ -29,7 +29,7 @@ import type { DbClient } from './connection.js';
  * dedup in code so existing rows are not retro-rejected.
  */
 export type RecoverFeedbackHistoryCandidate = {
-  readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
+  readonly factType: ReviewHistoryFactType;
   readonly factText: string;
 };
 

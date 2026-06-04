@@ -6,7 +6,11 @@ import { createMiddleware } from 'hono/factory';
 import { type ApiDeps, createApi } from './api/index.js';
 import { createGithubRouter } from './github-setup.js';
 import { handleCodecommitWebhook } from './handlers/codecommit-webhook.js';
-import { handleWebhook } from './handlers/webhook.js';
+import {
+  type ConversationHandlerInput,
+  type ConversationReplyOutcome,
+  handleWebhook,
+} from './handlers/webhook.js';
 import { idempotency } from './middleware/idempotency.js';
 import { type VerifyEnv, verifyGithubSignature } from './middleware/verify-signature.js';
 import {
@@ -87,7 +91,88 @@ export type AppDeps = {
   readonly github?: {
     readonly appAuthClient: AppAuthClient;
   };
+  /**
+   * #149 inline conversation: optional handler for `@review-agent` mentions
+   * in PR review-comment threads. When provided, `pull_request_review_comment`
+   * events that are replies containing `@review-agent` are routed here instead
+   * of (or before) the legacy command parser.
+   *
+   * Operators compose this from `handleConversationReply` (runner package) and
+   * the relevant DB / provider deps. When absent, thread-reply mentions fall
+   * through to the legacy command parser (fail-open).
+   */
+  readonly handleConversation?: (
+    input: ConversationHandlerInput,
+  ) => Promise<ConversationReplyOutcome>;
+  /**
+   * #149 self-reply guard: returns the bot's own GitHub login
+   * (e.g. `review-agent[bot]`). When provided, the webhook handler checks the
+   * sender against this value and silently drops the event if they match
+   * (prevents reply loops).
+   *
+   * Resolution order:
+   *   1. `GITHUB_BOT_LOGIN` environment variable (override; useful in tests
+   *      and non-App-authenticated deployments).
+   *   2. Derived from `deps.github.appAuthClient` via a cached one-shot call
+   *      to `GET /app` using the App JWT (slug + "[bot]" suffix).
+   *   3. When neither is available, the guard is disabled (fail-open).
+   *
+   * Operators who wire `deps.github.appAuthClient` get the guard for free;
+   * tests inject an explicit value via `GITHUB_BOT_LOGIN` env.
+   */
+  readonly getBotLogin?: () => Promise<string>;
 };
+
+/**
+ * #149: Resolve the `getBotLogin` closure for the self-reply guard.
+ *
+ * Resolution order (first truthy wins):
+ *   1. `deps.getBotLogin` — caller-supplied override (tests / custom deployments).
+ *   2. `GITHUB_BOT_LOGIN` environment variable — simple string override.
+ *   3. Derived from `deps.github.appAuthClient` — calls `GET /app` via the App
+ *      JWT and appends `[bot]` to the slug (e.g. `review-agent[bot]`). The slug
+ *      is cached across requests because it is stable for the lifetime of a
+ *      GitHub App installation.
+ *   4. `undefined` — guard is disabled (fail-open per spec).
+ *
+ * The returned closure is memoized so the App API is called at most once
+ * per `createApp` lifetime (not per request).
+ */
+function resolveGetBotLogin(deps: AppDeps): (() => Promise<string>) | undefined {
+  // 1. Explicit override from caller.
+  if (deps.getBotLogin) return deps.getBotLogin;
+
+  // 2. Environment variable override.
+  const envLogin = typeof process !== 'undefined' ? process.env.GITHUB_BOT_LOGIN : undefined;
+  if (envLogin) return async () => envLogin;
+
+  // 3. Derive from App JWT via GET /app (slug + "[bot]").
+  if (deps.github?.appAuthClient) {
+    const authClient = deps.github.appAuthClient;
+    let cached: string | undefined;
+    return async () => {
+      if (cached) return cached;
+      // createAppJwt() returns a short-lived App JWT; we use it to call
+      // the GitHub API's GET /app endpoint which returns the App's slug.
+      // This is the canonical way to derive the bot login without
+      // hard-coding it in operator config.
+      const jwt = await authClient.createAppJwt();
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({ auth: jwt });
+      const response = await octokit.rest.apps.getAuthenticated();
+      // `response.data.slug` is the URL-safe App slug (e.g. "review-agent").
+      // The Apps API guarantees it is set for authenticated requests;
+      // `null` / `undefined` only occurs on older Octokit type stubs.
+      const appData = response.data;
+      const slug = (appData as { slug?: string | null } | null)?.slug ?? 'review-agent';
+      cached = `${slug}[bot]`;
+      return cached;
+    };
+  }
+
+  // 4. Guard disabled (fail-open).
+  return undefined;
+}
 
 /**
  * Bridges the SNS `MessageId` (the dedup key for the CodeCommit
@@ -202,6 +287,8 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
         return t !== undefined ? { dashboardToken: t } : {};
       })(),
       requireDashboardAuth: deps.api?.requireDashboardAuth ?? process.env.NODE_ENV === 'production',
+      // REVIEW_AGENT_MULTI_TENANT: caller wins; env fallback handled inside createApi.
+      ...(deps.api?.multiTenant !== undefined ? { multiTenant: deps.api.multiTenant } : {}),
       // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
       // /integrations/llm-keys routes can wrap/unwrap data keys per request.
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
@@ -217,11 +304,15 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
     async (c) => {
       const event = c.req.header('x-github-event') ?? '';
       const body = c.get('parsedBody');
+      // Resolve getBotLogin: deps override wins; fall back to env; then App JWT.
+      const resolvedGetBotLogin = resolveGetBotLogin(deps);
       const result = await handleWebhook(c, event as Parameters<typeof handleWebhook>[1], body, {
         queue: deps.queue,
         db: deps.db,
         ...(deps.now ? { now: deps.now } : {}),
         ...(deps.checkGithubFeedbackAuthz ? { checkAuthz: deps.checkGithubFeedbackAuthz } : {}),
+        ...(deps.handleConversation ? { handleConversation: deps.handleConversation } : {}),
+        ...(resolvedGetBotLogin ? { getBotLogin: resolvedGetBotLogin } : {}),
       });
       return c.json(result, 200);
     },

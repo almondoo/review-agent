@@ -1,4 +1,4 @@
-export { runReview } from './agent.js';
+export { DEFAULT_RULESET_CATEGORY, runReview } from './agent.js';
 export {
   type AutoFetchBudget,
   type AutoFetchedFile,
@@ -9,6 +9,14 @@ export {
   DEFAULT_AUTO_FETCH_BUDGET,
   type PathInstructionWithFetch,
 } from './auto-fetch.js';
+export {
+  type ConversationContext,
+  type ConversationReplyInput,
+  type ConversationReplyOutcome,
+  type ConversationRunnerDeps,
+  type ConversationTurn,
+  handleConversationReply,
+} from './conversation-runner.js';
 export {
   COORDINATION_MODES,
   type CoordinationDecision,
@@ -36,6 +44,7 @@ export {
   type FeedbackWriter,
   type FeedbackWriterOptions,
   type ReviewHistoryWriter,
+  type SuppressionOpts,
 } from './feedback-writer.js';
 export {
   applyRedactions,
@@ -113,6 +122,10 @@ export {
   type Tools,
 } from './tools.js';
 export type {
+  ConfigResolutionLog,
+  ConfigResolutionSource,
+  ExcludedFile,
+  ExclusionReport,
   Middleware,
   MiddlewareCtx,
   ReviewJob,

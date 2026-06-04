@@ -25,6 +25,95 @@ export function parseCommand(commentBody: string): string | null {
   return word.replace(/[^a-z]/g, '');
 }
 
+// ---------------------------------------------------------------------------
+// Slash command parser — #157 trigger control
+//
+// Supports four commands that may appear anywhere in a comment body:
+//
+//   /review           — force full re-review
+//   /review <path>    — partial re-run scoped to the given path glob(s)
+//   /skip             — pause auto-review on this PR
+//   /resume           — resume after a skip
+//
+// Design notes:
+//
+//   - All matching is case-insensitive.
+//   - `/review` takes an optional path argument (a single whitespace-
+//     delimited glob token). Additional tokens are ignored so natural
+//     language prose after the path does not break parsing.
+//   - Word-boundary check: the `/` must be at start-of-string or
+//     preceded by a whitespace character so embedded substrings
+//     (`pre/review`) do not match.
+//   - `/feedback` is NOT parsed here; `parseFeedbackCommand` handles it.
+//   - Returns `null` if no slash command is recognised so callers can
+//     fall through to the legacy `@review-agent` parser.
+// ---------------------------------------------------------------------------
+
+export type SlashCommandKind = 'review' | 'skip' | 'resume';
+
+export type SlashCommand =
+  | { readonly kind: 'review'; readonly pathScope?: string }
+  | { readonly kind: 'skip' }
+  | { readonly kind: 'resume' };
+
+const SLASH_COMMANDS: ReadonlySet<string> = new Set(['review', 'skip', 'resume']);
+
+/**
+ * Parse a slash command (`/review`, `/skip`, `/resume`) from a comment body.
+ *
+ * Returns a `SlashCommand` when recognised, or `null` when the body
+ * contains no supported slash command. Does **not** handle `/feedback`;
+ * pass the body to `parseFeedbackCommand` separately.
+ */
+export function parseSlashCommand(commentBody: string): SlashCommand | null {
+  const lower = commentBody.toLowerCase();
+
+  // Walk through the string looking for a `/` preceded by start-of-string
+  // or whitespace (word-boundary equivalent for `/`).
+  let searchFrom = 0;
+  while (searchFrom < lower.length) {
+    const slashIdx = lower.indexOf('/', searchFrom);
+    if (slashIdx < 0) break;
+
+    // Word-boundary check: the character immediately before `/` must be
+    // whitespace (or `/` must be at position 0).
+    if (slashIdx > 0) {
+      const prevCode = lower.charCodeAt(slashIdx - 1);
+      // 0x20=' ', 0x09='\t', 0x0a='\n', 0x0d='\r'
+      const isWhitespace =
+        prevCode === 0x20 || prevCode === 0x09 || prevCode === 0x0a || prevCode === 0x0d;
+      if (!isWhitespace) {
+        searchFrom = slashIdx + 1;
+        continue;
+      }
+    }
+
+    const after = lower.slice(slashIdx + 1);
+    const tokens = after.split(/\s+/);
+    const cmd = tokens[0] ?? '';
+
+    if (!SLASH_COMMANDS.has(cmd)) {
+      searchFrom = slashIdx + 1;
+      continue;
+    }
+
+    if (cmd === 'skip') return { kind: 'skip' };
+    if (cmd === 'resume') return { kind: 'resume' };
+
+    // cmd === 'review'
+    const pathArg = tokens[1];
+    // Accept a path argument only when it is non-empty and does not look
+    // like a prose word (heuristic: must contain at least one `/`, `*`,
+    // `?`, or `.` so plain words like "please" are ignored).
+    if (pathArg && /[/*.?]/.test(pathArg)) {
+      return { kind: 'review', pathScope: pathArg };
+    }
+    return { kind: 'review' };
+  }
+
+  return null;
+}
+
 /**
  * Parsed `/feedback ...` command shape — v1.2 #95.
  *

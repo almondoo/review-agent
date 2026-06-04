@@ -519,10 +519,8 @@ describe('runReviewCommand', () => {
   });
 
   it('applies env overrides (REVIEW_AGENT_LANGUAGE / _PROVIDER / _MODEL / _MAX_USD_PER_PR)', async () => {
-    // The `applyOverrides` helper has four `if (opts.env.X)` guards
-    // before the `mergeWithEnv` call. The happy-path tests don't supply
-    // any of those env keys, so each truthy arm is dead. Provide them
-    // all to drive every guard true.
+    // The env-override path inside resolveEffectiveConfig covers all four
+    // REVIEW_AGENT_* guards. Provide them all to drive every guard true.
     const io = recordingIo();
     const vcs = fakeVcs();
     const result = await runReviewCommand(io, {
@@ -544,5 +542,78 @@ describe('runReviewCommand', () => {
       createProvider: () => fakeProvider(),
     });
     expect(result.status).toBe('reviewed');
+  });
+
+  // AC1 + AC2 (issue #146): committed `.review-agent.yml` drives a full
+  // review run end-to-end, and the effective-config resolution is logged
+  // per-run to stderr so it is inspectable.
+
+  it('AC1: committed .review-agent.yml drives a full review run end-to-end', async () => {
+    // The YAML sets language, profile, and a cost cap — the runner uses
+    // these values, confirming the committed YAML is the authoritative
+    // source of truth for the run.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const yaml = 'language: ja-JP\nprofile: assertive\ncost:\n  max_usd_per_pr: 0.50\n';
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: '.review-agent.yml',
+      post: false,
+      env: baseEnv,
+      readFile: async () => yaml,
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider({ summary: 'YAML-driven' }),
+    });
+    expect(result.status).toBe('reviewed');
+    // Verify that the resolution log line appeared in stderr, confirming
+    // the committed YAML was the primary source (AC2: per-run inspectable).
+    const stderr = io.err.join('');
+    expect(stderr).toContain('config resolved:');
+    expect(stderr).toContain('primary=repo-yaml');
+  });
+
+  it('AC2: effective-config resolution is logged to stderr per run (defaults path)', async () => {
+    // When no YAML is present the resolution log must still appear in stderr,
+    // confirming per-run inspectability regardless of config source.
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    const result = await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      env: baseEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+    const stderr = io.err.join('');
+    expect(stderr).toContain('config resolved:');
+    expect(stderr).toContain('primary=default');
+  });
+
+  it('AC2: resolution log records env=true when REVIEW_AGENT_* vars are set', async () => {
+    const io = recordingIo();
+    const vcs = fakeVcs();
+    await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: false,
+      env: {
+        ...baseEnv,
+        REVIEW_AGENT_LANGUAGE: 'fr-FR',
+      } as NodeJS.ProcessEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(io.err.join('')).toContain('env=true');
   });
 });

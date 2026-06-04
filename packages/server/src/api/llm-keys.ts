@@ -6,8 +6,14 @@
  * bearerTokenAuth in createApi) authorises writes to ANY installationId. There is
  * no per-installation ownership mapping; the operator is trusted for all tenants.
  * Per-installation authz is a deliberate future/separate concern — fail-closed
- * precedent applies (§22). RLS is still enforced via withTenant so the DB layer
- * bounds every query to the declared installationId.
+ * precedent applies (§22 / spec §8.2.4 open question b). RLS is still enforced
+ * via withTenant so the DB layer bounds every query to the declared installationId.
+ *
+ * A fail-closed `REVIEW_AGENT_MULTI_TENANT` interlock now guards all four routes:
+ * when set to true they return 501 before any withTenant call or DB write, making
+ * it structurally impossible to ship the per-installation IDOR in multi-tenant
+ * mode until per-installation authz lands. See
+ * docs/security/multi-tenant-authz.md and issue #132.
  *
  * KMS key ID comes from server config (REVIEW_AGENT_BYOK_KMS_KEY_ID env var),
  * never from the request body.
@@ -16,6 +22,7 @@ import { BYOK_PROVIDERS, type BYOKProvider, type KmsClient } from '@review-agent
 import { type AuditAppender, createByokStore, type DbClient, withTenant } from '@review-agent/db';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { multiTenantGuard } from './middleware/multi-tenant-guard.js';
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -66,6 +73,12 @@ export type LlmKeysDeps = {
    * Must never be supplied by the request client.
    */
   readonly kmsKeyId: string;
+  /**
+   * Fail-closed multi-tenant guard flag. When true all four routes return 501
+   * before any withTenant call or DB write. See
+   * docs/security/multi-tenant-authz.md and issue #132.
+   */
+  readonly multiTenant?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -74,6 +87,10 @@ export type LlmKeysDeps = {
 
 export function createLlmKeysRouter(deps: LlmKeysDeps): Hono {
   const app = new Hono();
+
+  // Fail-closed guard: when REVIEW_AGENT_MULTI_TENANT=true all four routes
+  // return 501 before any withTenant call or DB write (issue #132).
+  app.use('*', multiTenantGuard({ multiTenant: deps.multiTenant ?? false }));
 
   /**
    * GET /api/integrations/llm-keys?installationId=<positive int>

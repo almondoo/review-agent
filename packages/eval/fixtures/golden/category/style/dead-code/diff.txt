@@ -1,0 +1,19 @@
+--- a/src/util/formatter.ts
++++ b/src/util/formatter.ts
+@@ -1,14 +1,22 @@
+ export function formatCurrency(amount: number, currency: string): string {
+   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(amount);
+ }
++
++function legacyFormat(amount: number): string {
++  return `$${amount.toFixed(2)}`;
++}
++
++// TODO: remove after migration
++export function formatDate(date: Date): string {
++  return date.toISOString().slice(0, 10);
++}
++
++function unusedHelper(x: string): string {
++  return x.trim().toLowerCase();
++}

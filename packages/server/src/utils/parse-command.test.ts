@@ -4,6 +4,7 @@ import {
   FEEDBACK_COMMAND_PREFIX,
   parseCommand,
   parseFeedbackCommand,
+  parseSlashCommand,
 } from './parse-command.js';
 
 describe('parseCommand', () => {
@@ -137,5 +138,99 @@ describe('parseFeedbackCommand', () => {
 
   it('does not match /feedback when preceded by an underscore (word boundary)', () => {
     expect(parseFeedbackCommand('x_/feedback accept')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseSlashCommand — #157 trigger control
+// ---------------------------------------------------------------------------
+
+describe('parseSlashCommand', () => {
+  it('returns null when body has no slash command', () => {
+    expect(parseSlashCommand('')).toBeNull();
+    expect(parseSlashCommand('hello world')).toBeNull();
+    expect(parseSlashCommand('@review-agent review')).toBeNull();
+    expect(parseSlashCommand('/feedback accept')).toBeNull();
+  });
+
+  it('parses /review (no path)', () => {
+    expect(parseSlashCommand('/review')).toEqual({ kind: 'review' });
+  });
+
+  it('parses /review at start of body', () => {
+    expect(parseSlashCommand('/review please')).toEqual({ kind: 'review' });
+  });
+
+  it('parses /review <path glob> with a path containing *', () => {
+    expect(parseSlashCommand('/review src/**')).toEqual({ kind: 'review', pathScope: 'src/**' });
+  });
+
+  it('parses /review <path> with a dot-extension path', () => {
+    expect(parseSlashCommand('/review packages/core/src/queue.ts')).toEqual({
+      kind: 'review',
+      pathScope: 'packages/core/src/queue.ts',
+    });
+  });
+
+  it('ignores plain prose word after /review (no path heuristic)', () => {
+    expect(parseSlashCommand('/review please check this')).toEqual({ kind: 'review' });
+    expect(parseSlashCommand('/review ok')).toEqual({ kind: 'review' });
+  });
+
+  it('accepts /review path with slash separator', () => {
+    expect(parseSlashCommand('/review packages/server/src/index.ts')).toEqual({
+      kind: 'review',
+      pathScope: 'packages/server/src/index.ts',
+    });
+  });
+
+  it('accepts /review path with ? glob character', () => {
+    expect(parseSlashCommand('/review src/?.ts')).toEqual({
+      kind: 'review',
+      pathScope: 'src/?.ts',
+    });
+  });
+
+  it('parses /skip', () => {
+    expect(parseSlashCommand('/skip')).toEqual({ kind: 'skip' });
+  });
+
+  it('parses /resume', () => {
+    expect(parseSlashCommand('/resume')).toEqual({ kind: 'resume' });
+  });
+
+  it('is case-insensitive (command token)', () => {
+    expect(parseSlashCommand('/REVIEW')).toEqual({ kind: 'review' });
+    expect(parseSlashCommand('/Skip')).toEqual({ kind: 'skip' });
+    expect(parseSlashCommand('/RESUME')).toEqual({ kind: 'resume' });
+  });
+
+  it('matches when slash command appears mid-body after whitespace', () => {
+    expect(parseSlashCommand('hey there, /review please')).toEqual({ kind: 'review' });
+    expect(parseSlashCommand('please /skip for now')).toEqual({ kind: 'skip' });
+  });
+
+  it('does not match when slash appears inside a word (no word boundary)', () => {
+    // e.g. a URL path or prefix word — "pre/review" must NOT match
+    expect(parseSlashCommand('pre/review')).toBeNull();
+    expect(parseSlashCommand('path/skip stuff')).toBeNull();
+  });
+
+  it('matches /review after a newline', () => {
+    expect(parseSlashCommand('some comment\n/review src/**')).toEqual({
+      kind: 'review',
+      pathScope: 'src/**',
+    });
+  });
+
+  it('returns the first recognised command when multiple appear', () => {
+    // First slash command wins.
+    expect(parseSlashCommand('/skip /review')).toEqual({ kind: 'skip' });
+  });
+
+  it('returns null for an unknown /command', () => {
+    expect(parseSlashCommand('/help')).toBeNull();
+    expect(parseSlashCommand('/pause')).toBeNull();
+    expect(parseSlashCommand('/ignore src/**')).toBeNull();
   });
 });

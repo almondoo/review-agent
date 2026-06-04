@@ -1,4 +1,5 @@
 import {
+  type CATEGORIES,
   type Confidence,
   type InlineComment,
   REVIEW_ABORT_REASONS,
@@ -6,11 +7,28 @@ import {
   type ReviewAbortReason,
   type ReviewEvent,
   type ReviewState,
+  type SEVERITIES,
   type Severity,
   type Side,
 } from '@review-agent/core';
 import type { LlmProvider, ReviewInput, ReviewOutput } from '@review-agent/llm';
 import type { GitleaksFinding } from './gitleaks.js';
+
+/**
+ * Mirrors `ConfigResolutionLog` from `@review-agent/config` (issue #146).
+ * Declared here so `@review-agent/runner` does not need to depend on the
+ * config package — TypeScript structural typing ensures the two types are
+ * assignment-compatible. The canonical definition (with full JSDoc) lives
+ * in `packages/config/src/loader.ts`.
+ */
+export type ConfigResolutionSource = 'repo-yaml' | 'org-yaml' | 'env' | 'default';
+
+export type ConfigResolutionLog = {
+  readonly primarySource: ConfigResolutionSource;
+  readonly orgYamlLoaded: boolean;
+  readonly envApplied: boolean;
+  readonly sections: Readonly<Record<string, ConfigResolutionSource>>;
+};
 
 export type ReviewJob = {
   readonly jobId: string;
@@ -199,6 +217,51 @@ export type ReviewJob = {
     readonly owner: string;
     readonly repo: string;
   };
+  /**
+   * Per-category ruleset configuration. Declares which categories are
+   * active and what the minimum severity floor is for each. The runner
+   * applies this filter after dedup and min_confidence:
+   *
+   *   1. Findings with no category are assigned to `DEFAULT_RULESET_CATEGORY`
+   *      so they are always subject to a deterministic policy (never silently
+   *      dropped without a defined rule).
+   *   2. Findings whose effective category has `enabled: false` are suppressed.
+   *   3. Findings whose severity rank is strictly below `min_severity` for
+   *      their effective category are suppressed.
+   *
+   * Optional for back-compat — callers that do not pass `ruleset` get the
+   * no-op default (all categories enabled, min_severity='info' which is rank 0
+   * and therefore never filters anything out).
+   */
+  readonly ruleset?: Readonly<
+    Partial<
+      Record<
+        (typeof CATEGORIES)[number],
+        { readonly enabled: boolean; readonly min_severity: (typeof SEVERITIES)[number] }
+      >
+    >
+  >;
+  /**
+   * Inspectable record of which config source (repo YAML, org YAML,
+   * env, or defaults) produced the effective config for this run.
+   * Optional for back-compat — callers that do not use
+   * `resolveEffectiveConfig` (issue #146) will not supply this field.
+   *
+   * When present, the runner fires `deps.onConfigResolution(log)` at
+   * the start of the review so operators can log or record the
+   * resolution for audit / reproducibility purposes.
+   */
+  readonly resolutionLog?: ConfigResolutionLog;
+  /**
+   * Maximum number of agent steps (LLM round-trips including tool-call
+   * round-trips) for this review. Maps to `stopWhen: stepCountIs(N)` in
+   * the AI SDK's `generateText` call. When absent, the runner falls back
+   * to `MAX_TOOL_CALLS` (20) — preserving the hard-coded v0.x behaviour
+   * for callers that pre-date this field. Configured via
+   * `.review-agent.yml` `reviews.max_steps` (or `REVIEW_AGENT_MAX_STEPS`
+   * env var when the YAML key is absent). Bounds: 1–50.
+   */
+  readonly maxSteps?: number;
 };
 
 export type FinalizedComment = InlineComment & {
@@ -235,6 +298,40 @@ export type FinalizedComment = InlineComment & {
  */
 export { REVIEW_ABORT_REASONS, type ReviewAbortReason };
 
+/**
+ * A file excluded from the review run before the LLM was called.
+ * Populated by the cap pipeline in `runReview` for path-filter matches,
+ * max_files overflows, and max_diff_lines overflows.
+ */
+export type ExcludedFile = {
+  readonly path: string;
+  /**
+   * Human-readable reason for the exclusion. One of:
+   * - `'path_filter'`       — matched a `reviews.path_filters` glob.
+   * - `'max_files_cap'`     — diff exceeded `reviews.max_files`; this
+   *                           file was part of the overflow.
+   * - `'max_diff_lines_cap'`— diff exceeded `reviews.max_diff_lines`;
+   *                           this file was part of the overflow.
+   */
+  readonly reason: 'path_filter' | 'max_files_cap' | 'max_diff_lines_cap';
+};
+
+/**
+ * Report of all files that were excluded before the LLM was called.
+ * Attached to `RunnerResult.exclusionReport` when at least one file
+ * was excluded (path filter hit or cap exceeded). Optional for
+ * back-compat — callers that pre-date #145 will not supply this field.
+ *
+ * The `capsApplied` field names which hard caps fired during this run:
+ * - `max_files`      — the post-path-filter file count exceeded `maxFiles`.
+ * - `max_diff_lines` — the post-path-filter line count exceeded `maxDiffLines`.
+ * Both may be set simultaneously when both thresholds are exceeded.
+ */
+export type ExclusionReport = {
+  readonly excludedFiles: ReadonlyArray<ExcludedFile>;
+  readonly capsApplied: ReadonlyArray<'max_files' | 'max_diff_lines'>;
+};
+
 export type RunnerResult = {
   readonly comments: ReadonlyArray<InlineComment>;
   readonly summary: string;
@@ -253,6 +350,23 @@ export type RunnerResult = {
    */
   readonly droppedByFeedback?: number;
   /**
+   * Comments suppressed by the `job.ruleset` filter (category disabled
+   * or severity below the category's `min_severity` floor). Separated
+   * from `droppedDuplicates` so the eval harness can measure ruleset
+   * effectiveness independently from dedup. Zero when `job.ruleset` is
+   * absent or the ruleset does not filter any comments.
+   */
+  readonly droppedByRuleset: number;
+  /**
+   * Comments skipped because their fingerprint matched an active
+   * `suppression_rule` row in `review_history` (#155). Reported in the
+   * run summary so operators can see the suppression effect. Optional
+   * for back-compat — callers that do not wire a `suppressionLoader`
+   * receive `undefined` rather than zero so eval recorders can tell
+   * "feature off" from "feature on, no suppressions".
+   */
+  readonly droppedBySuppression?: number;
+  /**
    * Number of tool calls (`read_file` / `glob` / `grep`) that the
    * LLM made during this review. Surfaced for cost-guard accounting
    * (§spec 6.2) and for the eval harness so regressions in tool use
@@ -268,6 +382,15 @@ export type RunnerResult = {
    * underlying `pulls.createReview` event.
    */
   readonly reviewEvent: ReviewEvent;
+  /**
+   * Files excluded before the LLM was called — path-filter matches and
+   * max_files / max_diff_lines cap overflows. Present whenever at least
+   * one file was excluded. Optional for back-compat: callers that pre-date
+   * #145 will not supply this field and receive `undefined`. Consumers
+   * (dry-run command, eval harness) should treat `undefined` as "no
+   * exclusions recorded" rather than "no exclusions occurred".
+   */
+  readonly exclusionReport?: ExclusionReport;
   /**
    * Set when the agent loop gracefully aborted (spec §7.3 #4): the
    * LLM produced output that failed the response schema twice — once
@@ -297,6 +420,16 @@ export type RunnerResult = {
 };
 
 export type RunReviewDeps = {
+  /**
+   * Fired when `job.resolutionLog` is present, at the very start of
+   * `runReview`, before any LLM call or gitleaks scan. Use this hook
+   * to log or persist the effective-config resolution for audit /
+   * reproducibility (issue #146 AC2). The runner does NOT call
+   * `console.log` directly — all structured output flows through this
+   * injected hook so callers control the destination (OTel, structured
+   * logger, test spy, etc.).
+   */
+  readonly onConfigResolution?: (log: ConfigResolutionLog) => void;
   readonly fileReader?: (path: string) => Promise<string>;
   readonly fingerprintComment?: (c: {
     readonly path: string;
@@ -365,6 +498,17 @@ export type RunReviewDeps = {
       readonly factText: string;
     }>
   >;
+  /**
+   * #155 false-positive suppression: loads active `suppression_rule` rows
+   * for the PR's repo. The runner extracts fingerprints from the `factText`
+   * values and drops any finding whose fingerprint matches, before the
+   * findings reach the output scan or `postReview`. When absent, suppression
+   * is disabled for this run (back-compat).
+   */
+  readonly suppressionLoader?: (q: {
+    readonly installationId: bigint;
+    readonly repo: string;
+  }) => Promise<ReadonlyArray<{ readonly factText: string }>>;
 };
 
 export type Middleware = (

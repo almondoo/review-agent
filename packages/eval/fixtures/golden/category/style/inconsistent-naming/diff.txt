@@ -1,0 +1,14 @@
+--- a/src/models/order.ts
++++ b/src/models/order.ts
+@@ -1,10 +1,10 @@
+ export type Order = {
+   id: string;
+-  createdAt: Date;
+-  updatedAt: Date;
+-  totalAmount: number;
+-  lineItems: LineItem[];
++  created_at: Date;
++  updated_at: Date;
++  TotalAmount: number;
++  LineItems: LineItem[];
+ };

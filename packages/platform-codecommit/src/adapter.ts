@@ -48,6 +48,14 @@ export const CODECOMMIT_CAPABILITIES: VcsCapabilities = {
   stateComment: 'postgres-only',
   approvalEvent: 'codecommit',
   commitMessages: false,
+  /**
+   * CodeCommit does not have a native thread-reply API equivalent to
+   * GitHub's `pulls.createReplyForReviewComment`. All `PostCommentForPullRequest`
+   * calls start a new top-level thread; there is no `PostCommentReply` API.
+   * Callers MUST check `capabilities.conversationReply` before invoking
+   * `postReply` and skip the conversational flow for CodeCommit installations.
+   */
+  conversationReply: false,
 };
 
 // CodeCommit identifies a PR by a string `pullRequestId` that is a positive
@@ -351,6 +359,17 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
   const getStateComment = async (_ref: PRRef): Promise<ReviewState | null> => null;
   const upsertStateComment = async (_ref: PRRef, _state: ReviewState): Promise<void> => undefined;
 
+  // CodeCommit does not have a native thread-reply API (#149).
+  // `capabilities.conversationReply = false` signals that this adapter
+  // cannot post threaded replies. Callers MUST guard on the capability
+  // before invoking `postReply`; this no-op ensures the interface is
+  // satisfied for compile-time completeness.
+  const postReply = async (
+    _ref: PRRef,
+    _commentId: string | number,
+    _body: string,
+  ): Promise<void> => undefined;
+
   return {
     platform: 'codecommit',
     capabilities: CODECOMMIT_CAPABILITIES,
@@ -360,6 +379,7 @@ export function createCodecommitVCS(opts: CodeCommitVCSOptions = {}): VCS {
     cloneRepo,
     postReview,
     postSummary,
+    postReply,
     getExistingComments,
     getStateComment,
     upsertStateComment,

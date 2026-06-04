@@ -1,0 +1,21 @@
+{
+  "review_category": "tests",
+  "bug_class": "missing-error-case",
+  "language": "TypeScript",
+  "expected_findings": [
+    {
+      "id": "missing-error-case-create-user",
+      "must_contain_any": [
+        "error case",
+        "error path",
+        "negative test",
+        "throws",
+        "rejection",
+        "invalid",
+        "duplicate"
+      ],
+      "severity": "minor"
+    }
+  ],
+  "rationale": "Removed two error-path tests: duplicate email and invalid email format. The happy-path test remaining gives false confidence — these are the cases most likely to expose validation regressions."
+}

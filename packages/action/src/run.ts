@@ -1,11 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import {
-  type Config,
-  defaultConfig,
-  KNOWN_REVIEW_BOT_LOGINS,
-  loadConfigFromYaml,
-  mergeWithEnv,
-} from '@review-agent/config';
+import { type Config, KNOWN_REVIEW_BOT_LOGINS, resolveEffectiveConfig } from '@review-agent/config';
 import {
   computeDiffStrategy as defaultComputeDiffStrategy,
   type PR,
@@ -160,9 +154,11 @@ export async function runAction(
     costCapUsd: inputs.costCapUsd,
     minConfidence: config.reviews.min_confidence,
     requestChangesOn: config.reviews.request_changes_on,
+    ruleset: config.ruleset,
     pathFilters: config.reviews.path_filters,
     maxFiles: config.reviews.max_files,
     maxDiffLines: config.reviews.max_diff_lines,
+    maxSteps: config.reviews.max_steps,
     privacy: {
       allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
       denyPaths: config.privacy.deny_paths,
@@ -234,25 +230,21 @@ async function loadConfigOrDefault(
   readFn: (p: string, enc: 'utf8') => Promise<string>,
   env: NodeJS.ProcessEnv,
 ): Promise<Config> {
-  let yamlText: string | null = null;
+  let repoYaml: string | null = null;
   try {
-    yamlText = await readFn(configPath, 'utf8');
+    repoYaml = await readFn(configPath, 'utf8');
   } catch {
-    yamlText = null;
+    repoYaml = null;
   }
-  const base = yamlText === null ? defaultConfig() : loadConfigFromYaml(yamlText);
-  const overrides: {
-    REVIEW_AGENT_LANGUAGE?: string;
-    REVIEW_AGENT_PROVIDER?: string;
-    REVIEW_AGENT_MODEL?: string;
-    REVIEW_AGENT_MAX_USD_PER_PR?: string;
-  } = {};
+  const overrides: Parameters<typeof resolveEffectiveConfig>[0]['env'] = {};
   if (env.REVIEW_AGENT_LANGUAGE) overrides.REVIEW_AGENT_LANGUAGE = env.REVIEW_AGENT_LANGUAGE;
   if (env.REVIEW_AGENT_PROVIDER) overrides.REVIEW_AGENT_PROVIDER = env.REVIEW_AGENT_PROVIDER;
   if (env.REVIEW_AGENT_MODEL) overrides.REVIEW_AGENT_MODEL = env.REVIEW_AGENT_MODEL;
   if (env.REVIEW_AGENT_MAX_USD_PER_PR)
     overrides.REVIEW_AGENT_MAX_USD_PER_PR = env.REVIEW_AGENT_MAX_USD_PER_PR;
-  return mergeWithEnv(base, overrides);
+  if (env.REVIEW_AGENT_MAX_STEPS) overrides.REVIEW_AGENT_MAX_STEPS = env.REVIEW_AGENT_MAX_STEPS;
+  const { config } = resolveEffectiveConfig({ repoYaml, env: overrides });
+  return config;
 }
 
 /**

@@ -123,7 +123,20 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     profile: repoConfig.profile,
     provider: repoConfig.provider ?? orgConfig.provider,
     reviews: {
-      auto_review: { ...orgConfig.reviews.auto_review, ...repoConfig.reviews.auto_review },
+      auto_review: {
+        ...orgConfig.reviews.auto_review,
+        ...repoConfig.reviews.auto_review,
+        // List fields inside auto_review are concatenated (org first, then
+        // repo) so operators can add labels at org level that repos extend.
+        trigger_labels: dedup([
+          ...orgConfig.reviews.auto_review.trigger_labels,
+          ...repoConfig.reviews.auto_review.trigger_labels,
+        ]),
+        skip_labels: dedup([
+          ...orgConfig.reviews.auto_review.skip_labels,
+          ...repoConfig.reviews.auto_review.skip_labels,
+        ]),
+      },
       path_filters: dedup([...orgConfig.reviews.path_filters, ...repoConfig.reviews.path_filters]),
       path_instructions: [
         ...orgConfig.reviews.path_instructions,
@@ -131,6 +144,11 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
       ],
       max_files: repoConfig.reviews.max_files,
       max_diff_lines: repoConfig.reviews.max_diff_lines,
+      // max_steps: repo wins (scalar override, same rule as max_files /
+      // max_diff_lines). Org sets a default; repo can tighten or widen it.
+      max_steps: repoConfig.reviews.max_steps,
+      // max_conversation_turns: repo wins (scalar override, same rule).
+      max_conversation_turns: repoConfig.reviews.max_conversation_turns,
       ignore_authors: dedup([
         ...orgConfig.reviews.ignore_authors,
         ...repoConfig.reviews.ignore_authors,
@@ -151,6 +169,14 @@ export function mergeOrgIntoRepo(orgConfig: Config, repoConfig: Config): Config 
     repo: { ...orgConfig.repo, ...repoConfig.repo },
     skills: [...orgConfig.skills, ...repoConfig.skills],
     incremental: { ...orgConfig.incremental, ...repoConfig.incremental },
+    // Ruleset merge: org provides the base per-category entries; repo
+    // overrides on a per-category basis (repo wins per the §10.2 "repo
+    // wins on scalars / nested objects" rule). Categories present only
+    // in org are inherited; categories present in repo shadow the org
+    // entry for that key entirely.
+    ruleset: { ...orgConfig.ruleset, ...repoConfig.ruleset },
+    // Feedback tuning: object merge, repo wins (scalar suppress_after).
+    feedback: { ...orgConfig.feedback, ...repoConfig.feedback },
   };
   // Run through Zod again so the merged object is structurally valid
   // (in particular, lists of `path_instructions` are revalidated).

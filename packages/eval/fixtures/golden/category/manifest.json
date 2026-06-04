@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": 1,
+  "description": "Category-tagged golden fixture index for the review-quality regression benchmark (#143). Each fixture carries expected_findings per review_category. The regression gate (pnpm eval:gate) computes precision and recall per category against this manifest and compares to category-baseline.json.",
+  "fixtures": [
+    {
+      "id": "security/hardcoded-secret",
+      "review_category": "security"
+    },
+    {
+      "id": "security/path-traversal",
+      "review_category": "security"
+    },
+    {
+      "id": "security/insecure-random",
+      "review_category": "security"
+    },
+    {
+      "id": "performance/n-plus-one-query",
+      "review_category": "performance"
+    },
+    {
+      "id": "performance/unbounded-loop",
+      "review_category": "performance"
+    },
+    {
+      "id": "performance/memory-cache-leak",
+      "review_category": "performance"
+    },
+    {
+      "id": "style/dead-code",
+      "review_category": "style"
+    },
+    {
+      "id": "style/magic-string",
+      "review_category": "style"
+    },
+    {
+      "id": "style/inconsistent-naming",
+      "review_category": "style"
+    },
+    {
+      "id": "tests/missing-error-case",
+      "review_category": "tests"
+    },
+    {
+      "id": "tests/no-assertion",
+      "review_category": "tests"
+    },
+    {
+      "id": "tests/test-skipped",
+      "review_category": "tests"
+    },
+    {
+      "id": "correctness/wrong-operator",
+      "review_category": "correctness"
+    },
+    {
+      "id": "correctness/missing-return",
+      "review_category": "correctness"
+    },
+    {
+      "id": "correctness/boundary-condition",
+      "review_category": "correctness"
+    }
+  ]
+}

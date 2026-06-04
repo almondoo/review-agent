@@ -1,0 +1,13 @@
+--- a/src/api/files.ts
++++ b/src/api/files.ts
+@@ -1,9 +1,7 @@
+ import { readFileSync } from 'node:fs';
+ import { join } from 'node:path';
+
+-const BASE_DIR = '/var/app/uploads';
+-
+ export function serveFile(req: { filename: string }): Buffer {
+-  const safe = req.filename.replace(/\.\.\//g, '');
+-  return readFileSync(join(BASE_DIR, safe));
++  return readFileSync(join('/var/app/uploads', req.filename));
+ }

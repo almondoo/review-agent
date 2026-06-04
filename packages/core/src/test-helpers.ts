@@ -25,6 +25,7 @@ export const DEFAULT_FAKE_CAPABILITIES: VcsCapabilities = {
   stateComment: 'native',
   approvalEvent: 'github',
   commitMessages: true,
+  conversationReply: true,
 };
 
 /**
@@ -68,6 +69,8 @@ export function createFakeVCS(overrides: Partial<VCS> = {}): VCS {
     postSummary: async (_ref: PRRef, _body: string): Promise<{ commentId: string }> => ({
       commentId: '',
     }),
+    postReply: async (_ref: PRRef, _commentId: string | number, _body: string): Promise<void> =>
+      undefined,
     getExistingComments: async (_ref: PRRef): Promise<ReadonlyArray<ExistingComment>> => [],
     getStateComment: async (_ref: PRRef): Promise<ReviewState | null> => null,
     upsertStateComment: async (_ref: PRRef, _state: ReviewState): Promise<void> => undefined,
@@ -94,13 +97,15 @@ export function createFakeVcsReader(overrides: Partial<VcsReader> = {}): VcsRead
 
 /**
  * Build a fake write surface ({@link VcsWriter}). The default returns
- * a stable `commentId: ''` from `postSummary` and a no-op `postReview`.
+ * a stable `commentId: ''` from `postSummary`, a no-op `postReview`,
+ * and a no-op `postReply`.
  */
 export function createFakeVcsWriter(overrides: Partial<VcsWriter> = {}): VcsWriter {
   const full = createFakeVCS();
   return {
     postReview: overrides.postReview ?? full.postReview,
     postSummary: overrides.postSummary ?? full.postSummary,
+    postReply: overrides.postReply ?? full.postReply,
   };
 }
 

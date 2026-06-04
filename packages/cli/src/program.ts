@@ -1,8 +1,10 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { auditExportCommand } from './commands/audit-export.js';
 import { auditPruneCommand } from './commands/audit-prune.js';
+import { runDryRunCommand } from './commands/dry-run.js';
 import { runEvalCommand } from './commands/eval.js';
 import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
+import { listPresetsCommand } from './commands/presets.js';
 import {
   recoverFeedbackHistoryCommand,
   recoverReviewEvalEventsCommand,
@@ -11,6 +13,8 @@ import {
 import { runReviewCommand } from './commands/review.js';
 import { printSchemaCommand } from './commands/schema.js';
 import { setupWorkspaceCommand } from './commands/setup-workspace.js';
+import { suppressionListCommand } from './commands/suppression-list.js';
+import { suppressionRemoveCommand } from './commands/suppression-remove.js';
 import { validateConfigCommand } from './commands/validate.js';
 import { defaultIo, type ProgramIo } from './io.js';
 
@@ -63,6 +67,35 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'reviewed' || result.status === 'skipped' ? 0 : 1);
     });
 
+  program
+    .command('dry-run')
+    .description(
+      'Preview effective config and optionally run the review pipeline without posting to the PR.',
+    )
+    .option('--config <path>', 'path to .review-agent.yml', '.review-agent.yml')
+    .option(
+      '--pr <owner/repo#number>',
+      "run the full review pipeline against this PR (no-post); format: 'owner/repo#<n>'",
+    )
+    .addOption(
+      new Option('--platform <platform>', 'VCS platform (default: github)')
+        .choices([...PLATFORMS])
+        .default('github'),
+    )
+    .option('--lang <code>', 'override output language (BCP 47)')
+    .addOption(new Option('--profile <profile>', 'override review profile').choices([...PROFILES]))
+    .action(async (opts: DryRunCliOpts) => {
+      const result = await runDryRunCommand(io, {
+        configPath: opts.config,
+        ...(opts.pr !== undefined ? { pr: opts.pr } : {}),
+        platform: opts.platform,
+        ...(opts.lang ? { language: opts.lang } : {}),
+        ...(opts.profile ? { profile: opts.profile } : {}),
+        env,
+      });
+      io.exit(result.status === 'config_only' || result.status === 'reviewed' ? 0 : 1);
+    });
+
   const config = program.command('config').description('Inspect / validate config.');
 
   config
@@ -79,6 +112,16 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .description('Print the JSON Schema for `.review-agent.yml` to stdout.')
     .action(() => {
       printSchemaCommand(io);
+      io.exit(0);
+    });
+
+  const presets = config.command('presets').description('Bundled preset helpers.');
+
+  presets
+    .command('list')
+    .description('List all bundled first-party preset names.')
+    .action(() => {
+      listPresetsCommand(io);
       io.exit(0);
     });
 
@@ -337,6 +380,67 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       io.exit(result.status === 'partial' ? 1 : 0);
     });
 
+  const suppression = program
+    .command('suppression')
+    .description(
+      'Inspect and manage false-positive suppression rules (#155). ' +
+        'Suppression rules are created automatically when the 👎 rejection threshold ' +
+        '(`feedback.suppress_after`, default 3) is crossed for a finding fingerprint. ' +
+        'Rules expire after 180 days (same TTL as all review_history rows).',
+    );
+
+  suppression
+    .command('list')
+    .description(
+      'List all non-expired suppression rules for a repo. ' +
+        'Each rule shows an ID, fingerprint, created date, and expiry date.',
+    )
+    .requiredOption(
+      '--installation-id <id>',
+      'GitHub App installation ID (or numeric account ID for CodeCommit)',
+      (v) => BigInt(v),
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .action(async (opts: SuppressionListCliOpts) => {
+      const result = await suppressionListCommand(io, {
+        installationId: opts.installationId,
+        repo: opts.repo,
+        env,
+      });
+      // exit-0 fires on 'ok' — both paths tested directly on
+      // suppressionListCommand; reaching them through parseAsync requires
+      // injecting createDb which the program-level surface does not expose.
+      /* v8 ignore next */
+      io.exit(result.status === 'ok' ? 0 : 1);
+    });
+
+  suppression
+    .command('remove')
+    .description(
+      'Remove a suppression rule by its ID (from `suppression list`). ' +
+        'The finding will reappear on the next review run.',
+    )
+    .requiredOption(
+      '--installation-id <id>',
+      'GitHub App installation ID (or numeric account ID for CodeCommit)',
+      (v) => BigInt(v),
+    )
+    .requiredOption('--repo <owner/repo>', 'repository in `owner/name` format')
+    .requiredOption('--rule-id <id>', 'review_history.id of the suppression rule', (v) => BigInt(v))
+    .action(async (opts: SuppressionRemoveCliOpts) => {
+      const result = await suppressionRemoveCommand(io, {
+        installationId: opts.installationId,
+        repo: opts.repo,
+        ruleId: opts.ruleId,
+        env,
+      });
+      // exit-0 arm fires on 'ok' / 'not_found'. Both tested directly on
+      // suppressionRemoveCommand; reaching them through parseAsync needs an
+      // injected createDb seam that the program-level surface lacks.
+      /* v8 ignore next */
+      io.exit(result.status === 'config_error' ? 1 : 0);
+    });
+
   program.exitOverride();
   return program;
 }
@@ -369,6 +473,14 @@ type ReviewCliOpts = {
   profile?: (typeof PROFILES)[number];
   costCapUsd?: number;
   post?: boolean;
+};
+
+type DryRunCliOpts = {
+  config: string;
+  pr?: string;
+  platform: (typeof PLATFORMS)[number];
+  lang?: string;
+  profile?: (typeof PROFILES)[number];
 };
 
 type EvalCliOpts = {
@@ -408,6 +520,17 @@ type FeedbackBackfillCliOpts = {
   dryRun?: boolean;
   rate?: number;
   botLogin?: string;
+};
+
+type SuppressionListCliOpts = {
+  installationId: bigint;
+  repo: string;
+};
+
+type SuppressionRemoveCliOpts = {
+  installationId: bigint;
+  repo: string;
+  ruleId: bigint;
 };
 
 export type { ProgramIo } from './io.js';

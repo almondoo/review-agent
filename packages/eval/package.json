@@ -22,7 +22,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "validate:red-team": "tsx scripts/red-team-validate.ts",
     "validate:golden": "tsx scripts/golden-validate.ts",
-    "validate:severity-consistency": "tsx scripts/severity-consistency-validate.ts"
+    "validate:severity-consistency": "tsx scripts/severity-consistency-validate.ts",
+    "eval:gate": "tsx scripts/review-category-gate.ts",
+    "eval:baseline": "tsx scripts/review-category-baseline.ts"
   },
   "dependencies": {
     "@review-agent/db": "workspace:*",

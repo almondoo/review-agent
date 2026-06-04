@@ -9,11 +9,15 @@
  * Spec §8.2.4 (accessible repos API), §8.2.5 (bulk repo registration),
  * §16.1 (RLS, withTenant for INSERT).
  *
- * NOTE (spec §8.2.4 open question b / issue #127 notes):
+ * NOTE (spec §8.2.4 open question b / issue #132):
  *   Per-installation authorization gap: in the current single-tenant model,
  *   any authenticated dashboard user can enumerate repos for an arbitrary
- *   installationId. Accepted as a known gap for v0.x (single-tenant).
- *   A follow-up issue will add ownership validation before multi-tenant GA.
+ *   installationId. Accepted as a known gap for single-operator deployments.
+ *   A fail-closed `REVIEW_AGENT_MULTI_TENANT` interlock now guards these
+ *   endpoints: when set to true they return 501 before any token mint or DB
+ *   write, making it structurally impossible to ship the IDOR in multi-tenant
+ *   mode until per-installation authz lands. See
+ *   docs/security/multi-tenant-authz.md and issue #132.
  */
 import { githubInstallations, repos } from '@review-agent/core/db';
 import type { DbClient } from '@review-agent/db';
@@ -27,6 +31,7 @@ import { listInstallationRepos } from '@review-agent/platform-github';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { multiTenantGuard } from './middleware/multi-tenant-guard.js';
 
 // ---------------------------------------------------------------------------
 // Deps
@@ -55,6 +60,11 @@ export type GithubReposDeps = {
    * When absent, GET /api/github/installations/:installationId/repos returns 503.
    */
   readonly appAuth?: AppAuthDeps;
+  /**
+   * Fail-closed multi-tenant guard flag. When true both routes return 501 before
+   * any token mint or DB write. See docs/security/multi-tenant-authz.md.
+   */
+  readonly multiTenant?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -109,6 +119,10 @@ function defaultId(): string {
 export function createGithubReposRouter(deps: GithubReposDeps): Hono {
   const app = new Hono();
   const generateId = deps.generateId ?? defaultId;
+
+  // Fail-closed guard: when REVIEW_AGENT_MULTI_TENANT=true both routes
+  // return 501 before any token mint or DB write (issue #132).
+  app.use('*', multiTenantGuard({ multiTenant: deps.multiTenant ?? false }));
 
   // ------------------------------------------------------------------
   // GET /github/installations/:installationId/repos

@@ -24,6 +24,12 @@ export {
   createByokStore,
 } from './byok-store.js';
 export { type ConnectOpts, createDbClient, type DbClient } from './connection.js';
+export {
+  type ConversationThreadKey,
+  type ConversationThreadResult,
+  getConversationTurnCount,
+  incrementConversationTurn,
+} from './conversation-state.js';
 export { createCostLedgerRecorder, createCostTotalsReader } from './cost-ledger.js';
 export {
   type SegmentVerificationReport,
@@ -43,7 +49,11 @@ export {
 } from './recover-feedback-history.js';
 export { createReviewEvalEventRecorder } from './review-eval-event.js';
 export {
+  countRejectionsByFingerprint,
   createReviewHistoryWriter,
+  createSuppressionRule,
+  deleteSuppressionRule,
+  loadActiveSuppressionRules,
   loadRecentReviewHistory,
   pruneExpiredReviewHistory,
 } from './review-history.js';

@@ -49,6 +49,15 @@ export const JobMessageSchema = z.object({
     'manual',
   ]),
   enqueuedAt: z.string().datetime(),
+  /**
+   * Optional path-scope for partial re-runs (#157 `/review <path>`).
+   * When present, the worker applies these glob patterns as an
+   * additional `pathFilters` include-filter on top of any config-level
+   * `reviews.auto_review.paths`. Absent means full review (no extra
+   * filter). The array is non-empty when present (enforced by
+   * `.min(1)` on the inner string and `.nonempty()` on the array).
+   */
+  pathScope: z.array(z.string().min(1)).nonempty().optional(),
 });
 
 export type JobMessage = z.infer<typeof JobMessageSchema>;

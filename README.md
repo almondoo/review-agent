@@ -246,6 +246,9 @@ are not accepted.
 - **Pull Requests**: Closed without review. See [CONTRIBUTING.md](./.github/CONTRIBUTING.md).
 - **Issues**: Used for internal task tracking only.
 - **Forks**: Welcome.
+- **Code of Conduct**: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) governs behavior in issues and discussions.
+- **Changelog**: [CHANGELOG.md](./CHANGELOG.md) — per-wave release summaries.
+- **Release process**: [docs/release-process.md](./docs/release-process.md).
 
 ### Versioning
 

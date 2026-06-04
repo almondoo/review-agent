@@ -3,6 +3,10 @@
  *   GET  /api/github/installations/:installationId/repos  (spec §8.2.4)
  *   POST /api/repos/bulk                                   (spec §8.2.5)
  *
+ * Includes multi-tenant guard tests (issue #132):
+ *   - multiTenant=false (default): routes behave as today (no regression).
+ *   - multiTenant=true: routes return 501 before token mint or DB write.
+ *
  * Uses stub DB and stub AppAuthClient — no live Postgres or GitHub API.
  */
 import type { AppAuthClient } from '@review-agent/platform-github';
@@ -491,5 +495,118 @@ describe('POST /repos/bulk', () => {
     expect(body.alreadyExists).toContain('owner/existing');
     expect(body.created).toContain('owner/new-one');
     expect(body.errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-tenant guard tests (issue #132)
+// ---------------------------------------------------------------------------
+
+describe('multi-tenant guard: GET /github/installations/:installationId/repos', () => {
+  it('multiTenant=false (default): route proceeds normally (no regression)', async () => {
+    const db = makeDb({
+      installations: [{ installationId: 42n, suspendedAt: null }],
+      repos: [],
+    });
+    mockedListInstallationRepos.mockResolvedValueOnce([
+      { id: 1, fullName: 'owner/repo-a', private: false },
+    ]);
+    const appAuthClient = makeAppAuthClient();
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      appAuth: { appAuthClient },
+      multiTenant: false,
+    });
+    const res = await router.request('http://host/github/installations/42/repos');
+    expect(res.status).toBe(200);
+    // Token was minted (side effect confirmed)
+    expect(vi.mocked(appAuthClient.getInstallationToken)).toHaveBeenCalledOnce();
+  });
+
+  it('multiTenant=true: returns 501 with correct error envelope', async () => {
+    const db = makeDb({
+      installations: [{ installationId: 42n, suspendedAt: null }],
+    });
+    const appAuthClient = makeAppAuthClient();
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      appAuth: { appAuthClient },
+      multiTenant: true,
+    });
+    const res = await router.request('http://host/github/installations/42/repos');
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(typeof body.error).toBe('string');
+    expect(body.error).toContain('per_installation_authz_not_implemented');
+  });
+
+  it('multiTenant=true: getInstallationToken is NOT called', async () => {
+    const db = makeDb({
+      installations: [{ installationId: 42n, suspendedAt: null }],
+    });
+    const appAuthClient = makeAppAuthClient();
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      appAuth: { appAuthClient },
+      multiTenant: true,
+    });
+    await router.request('http://host/github/installations/42/repos');
+    // Token mint must NOT have been called
+    expect(vi.mocked(appAuthClient.getInstallationToken)).not.toHaveBeenCalled();
+  });
+});
+
+describe('multi-tenant guard: POST /repos/bulk', () => {
+  it('multiTenant=false (default): route proceeds normally (no regression)', async () => {
+    const db = makeDb({ repos: [] });
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      multiTenant: false,
+    });
+    const res = await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 42, names: ['owner/repo-mt'] }),
+    });
+    expect(res.status).toBe(201);
+    expect(db._repos).toHaveLength(1);
+  });
+
+  it('multiTenant=true: returns 501 with correct error envelope', async () => {
+    const db = makeDb({ repos: [] });
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      multiTenant: true,
+    });
+    const res = await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 42, names: ['owner/repo-mt'] }),
+    });
+    expect(res.status).toBe(501);
+    const body = await res.json();
+    expect(typeof body.error).toBe('string');
+    expect(body.error).toContain('per_installation_authz_not_implemented');
+  });
+
+  it('multiTenant=true: DB write is NOT performed', async () => {
+    const db = makeDb({ repos: [] });
+    const router = createGithubReposRouter({
+      db: db as Parameters<typeof createGithubReposRouter>[0]['db'],
+      now: () => NOW,
+      generateId: nextId,
+      multiTenant: true,
+    });
+    await router.request('http://host/repos/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ installationId: 42, names: ['owner/repo-mt'] }),
+    });
+    // No rows must have been inserted
+    expect(db._repos).toHaveLength(0);
   });
 });

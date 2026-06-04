@@ -1,0 +1,9 @@
+--- a/src/pagination/paginate.ts
++++ b/src/pagination/paginate.ts
+@@ -1,9 +1,9 @@
+ export function paginate<T>(items: T[], page: number, pageSize: number): T[] {
+   if (pageSize <= 0) throw new Error('pageSize must be positive');
+-  const start = (page - 1) * pageSize;
++  const start = page * pageSize;
+   return items.slice(start, start + pageSize);
+ }

@@ -198,3 +198,96 @@ metrics.configSourceTotal.add(1, { source });             // observability
       set in the org file as the org-wide ceiling. Repos can lower
       these per repo, never raise them silently — encode that in
       your CI policy if it matters.
+
+---
+
+## Bundled presets (`extends: <preset-name>`)
+
+In addition to `extends: org`, you can extend a bundled first-party preset
+by name. Presets provide a fully-working base config so you only need to
+override the specific keys that matter to your repo.
+
+### Available presets
+
+List via CLI:
+
+```sh
+review-agent config presets list
+```
+
+| Preset name        | Best for |
+|--------------------|----------|
+| `recommended`      | Most repositories. Sensible defaults: `request_changes_on: critical`, all categories enabled, moderate thresholds. |
+| `strict`           | Release branches, security-sensitive services. Reviews draft PRs, `request_changes_on: major`, higher file/diff limits. |
+| `security-focused` | Dedicated security review. Maximises security/bug coverage; suppresses style/maintainability/docs noise. |
+
+### Usage
+
+Single preset:
+
+```yaml
+extends: recommended
+```
+
+Preset chain (left-to-right, later wins):
+
+```yaml
+extends:
+  - recommended
+  - security-focused
+```
+
+Preset with overrides:
+
+```yaml
+extends: recommended
+reviews:
+  max_files: 100          # override one scalar
+  path_filters:           # replace the array entirely (see semantics below)
+    - "!vendor/**"
+ruleset:
+  style:
+    enabled: false        # deep-merge: only this key changes, rest inherited
+```
+
+### Override semantics
+
+| Field type | Behaviour |
+|------------|-----------|
+| Scalar (`max_files`, `language`, `profile`, ...) | Your config wins (last wins). |
+| Object (`reviews.auto_review`, `cost`, `ruleset.*`, ...) | Deep-merged — your keys override matching preset keys; unmatched preset keys are preserved. |
+| Array (`path_filters`, `ignore_authors`, ...) | **Replaced entirely** by your config. Preset array is discarded. Write your complete desired list. |
+
+Array replace semantics are intentional. Preset authors cannot predict which
+entries each repo needs. Append semantics (`_merge: append`) are documented
+for a future release; in this version arrays always replace.
+
+### Mixing `extends: org` and presets
+
+`extends: org` (the scalar keyword) and preset names are separate mechanisms:
+
+- `extends: org` — opt into org-level YAML merge (handled by `loadConfigWithOrgFallback`).
+- `extends: recommended` — deep-merge a bundled preset as your config base.
+
+These cannot be combined in a single `extends:` array. Using `org` inside an
+array (`extends: [org, recommended]`) raises a `PresetNotFoundError` with a
+clear message. If you need both, use `extends: org` (scalar) in a repo that
+also inherits sensible defaults from the org YAML — or configure the org YAML
+itself to match the preset values you want.
+
+### Cycle and unknown-preset errors
+
+The loader raises a clear error at load time for both error conditions:
+
+```
+# Unknown preset name
+extends: my-typo
+→ PresetNotFoundError: Unknown preset 'my-typo'. Bundled presets are: recommended, security-focused, strict.
+
+# Duplicate name in extends list (cycle)
+extends: [recommended, recommended]
+→ PresetCycleError: Preset cycle detected: recommended → recommended.
+```
+
+Both errors are subtypes of `ConfigError` and appear in the same place as
+schema validation errors.
