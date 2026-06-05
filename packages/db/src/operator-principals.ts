@@ -10,7 +10,23 @@ import type { DbClient } from './connection.js';
 export type CreatePrincipalOpts = {
   readonly id: string;
   readonly username: string;
-  readonly passwordHash: string;
+  /**
+   * scrypt-derived password hash. Required for local principals.
+   * Omit (or pass undefined) for OIDC-provisioned principals that have no
+   * local password — `password_hash` will be stored as NULL.
+   */
+  readonly passwordHash?: string;
+  /**
+   * Authentication provider. Defaults to 'local' when omitted.
+   * Use the OIDC issuer string (e.g. 'google', 'okta') for SSO principals.
+   */
+  readonly provider?: string;
+  /**
+   * OIDC `sub` claim. NULL for local principals. Together with `provider`,
+   * uniquely identifies an external identity (enforced by a partial unique
+   * index in the DB).
+   */
+  readonly externalId?: string;
 };
 
 /**
@@ -25,7 +41,9 @@ export async function createPrincipal(db: DbClient, opts: CreatePrincipalOpts): 
     await db.insert(operatorPrincipals).values({
       id: opts.id,
       username: opts.username,
-      passwordHash: opts.passwordHash,
+      passwordHash: opts.passwordHash ?? null,
+      provider: opts.provider ?? 'local',
+      externalId: opts.externalId ?? null,
     });
   } catch (err) {
     // Postgres unique-violation code: 23505
@@ -40,6 +58,7 @@ export async function createPrincipal(db: DbClient, opts: CreatePrincipalOpts): 
 export type PrincipalRow = {
   readonly id: string;
   readonly username: string;
+  readonly provider: string;
   readonly tokenVersion: number;
   readonly createdAt: Date;
 };
@@ -50,6 +69,7 @@ export async function listPrincipals(db: DbClient): Promise<ReadonlyArray<Princi
     .select({
       id: operatorPrincipals.id,
       username: operatorPrincipals.username,
+      provider: operatorPrincipals.provider,
       tokenVersion: operatorPrincipals.tokenVersion,
       createdAt: operatorPrincipals.createdAt,
     })
@@ -78,6 +98,112 @@ export async function getPrincipalByUsername(
     .from(operatorPrincipals)
     .where(eq(operatorPrincipals.username, username));
   return rows[0] ?? null;
+}
+
+/**
+ * Look up a principal by (provider, externalId).
+ * Returns null when no matching principal exists.
+ * Used by the OIDC JIT-provisioning path in Phase B.
+ */
+export async function findPrincipalByExternalId(
+  db: DbClient,
+  provider: string,
+  externalId: string,
+): Promise<PrincipalLookup | null> {
+  const rows = await db
+    .select({
+      id: operatorPrincipals.id,
+      username: operatorPrincipals.username,
+      tokenVersion: operatorPrincipals.tokenVersion,
+    })
+    .from(operatorPrincipals)
+    .where(
+      and(eq(operatorPrincipals.provider, provider), eq(operatorPrincipals.externalId, externalId)),
+    );
+  return rows[0] ?? null;
+}
+
+export type UpsertOidcPrincipalOpts = {
+  readonly provider: string;
+  readonly externalId: string;
+  /**
+   * Preferred username from the OIDC `preferred_username` or `email` claim.
+   *
+   * Username collision policy: if the preferred username is already taken by a
+   * *different* principal (identified by a different provider/externalId), we
+   * append a suffix derived from the first 8 characters of the externalId to
+   * make it unique. This is best-effort disambiguation — the admin can always
+   * rename later via the CLI. We do NOT merge OIDC identities with existing
+   * local principals: a local 'alice' and an OIDC 'alice' become separate
+   * principals (e.g. 'alice' and 'alice_ab12cd34').
+   */
+  readonly username: string;
+  readonly id: string;
+};
+
+export type UpsertOidcPrincipalResult = {
+  readonly id: string;
+  readonly username: string;
+  /** True when a new principal row was inserted; false when an existing one was returned. */
+  readonly created: boolean;
+};
+
+/**
+ * JIT-provision an OIDC principal.
+ *
+ * Lookup order:
+ *   1. Find by (provider, externalId)  → return existing (created: false).
+ *   2. Try to INSERT with the preferred username.
+ *      a. Success → return new principal (created: true).
+ *      b. Unique-violation on username (23505) → retry with a suffixed username.
+ *         The suffix is the first 8 chars of externalId, lowercased.
+ *         If the suffixed username is also taken, we let the error propagate
+ *         (extremely unlikely; operator must resolve manually).
+ *
+ * Called only from the OIDC callback handler (Phase B). Callers must hold
+ * a valid OIDC `sub` value (non-empty string) before calling this function.
+ */
+export async function upsertOidcPrincipal(
+  db: DbClient,
+  opts: UpsertOidcPrincipalOpts,
+): Promise<UpsertOidcPrincipalResult> {
+  // 1. Check for an existing principal by (provider, externalId).
+  const existing = await findPrincipalByExternalId(db, opts.provider, opts.externalId);
+  if (existing !== null) {
+    return { id: existing.id, username: existing.username, created: false };
+  }
+
+  // 2. Attempt INSERT with preferred username.
+  const suffix = opts.externalId.toLowerCase().slice(0, 8);
+  const usernameWithSuffix = `${opts.username}_${suffix}`;
+
+  try {
+    await db.insert(operatorPrincipals).values({
+      id: opts.id,
+      username: opts.username,
+      passwordHash: null,
+      provider: opts.provider,
+      externalId: opts.externalId,
+    });
+    return { id: opts.id, username: opts.username, created: true };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== '23505') {
+      throw err;
+    }
+    // Username collision — try with suffix. Use a new UUID for the retry row
+    // to avoid confusion (opts.id was already rejected above).
+    // Note: we reuse opts.id here because the INSERT above failed atomically
+    // (no row was written). opts.id is still a fresh UUID that can be used.
+    await db.insert(operatorPrincipals).values({
+      id: opts.id,
+      username: usernameWithSuffix,
+      passwordHash: null,
+      provider: opts.provider,
+      externalId: opts.externalId,
+    });
+    return { id: opts.id, username: usernameWithSuffix, created: true };
+  }
 }
 
 /**

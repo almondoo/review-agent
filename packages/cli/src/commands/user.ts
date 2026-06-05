@@ -298,6 +298,7 @@ export async function userListCommand(io: ProgramIo, opts: UserListOpts): Promis
     for (const p of principals) {
       io.stdout(`\n  Username:       ${p.username}\n`);
       io.stdout(`  ID:             ${p.id}\n`);
+      io.stdout(`  Provider:       ${p.provider}\n`);
       io.stdout(`  Token version:  ${p.tokenVersion}\n`);
       io.stdout(`  Created:        ${p.createdAt.toISOString()}\n`);
 

@@ -182,6 +182,14 @@ export function createApi(deps: ApiDeps): Hono {
       return c.json({ error: 'invalid credentials' }, 401);
     }
 
+    if (principal.passwordHash === null) {
+      // OIDC-provisioned principal — has no local password.
+      // Run verifyPassword against the dummy hash to maintain constant-time
+      // response and prevent user-enumeration via timing discrimination.
+      verifyPassword(password, DUMMY_HASH);
+      return c.json({ error: 'invalid credentials' }, 401);
+    }
+
     const valid = verifyPassword(password, principal.passwordHash);
     if (!valid) {
       return c.json({ error: 'invalid credentials' }, 401);

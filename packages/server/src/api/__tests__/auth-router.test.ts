@@ -200,6 +200,30 @@ describe('POST /auth/login — session mode', () => {
     const body = await res.json();
     expect(body.error).toBe('invalid credentials');
   });
+
+  it('returns 401 for OIDC principal (null passwordHash) — password login refused', async () => {
+    // An OIDC-provisioned principal has passwordHash = null.
+    // The login endpoint must refuse and return 'invalid credentials',
+    // not 500 or a different error code.
+    const api = makeSessionApi({
+      principals: [
+        {
+          id: 'oidc-p-1',
+          username: 'oidcuser',
+          passwordHash: null as unknown as string, // OIDC: no password stored
+          tokenVersion: 1,
+        },
+      ],
+    });
+    const res = await api.request('http://host/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'oidcuser', password: 'anypassword' }),
+    });
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toBe('invalid credentials');
+  });
 });
 
 // ---------------------------------------------------------------------------

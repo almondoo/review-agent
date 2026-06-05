@@ -29,7 +29,12 @@ export type MembershipEntry = {
 export type PrincipalRecord = {
   readonly id: string;
   readonly username: string;
-  readonly passwordHash: string;
+  /**
+   * scrypt-derived password hash for local principals.
+   * NULL for OIDC-provisioned principals who authenticate via SSO — password
+   * login must be refused when this field is null (see POST /api/auth/login).
+   */
+  readonly passwordHash: string | null;
   readonly tokenVersion: number;
 };
 

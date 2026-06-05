@@ -48,6 +48,7 @@ export {
   type CreatePrincipalOpts,
   createPrincipal,
   deletePrincipal,
+  findPrincipalByExternalId,
   getPrincipalByUsername,
   listMemberships,
   listPrincipals,
@@ -56,7 +57,10 @@ export {
   type PrincipalRow,
   revokeMembership,
   setPrincipalPassword,
+  type UpsertOidcPrincipalOpts,
+  type UpsertOidcPrincipalResult,
   upsertMembership,
+  upsertOidcPrincipal,
 } from './operator-principals.js';
 export { loadOverviewTotals, type OverviewTotals } from './overview-totals.js';
 export {

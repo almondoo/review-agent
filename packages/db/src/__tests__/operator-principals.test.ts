@@ -7,12 +7,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createPrincipal,
   deletePrincipal,
+  findPrincipalByExternalId,
   getPrincipalByUsername,
   listMemberships,
   listPrincipals,
   revokeMembership,
   setPrincipalPassword,
   upsertMembership,
+  upsertOidcPrincipal,
 } from '../operator-principals.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +59,36 @@ describe('createPrincipal', () => {
       createPrincipal(db, { id: 'uuid-3', username: 'bob', passwordHash: 'h' }),
     ).rejects.toThrow('something else');
   });
+
+  it('inserts an OIDC principal with null passwordHash and provider/externalId', async () => {
+    const valuesFn = vi.fn().mockResolvedValue(undefined);
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { insert: insertFn } as never;
+
+    await createPrincipal(db, {
+      id: 'uuid-oidc-1',
+      username: 'alice',
+      provider: 'google',
+      externalId: 'sub-123',
+    });
+
+    const arg = valuesFn.mock.calls[0]?.[0];
+    expect(arg?.passwordHash).toBeNull();
+    expect(arg?.provider).toBe('google');
+    expect(arg?.externalId).toBe('sub-123');
+  });
+
+  it('defaults provider to "local" and externalId to null when omitted', async () => {
+    const valuesFn = vi.fn().mockResolvedValue(undefined);
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { insert: insertFn } as never;
+
+    await createPrincipal(db, { id: 'uuid-4', username: 'carol', passwordHash: 'h' });
+
+    const arg = valuesFn.mock.calls[0]?.[0];
+    expect(arg?.provider).toBe('local');
+    expect(arg?.externalId).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -73,13 +105,15 @@ describe('listPrincipals', () => {
   it('returns rows ordered by username', async () => {
     const now = new Date('2026-06-01T00:00:00Z');
     const rows = [
-      { id: 'a', username: 'alice', tokenVersion: 1, createdAt: now },
-      { id: 'b', username: 'bob', tokenVersion: 2, createdAt: now },
+      { id: 'a', username: 'alice', provider: 'local', tokenVersion: 1, createdAt: now },
+      { id: 'b', username: 'bob', provider: 'google', tokenVersion: 2, createdAt: now },
     ];
     const db = makeSelectChain(rows) as never;
     const result = await listPrincipals(db);
     expect(result).toHaveLength(2);
     expect(result[0]?.username).toBe('alice');
+    expect(result[0]?.provider).toBe('local');
+    expect(result[1]?.provider).toBe('google');
   });
 
   it('returns an empty array when no principals exist', async () => {
@@ -228,5 +262,122 @@ describe('listMemberships', () => {
     const raw = [{ installationId: 10n, role: 'invalid' }];
     const db = makeWhereChain(raw) as never;
     await expect(listMemberships(db, 'p-3')).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findPrincipalByExternalId
+// ---------------------------------------------------------------------------
+describe('findPrincipalByExternalId', () => {
+  function makeWhereChain(resolveWith: unknown) {
+    const whereFn = vi.fn().mockResolvedValue(resolveWith);
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    const selectFn = vi.fn().mockReturnValue({ from: fromFn });
+    return { select: selectFn };
+  }
+
+  it('returns the principal when found by (provider, externalId)', async () => {
+    const db = makeWhereChain([{ id: 'oidc-1', username: 'alice', tokenVersion: 1 }]) as never;
+    const result = await findPrincipalByExternalId(db, 'google', 'sub-abc');
+    expect(result).toMatchObject({ id: 'oidc-1', username: 'alice', tokenVersion: 1 });
+  });
+
+  it('returns null when no principal has that (provider, externalId)', async () => {
+    const db = makeWhereChain([]) as never;
+    const result = await findPrincipalByExternalId(db, 'google', 'sub-unknown');
+    expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// upsertOidcPrincipal
+// ---------------------------------------------------------------------------
+describe('upsertOidcPrincipal', () => {
+  function makeSelectChain(resolveWith: unknown) {
+    const whereFn = vi.fn().mockResolvedValue(resolveWith);
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    const selectFn = vi.fn().mockReturnValue({ from: fromFn });
+    return selectFn;
+  }
+
+  it('returns existing principal (created: false) when (provider, externalId) already exists', async () => {
+    const existing = { id: 'oidc-old', username: 'alice', tokenVersion: 2 };
+    const selectFn = makeSelectChain([existing]);
+    const db = { select: selectFn } as never;
+
+    const result = await upsertOidcPrincipal(db, {
+      provider: 'google',
+      externalId: 'sub-abc',
+      username: 'alice',
+      id: 'new-id',
+    });
+
+    expect(result).toEqual({ id: 'oidc-old', username: 'alice', created: false });
+  });
+
+  it('inserts a new principal and returns (created: true) when not found', async () => {
+    // findPrincipalByExternalId returns [] (not found)
+    const selectFn = makeSelectChain([]);
+    const valuesFn = vi.fn().mockResolvedValue(undefined);
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { select: selectFn, insert: insertFn } as never;
+
+    const result = await upsertOidcPrincipal(db, {
+      provider: 'google',
+      externalId: 'sub-new',
+      username: 'bob',
+      id: 'uuid-new',
+    });
+
+    expect(result).toEqual({ id: 'uuid-new', username: 'bob', created: true });
+    expect(insertFn).toHaveBeenCalledOnce();
+    const insertArg = valuesFn.mock.calls[0]?.[0];
+    expect(insertArg?.passwordHash).toBeNull();
+    expect(insertArg?.provider).toBe('google');
+    expect(insertArg?.externalId).toBe('sub-new');
+  });
+
+  it('retries with suffixed username when preferred username is taken (23505)', async () => {
+    // findPrincipalByExternalId returns [] (not found)
+    const selectFn = makeSelectChain([]);
+    const valuesFn = vi
+      .fn()
+      // First insert: username conflict
+      .mockRejectedValueOnce(Object.assign(new Error('duplicate key'), { code: '23505' }))
+      // Second insert (suffixed username): success
+      .mockResolvedValueOnce(undefined);
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { select: selectFn, insert: insertFn } as never;
+
+    const result = await upsertOidcPrincipal(db, {
+      provider: 'google',
+      externalId: 'sub-12345678abcdef',
+      username: 'alice',
+      id: 'uuid-retry',
+    });
+
+    // externalId.toLowerCase().slice(0,8) = 'sub-1234'
+    expect(result).toEqual({ id: 'uuid-retry', username: 'alice_sub-1234', created: true });
+    expect(insertFn).toHaveBeenCalledTimes(2);
+    const secondInsertArg = valuesFn.mock.calls[1]?.[0];
+    expect(secondInsertArg?.username).toBe('alice_sub-1234');
+  });
+
+  it('propagates non-unique errors from INSERT', async () => {
+    const selectFn = makeSelectChain([]);
+    const valuesFn = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('connection error'), { code: '08003' }));
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { select: selectFn, insert: insertFn } as never;
+
+    await expect(
+      upsertOidcPrincipal(db, {
+        provider: 'google',
+        externalId: 'sub-x',
+        username: 'charlie',
+        id: 'uuid-err',
+      }),
+    ).rejects.toThrow('connection error');
   });
 });

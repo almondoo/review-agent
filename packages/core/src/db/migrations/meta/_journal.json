@@ -99,6 +99,13 @@
       "when": 1749340800000,
       "tag": "0013_eval_coverage",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1749427200000,
+      "tag": "0014_oidc_principals",
+      "breakpoints": true
     }
   ]
 }
