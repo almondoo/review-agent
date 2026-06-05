@@ -697,11 +697,31 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 - dry-run の no-post パイプラインを `lib/local-review.ts` に共有化（dry-run 本体は不変）。
 - **docs**: `docs/getting-started/cli.md` に local trial 節。
 
+### [A9] one-command start / Marketplace 導線 — #153 landed (develop, 2026-06-05)
+
+評価者が最短で試せる導線を整備（docker compose / コピペ Action template / Marketplace listing メタデータ）。
+develop に landed（本セッションで自律実装）。docs / yaml / CI のみで TS 変更なし。typecheck/lint/build green。
+**未 push / develop→main 未マージ**。Marketplace の実公開は GitHub UI の手動操作（runbook 化）。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#153](https://github.com/almondoo/review-agent/issues/153) | one-command start (compose / Action template / Marketplace) | ✅ landed (develop) |
+
+主な変更:
+- コピペ可能な Action テンプレート `examples/workflows/review-agent.yml`（`@v1` pin・permissions・`anthropic-api-key` secrets）。
+- `.github/workflows/release.yml` に `tag-action` job（**release イベント時のみ** `v1`/`v1.x` を force-update。既存
+  Docker/Trivy/cosign/SBOM は不変、tag 名は env 経由で workflow-injection safe）。
+- `docs/deployment/marketplace.md`（publish runbook + `v1`/`v1.x`/`v1.x.y` tag 戦略）。**実公開は手動 GitHub UI 操作**と明記。
+- `docs/getting-started/action.md`（Action quickstart、`cli.md` の `./action.md` リンク切れ修正）。
+- README に「3 ways to try」（CLI `review --local --sample` / Action template / self-host compose）+ self-host 節（spec §18 充足）、`@v0`→`@v1`。
+- root `docker-compose.yml`（Action smoke-test 用）と `examples/docker-compose/`（canonical self-host）の用途差を冒頭コメントで明示。
+- 既存 #34 compose / #5 action.yml branding を活用（重複統合なし、用途差を注記）。
+- 既知: `cli.md` の `server.md` リンク切れは #150（docs system）で対応。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
 #150 onboarding & docs system /
-#153 one-command start /
 #162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック

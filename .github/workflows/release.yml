@@ -125,3 +125,47 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: sbom.cyclonedx.json
+
+  tag-action:
+    # Maintain floating v1 and v1.x tags so users can pin `@v1` and
+    # automatically receive all v1.x.y patches (standard Actions Marketplace
+    # convention — see docs/deployment/marketplace.md).
+    # Runs only on release events (not on workflow_dispatch) to avoid
+    # overwriting stable tags during manual image-only pushes.
+    name: update floating Action tags
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to push tags
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute major / minor tags
+        id: tags
+        env:
+          REF_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          # REF_NAME is e.g. "v1.2.3"
+          major="${REF_NAME%%.*}"            # → "v1"
+          minor="${REF_NAME%.*}"             # → "v1.2"
+          printf 'major=%s\n' "$major" >> "$GITHUB_OUTPUT"
+          printf 'minor=%s\n' "$minor" >> "$GITHUB_OUTPUT"
+
+      - name: Force-update floating tags
+        env:
+          MAJOR: ${{ steps.tags.outputs.major }}
+          MINOR: ${{ steps.tags.outputs.minor }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Move the major tag (e.g. v1) to this commit.
+          git tag -f "$MAJOR" "$TAG"
+          # Move the minor tag (e.g. v1.2) to this commit.
+          git tag -f "$MINOR" "$TAG"
+          git push origin "refs/tags/$MAJOR" --force
+          git push origin "refs/tags/$MINOR" --force

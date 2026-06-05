@@ -1,3 +1,11 @@
+# review-agent — Action smoke-test fixture.
+#
+# PURPOSE: This file is used by the CI smoke-test to verify the Action image
+# runs correctly. It is NOT the self-host stack.
+#
+# FOR SELF-HOSTING: use examples/docker-compose/docker-compose.yml
+# Full guide: docs/deployment/docker-compose.md
+#
 services:
   review-agent:
     build:

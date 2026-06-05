@@ -1,0 +1,45 @@
+# examples/workflows/review-agent.yml
+#
+# Copy this file into your repository's .github/workflows/ directory.
+# That's all — set ANTHROPIC_API_KEY in repository secrets and every
+# PR will receive an AI review.
+#
+# ─── SETUP (one time) ────────────────────────────────────────────────────────
+# 1. Copy this file to .github/workflows/review-agent.yml in your repo.
+# 2. Add ANTHROPIC_API_KEY to Settings → Secrets and variables → Actions.
+# 3. Open any pull request — the review posts inline comments automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: review-agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: review-agent-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: ${{ github.event.pull_request.draft == false }}
+    name: AI code review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: almondoo/review-agent@v1   # pin @v1 to always get the latest v1.x
+        with:
+          # Required: set ANTHROPIC_API_KEY in repo Settings → Secrets.
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # github-token defaults to secrets.GITHUB_TOKEN — no changes needed.
+          # language: en-US          # uncomment to override output language
+          # cost-cap-usd: '1.0'      # uncomment to set a per-PR spend cap
+          # config-path: .review-agent.yml  # per-repo config (optional)
