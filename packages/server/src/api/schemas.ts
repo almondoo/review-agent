@@ -165,3 +165,69 @@ export type DashboardOverview = {
   queueDepth: number;
   costMtd: number;
 };
+
+// ---------------------------------------------------------------------------
+// Quality metrics (issue #142 Phase A)
+// ---------------------------------------------------------------------------
+
+/**
+ * `since` alias accepted by `GET /api/dashboard/metrics`. Defaults to `'30d'`
+ * when the query parameter is absent.
+ */
+export const sinceAliasValues = ['24h', '7d', '30d'] as const;
+export type SinceAlias = (typeof sinceAliasValues)[number];
+
+export const metricsQuerySchema = z.object({
+  since: z
+    .union([z.literal('24h'), z.literal('7d'), z.literal('30d')])
+    .optional()
+    .default('30d'),
+});
+
+/**
+ * Per-installation / per-repo quality metric point.
+ * All rate fields are in the range [0, 1] or null when not computable
+ * (denominator is zero, no feedback rows, or no coverage data — graceful N/A).
+ * Latency fields are in milliseconds or null when no reviews exist in the period.
+ */
+export type RepoQualitySnapshot = {
+  /** Repository slug (e.g. `owner/repo`). Only present on per-repo rows. */
+  repo?: string;
+  /** Number of review runs in the requested period. */
+  reviewCount: number;
+  /**
+   * accepted_pattern / (accepted_pattern + rejected_finding) from review_history.
+   * null when no feedback rows exist in the period.
+   */
+  acceptanceRate: number | null;
+  /**
+   * (rejected_finding + suppression_rule count) / sum(comment_count).
+   * null when comment_count is zero or no feedback rows exist.
+   */
+  falsePositiveRate: number | null;
+  /**
+   * sum(files_reviewed) / sum(files_total).
+   * null when no rows with non-null, non-zero files_total exist (e.g. all rows
+   * were recorded before migration 0013).
+   */
+  coverageRate: number | null;
+  /**
+   * P50 of review_eval_event.latency_ms (wall-clock inside runReview).
+   * NOTE: this is NOT the end-to-end PR open → first comment latency; it
+   * measures only the runner's internal execution time (gitleaks + LLM +
+   * middleware + dedup). End-to-end queue latency is deferred to a future
+   * refinement.
+   */
+  latencyP50Ms: number | null;
+  /** P95 of review_eval_event.latency_ms. Same scope as latencyP50Ms. */
+  latencyP95Ms: number | null;
+};
+
+export type QualityMetrics = {
+  /** The requested period alias. */
+  period: SinceAlias;
+  /** Aggregated metrics across all repos for this installation. */
+  overall: RepoQualitySnapshot;
+  /** Per-repo breakdown. Each entry includes a `repo` field. */
+  perRepo: ReadonlyArray<RepoQualitySnapshot & { repo: string }>;
+};

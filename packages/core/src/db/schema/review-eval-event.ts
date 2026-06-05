@@ -75,6 +75,19 @@ export const reviewEvalEvent = pgTable(
      * a typed enum so future abort reasons don't require migration.
      */
     abortReason: text('abort_reason'),
+    /**
+     * Total number of files in the PR diff after path-filter exclusions
+     * but before LLM review (i.e., the universe the runner was asked to
+     * review). Nullable for back-compat with rows recorded before
+     * migration 0013. When null, coverage cannot be computed for this row.
+     */
+    filesTotal: integer('files_total'),
+    /**
+     * Number of files actually handed to the LLM for this review.
+     * Equals `filesTotal` minus files excluded by max_files / max_diff_lines /
+     * max_chunks / budget caps. Nullable for back-compat.
+     */
+    filesReviewed: integer('files_reviewed'),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [

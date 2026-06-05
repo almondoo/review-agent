@@ -658,10 +658,31 @@ develop に landed（本セッションで自律実装）。統合検証フル g
   per-installation RLS で read/verify 不可（write-only）。docs に明記。
 - RLS round-trip の integration test 追加（`TEST_DATABASE_APP_URL` gate）、docs(audit-log.md) + spec §13.3 更新。
 
+### [A7] quality metrics dashboard — #142 landed (develop, 2026-06-05)
+
+レビュー品質メトリクス（acceptance rate / false-positive rate / coverage / latency P50・P95）を既存ストア
+（`review_eval_event` / `review_history`）から算出し dashboard で per-repo・期間別（24h/7d/30d）に可視化。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#142](https://github.com/almondoo/review-agent/issues/142) | quality metrics (acceptance / FP / coverage / latency) | ✅ landed (develop) |
+
+主な変更:
+- **core**: `review_eval_event` に `files_total`/`files_reviewed`（migration `0013_eval_coverage`）。runner eval-recorder が
+  ExclusionReport から coverage を永続化。
+- **db**: `loadQualityMetrics`（**`withTenant` で RLS GUC を張る** per-installation 集計。acceptance=accepted/(accepted+rejected)、
+  FP=(rejected+suppression)/comments、coverage=reviewed/total、latency P50/P95。feedback/データ 0 件は N/A=null）。
+- **server**: `GET /api/dashboard/metrics?installationId&since=24h|7d|30d`（sessionAuth + viewer + installationAuthz）。
+- **web**: `/metrics` ページ（period/installation セレクタ・overall カード・per-repo テーブル・N/A 処理・各指標の定義 tooltip[AC#2]・nav・i18n）。新規 charting lib なし。
+- **docs**: playbook に acceptance/FP/coverage/latency-P50P95 クエリ + 定義追記。
+- **限界**: latency は review 実行 wall-clock（キュー待ち除外、end-to-end は将来 refine）。legacy 単一オペレーター時の
+  installation スコープは [#166](https://github.com/almondoo/review-agent/issues/166)（既存 dashboard RLS バグ）に依存。judge score は scope 外。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
-#142 quality metrics / #150 onboarding & docs system /
+#150 onboarding & docs system /
 #153 one-command start /
 #162 platform 拡張 (GitLab/GHES)。
 

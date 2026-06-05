@@ -122,6 +122,7 @@ function buildCapSkipResult(
   reason: ReviewAbortReason,
   summary: string,
   exclusionReport: ExclusionReport,
+  filesTotal: number,
 ): RunnerResult {
   return {
     comments: [],
@@ -136,6 +137,8 @@ function buildCapSkipResult(
     reviewEvent: 'COMMENT',
     aborted: { reason, internalIssues: [] },
     exclusionReport,
+    filesTotal,
+    filesReviewed: 0,
   };
 }
 
@@ -538,6 +541,7 @@ async function runReviewInner(
         'max_files_exceeded',
         maxFilesSkipSummary(filteredDiff.files.length, job.maxFiles),
         exclusionReport,
+        filteredDiff.files.length,
       );
     }
     // exceedsLines must be true here.
@@ -554,6 +558,7 @@ async function runReviewInner(
       'max_diff_lines_exceeded',
       maxDiffLinesSkipSummary(diffLineCount, job.maxDiffLines),
       exclusionReport,
+      filteredDiff.files.length,
     );
   }
 
@@ -862,6 +867,8 @@ async function runReviewInner(
             internalIssues: err.issues.map((i) => ({ path: i.path, message: i.message })),
           },
           ...(abortExclusionReport !== undefined ? { exclusionReport: abortExclusionReport } : {}),
+          filesTotal: filteredDiff.files.length,
+          filesReviewed: 0,
         };
       }
       throw err;
@@ -909,6 +916,8 @@ async function runReviewInner(
       toolCalls: filtered.toolCalls,
       reviewEvent,
       ...(exclusionReport !== undefined ? { exclusionReport } : {}),
+      filesTotal: filteredDiff.files.length,
+      filesReviewed: filteredDiff.files.length,
     };
   }
 
@@ -1092,6 +1101,8 @@ async function runReviewInner(
     toolCalls: totalToolCalls,
     reviewEvent,
     ...(exclusionReport !== undefined ? { exclusionReport } : {}),
+    filesTotal: filteredDiff.files.length,
+    filesReviewed: reviewedFilePaths.length,
   };
 }
 

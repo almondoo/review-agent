@@ -7,6 +7,7 @@ import {
   deleteMockRepo,
   getMockInstallationRepos,
   getMockLlmKeys,
+  getMockQualityMetrics,
   getMockRepoDetail,
   getMockRepoMetrics,
   getMockRepoPrompt,
@@ -32,9 +33,11 @@ import type {
   LlmKeysResponse,
   LoginBody,
   LoginResponse,
+  MetricsSince,
   OverviewMetrics,
   PatchRepoBody,
   PutPromptBody,
+  QualityMetrics,
   RepoDetail,
   RepoMetrics,
   RepoPrompt,
@@ -437,5 +440,26 @@ export function useBulkCreateRepos() {
       void qc.invalidateQueries({ queryKey: ['repos'] });
       void qc.invalidateQueries({ queryKey: ['installation-repos', vars.installationId] });
     },
+  });
+}
+
+// --- Quality Metrics ---
+
+async function fetchQualityMetrics(
+  installationId: number,
+  since: MetricsSince,
+): Promise<QualityMetrics> {
+  if (IS_MOCK) return Promise.resolve(getMockQualityMetrics(installationId, since));
+  return apiFetch<QualityMetrics>(
+    `/api/dashboard/metrics?installationId=${installationId}&since=${since}`,
+  );
+}
+
+export function useQualityMetrics(installationId: number | null, since: MetricsSince = '30d') {
+  return useQuery({
+    queryKey: ['quality-metrics', installationId, since],
+    queryFn: () => fetchQualityMetrics(installationId as number, since),
+    enabled: installationId !== null,
+    staleTime: 30_000,
   });
 }

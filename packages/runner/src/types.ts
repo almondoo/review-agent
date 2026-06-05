@@ -459,6 +459,18 @@ export type RunnerResult = {
    */
   readonly exclusionReport?: ExclusionReport;
   /**
+   * Total number of files after path-filter exclusions (i.e. the universe
+   * the runner was asked to review). Used by the eval recorder to persist
+   * coverage metrics. Optional for back-compat — absent means coverage
+   * cannot be computed for this run.
+   */
+  readonly filesTotal?: number;
+  /**
+   * Number of files actually handed to the LLM (filesTotal minus files
+   * dropped by cap exclusions). Optional for back-compat.
+   */
+  readonly filesReviewed?: number;
+  /**
    * Set when the agent loop gracefully aborted (spec §7.3 #4): the
    * LLM produced output that failed the response schema twice — once
    * on the first attempt and again on the retry that injects the

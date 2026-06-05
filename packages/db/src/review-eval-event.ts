@@ -31,6 +31,12 @@ export function createReviewEvalEventRecorder(db: DbClient): ReviewEvalEventReco
       tokensInput: event.tokensInput,
       tokensOutput: event.tokensOutput,
       abortReason: event.abortReason,
+      ...(event.filesTotal !== undefined && event.filesTotal !== null
+        ? { filesTotal: event.filesTotal }
+        : {}),
+      ...(event.filesReviewed !== undefined && event.filesReviewed !== null
+        ? { filesReviewed: event.filesReviewed }
+        : {}),
     };
     await db.insert(reviewEvalEvent).values(row);
   };

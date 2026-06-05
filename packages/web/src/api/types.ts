@@ -158,6 +158,33 @@ export type ReviewEventDetail = ReviewEvent & {
   externalUrl: string | null;
 };
 
+// --- Quality Metrics ---
+
+export type MetricsSince = '24h' | '7d' | '30d';
+
+export type RepoQualitySnapshot = {
+  repo: string;
+  reviewCount: number;
+  acceptanceRate: number | null;
+  falsePositiveRate: number | null;
+  coverageRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+};
+
+export type QualityMetrics = {
+  period: MetricsSince;
+  overall: {
+    reviewCount: number;
+    acceptanceRate: number | null;
+    falsePositiveRate: number | null;
+    coverageRate: number | null;
+    latencyP50Ms: number | null;
+    latencyP95Ms: number | null;
+  };
+  perRepo: RepoQualitySnapshot[];
+};
+
 // --- GitHub App onboarding ---
 
 export type InstallationRepo = {

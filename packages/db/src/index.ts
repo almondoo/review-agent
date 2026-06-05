@@ -51,6 +51,11 @@ export {
   upsertMembership,
 } from './operator-principals.js';
 export {
+  loadQualityMetrics,
+  type QualityMetricsResult,
+  type RepoQualityMetrics,
+} from './quality-metrics.js';
+export {
   type RecoverEvalEventsOpts,
   type RecoverEvalEventsResult,
   recoverReviewEvalEvents,

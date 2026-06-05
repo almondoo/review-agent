@@ -258,6 +258,144 @@ RESET ROLE;
 Always pair `SET ROLE` with `RESET ROLE` so a forgotten cross-tenant
 connection does not leak into your next query.
 
+## Quality metrics (issue #142 Phase A)
+
+The four aggregate metrics exposed via `GET /api/dashboard/metrics` are
+computed from `review_eval_event` and `review_history`. All queries below
+must run under the `app.current_tenant` GUC — see **Scope and connection
+setup** at the top of this playbook.
+
+### Metric definitions
+
+| Metric | Formula | Source | null / N/A condition |
+|---|---|---|---|
+| **reviewCount** | `COUNT(*)` | `review_eval_event` | Never null (0 when empty) |
+| **acceptanceRate** | `accepted_pattern_count / (accepted_pattern_count + rejected_finding_count)` | `review_history` | null when both counts are 0 (no feedback rows in period) |
+| **falsePositiveRate** | `(rejected_finding_count + suppression_rule_count) / SUM(comment_count)` | `review_history` + `review_eval_event` | null when `SUM(comment_count)` = 0 or both feedback counts are 0 |
+| **coverageRate** | `SUM(files_reviewed) / SUM(files_total)` | `review_eval_event` | null when no rows with `files_total IS NOT NULL AND files_total > 0` exist (e.g. all rows pre-date migration 0013) |
+| **latencyP50Ms** | `percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)` | `review_eval_event` | null when no rows exist in period |
+| **latencyP95Ms** | `percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)` | `review_eval_event` | null when no rows exist in period |
+
+**Latency scope note**: `latency_ms` is the wall-clock time the runner
+spent *inside* `runReview` (gitleaks pre-scan + LLM call(s) + middleware +
+dedup + output scan). It is **not** the end-to-end PR open → first comment
+latency (queue wait + worker cold-start are excluded). End-to-end latency
+is deferred to a future refinement once queue timestamps are recorded.
+
+### 8. Acceptance rate per repo (last 30 days)
+
+Measures how often reviewers explicitly marked a finding as a known-good
+pattern versus rejected as a false positive.
+
+```sql
+SELECT
+  h.repo,
+  count(*) FILTER (WHERE h.fact_type = 'accepted_pattern') AS accepted,
+  count(*) FILTER (WHERE h.fact_type = 'rejected_finding')  AS rejected,
+  round(
+    count(*) FILTER (WHERE h.fact_type = 'accepted_pattern')::numeric
+      / nullif(
+          count(*) FILTER (WHERE h.fact_type IN ('accepted_pattern','rejected_finding')),
+          0
+        ),
+    3
+  ) AS acceptance_rate
+FROM review_history h
+WHERE h.created_at >= now() - interval '30 days'
+  AND h.expires_at > now()
+  AND h.fact_type IN ('accepted_pattern', 'rejected_finding')
+GROUP BY h.repo
+ORDER BY accepted + rejected DESC;
+```
+
+- `nullif(…, 0)` returns null when no feedback rows exist (graceful N/A).
+
+### 9. False-positive rate per repo (last 30 days)
+
+Measures what fraction of posted comments were subsequently rejected or
+auto-suppressed.
+
+```sql
+SELECT
+  e.repo,
+  sum(e.comment_count) AS total_comments,
+  (
+    count(*) FILTER (WHERE h.fact_type = 'rejected_finding')
+    + count(*) FILTER (WHERE h.fact_type = 'suppression_rule')
+  ) AS fp_signals,
+  round(
+    (
+      count(*) FILTER (WHERE h.fact_type = 'rejected_finding')
+      + count(*) FILTER (WHERE h.fact_type = 'suppression_rule')
+    )::numeric
+      / nullif(sum(e.comment_count), 0),
+    3
+  ) AS false_positive_rate
+FROM review_eval_event e
+LEFT JOIN review_history h
+  ON h.repo = e.repo
+  AND h.installation_id = e.installation_id
+  AND h.fact_type IN ('rejected_finding', 'suppression_rule')
+  AND h.created_at >= now() - interval '30 days'
+  AND h.expires_at > now()
+WHERE e.created_at >= now() - interval '30 days'
+GROUP BY e.repo
+ORDER BY false_positive_rate DESC NULLS LAST;
+```
+
+- `nullif(sum(e.comment_count), 0)` returns null when the bot posted zero
+  comments (e.g. all reviews aborted) — graceful N/A.
+
+### 10. Coverage rate per repo (last 30 days)
+
+Measures what fraction of changed files the LLM actually reviewed
+(after path-filter and cap exclusions). Rows pre-dating migration 0013
+have `NULL` in `files_total`/`files_reviewed` and are excluded.
+
+```sql
+SELECT
+  repo,
+  sum(files_reviewed)                        AS reviewed,
+  sum(files_total)                           AS total,
+  round(
+    sum(files_reviewed)::numeric
+      / nullif(sum(files_total), 0),
+    3
+  ) AS coverage_rate
+FROM review_eval_event
+WHERE created_at >= now() - interval '30 days'
+  AND files_total IS NOT NULL
+  AND files_total > 0
+GROUP BY repo
+ORDER BY coverage_rate ASC NULLS LAST;
+```
+
+- Excludes rows where `files_total IS NULL` (pre-migration 0013 rows).
+- A coverage of `< 1.0` means some files were excluded by caps or
+  path-filter. Use the existing `abort_reason` and `exclusionReport`
+  playbook queries (§5 above) to diagnose *why* files were excluded.
+
+### 11. Latency P50 / P95 per repo (last 30 days)
+
+Identical to the per-provider query in §1 but grouped per repo:
+
+```sql
+SELECT
+  repo,
+  count(*)                                                          AS reviews,
+  percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms)         AS p50_ms,
+  percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)         AS p95_ms
+FROM review_eval_event
+WHERE created_at >= now() - interval '30 days'
+GROUP BY repo
+ORDER BY p95_ms DESC NULLS LAST;
+```
+
+- Matches the `latencyP50Ms` / `latencyP95Ms` fields returned by
+  `GET /api/dashboard/metrics`.
+- See the **Latency scope note** above — these measure runner
+  wall-clock time, not end-to-end queue latency.
+
 ## Out of scope
 
 The architecture doc lists the deferred items (Grafana / Looker

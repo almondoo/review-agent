@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/integrations', labelKey: 'nav.integrations', shortKey: 'nav.integrationsShort' },
   { path: '/integrations/keys', labelKey: 'nav.byokKeys', shortKey: 'nav.byokKeysShort' },
   { path: '/history', labelKey: 'nav.history', shortKey: 'nav.historyShort' },
+  { path: '/metrics', labelKey: 'nav.metrics', shortKey: 'nav.metricsShort' },
 ];
 
 export function Sidebar() {

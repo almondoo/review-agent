@@ -13,6 +13,7 @@ import { IntegrationsPage } from './pages/integrations.js';
 import { LoginPage } from './pages/login.js';
 import { NotFoundPage } from './pages/not-found.js';
 import { OverviewPage } from './pages/overview.js';
+import { QualityMetricsPage } from './pages/quality-metrics.js';
 import { RepoDetailPage } from './pages/repo-detail.js';
 import { RepoPromptPage } from './pages/repo-prompt.js';
 import { ReposPage } from './pages/repos.js';
@@ -44,6 +45,7 @@ export const router = createBrowserRouter([
               { path: '/history', element: <HistoryPage /> },
               { path: '/history/:id', element: <HistoryDetailPage /> },
               { path: '/how-it-works', element: <HowItWorksPage /> },
+              { path: '/metrics', element: <QualityMetricsPage /> },
               { path: '*', element: <NotFoundPage /> },
             ],
           },

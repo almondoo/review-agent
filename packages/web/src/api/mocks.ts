@@ -7,7 +7,9 @@ import type {
   IntegrationsStatus,
   LlmKeyStatus,
   LlmKeysResponse,
+  MetricsSince,
   OverviewMetrics,
+  QualityMetrics,
   RepoDetail,
   RepoMetrics,
   RepoPrompt,
@@ -906,6 +908,81 @@ const mockInstallationRepos: InstallationRepo[] = [
 export function getMockInstallationRepos(installationId: number): InstallationReposResponse {
   void installationId;
   return { repos: mockInstallationRepos };
+}
+
+// --- Quality metrics mocks ---
+
+export function getMockQualityMetrics(
+  _installationId: number,
+  since: MetricsSince,
+): QualityMetrics {
+  return {
+    period: since,
+    overall: {
+      reviewCount: 347,
+      acceptanceRate: 0.68,
+      falsePositiveRate: 0.12,
+      coverageRate: 0.84,
+      latencyP50Ms: 5200,
+      latencyP95Ms: 9400,
+    },
+    perRepo: [
+      {
+        repo: 'acme/api-service',
+        reviewCount: 82,
+        acceptanceRate: 0.61,
+        falsePositiveRate: 0.15,
+        coverageRate: 0.9,
+        latencyP50Ms: 6100,
+        latencyP95Ms: 9000,
+      },
+      {
+        repo: 'acme/frontend',
+        reviewCount: 74,
+        acceptanceRate: 0.73,
+        falsePositiveRate: 0.09,
+        coverageRate: 0.78,
+        latencyP50Ms: 4800,
+        latencyP95Ms: 8200,
+      },
+      {
+        repo: 'legacy/monolith',
+        reviewCount: 58,
+        acceptanceRate: 0.69,
+        falsePositiveRate: null,
+        coverageRate: null,
+        latencyP50Ms: 5500,
+        latencyP95Ms: 9600,
+      },
+      {
+        repo: 'acme/infra',
+        reviewCount: 71,
+        acceptanceRate: 0.72,
+        falsePositiveRate: 0.1,
+        coverageRate: 0.88,
+        latencyP50Ms: 4900,
+        latencyP95Ms: 8800,
+      },
+      {
+        repo: 'analytics/pipeline',
+        reviewCount: 33,
+        acceptanceRate: null,
+        falsePositiveRate: null,
+        coverageRate: null,
+        latencyP50Ms: null,
+        latencyP95Ms: null,
+      },
+      {
+        repo: 'acme/auth',
+        reviewCount: 29,
+        acceptanceRate: 0.62,
+        falsePositiveRate: 0.14,
+        coverageRate: 0.81,
+        latencyP50Ms: 5600,
+        latencyP95Ms: 9400,
+      },
+    ],
+  };
 }
 
 /** Sentinel name: triggers a simulated error entry in bulkCreateMockRepos (207 path). */

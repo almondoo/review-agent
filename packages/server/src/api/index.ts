@@ -238,7 +238,11 @@ export function createApi(deps: ApiDeps): Hono {
 
   api.route(
     '/dashboard',
-    createDashboardRouter({ db: deps.db, ...(deps.now ? { now: deps.now } : {}) }),
+    createDashboardRouter({
+      db: deps.db,
+      ...(deps.now ? { now: deps.now } : {}),
+      multiTenant,
+    }),
   );
 
   // Resolve auditAppender early — used by repos, github-repos, and llm-keys routers.
