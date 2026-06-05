@@ -106,6 +106,81 @@ The dry-run summary lists each generated comment as
 `[severity] path:line — first line of body` plus the model, tokens, cost,
 and the run summary. Use `--post` only after you've reviewed the dry-run.
 
+### `review --local` — Local trial (no PR, no VCS credential)
+
+Run the AI review pipeline against a **local diff** without any GitHub token
+or VCS access. Local mode is activated by adding `--local`, `--sample`,
+`--range`, or `--diff-file` to the existing `review` command. Useful as a
+pre-commit gate, for evaluating review quality on historical diffs, or for
+first-time users who want to try the agent before setting up a full GitHub
+integration.
+
+**Only `ANTHROPIC_API_KEY` is required** (or your configured LLM provider key).
+No `REVIEW_AGENT_GH_TOKEN`, no `GITHUB_TOKEN`, no `--repo`, no `--pr`.
+
+#### Diff sources (pick one; priority order)
+
+| Flag | Source |
+|---|---|
+| `--sample` | Bundled multi-language sample diff (security + bug + performance findings). No git repo needed. |
+| `--diff-file <path>` | Read a saved unified diff / patch file from disk. |
+| `--range <a..b>` | Run `git diff <a..b>` in `--path` (or cwd). |
+| `--local [path]` | Run `git diff HEAD` (working-tree changes) in `[path]` or cwd. |
+
+#### Additional options (local mode)
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--path <dir>` | cwd | Target directory for git diff commands. |
+| `--config <path>` | `.review-agent.yml` | Config file; falls back to defaults when missing. |
+| `--fail-on <severity>` | `major` | Exit non-zero when any finding is at or above this severity. Values: `critical` `major` `minor` `info`. |
+| `--lang <code>` | (config) | BCP-47 language override. |
+| `--profile <chill\|assertive>` | (config) | Reviewer style. |
+| `--cost-cap-usd <usd>` | (config) | Hard spend ceiling for this run. |
+
+#### Exit code
+
+- **0** — no findings at or above `--fail-on` severity (or diff is empty).
+- **1** — one or more findings at or above `--fail-on`, or diff/auth error.
+
+This makes `review-agent review --local` usable as a **pre-commit or CI gate**:
+```bash
+review-agent review --range HEAD~1..HEAD --fail-on major && echo "clean"
+```
+
+#### Examples
+
+```bash
+# Quickest start: run the bundled sample (no repo, no git needed):
+ANTHROPIC_API_KEY=sk-ant-... review-agent review --sample
+
+# Review your uncommitted working-tree changes:
+review-agent review --local
+
+# Review the last commit only:
+review-agent review --range HEAD~1..HEAD
+
+# Review a saved patch file, fail if any critical finding:
+review-agent review --diff-file my.patch --fail-on critical
+
+# Review a specific directory with a custom config:
+review-agent review --local /path/to/repo --config /path/to/repo/.review-agent.yml
+
+# Equivalent using --path:
+review-agent review --local --path /path/to/repo --config /path/to/repo/.review-agent.yml
+```
+
+#### Config and presets
+
+`.review-agent.yml` is fully honoured in local mode — `extends` (presets),
+`ruleset`, `suggestions`, `large_pr`, `reviews.path_filters`, and all other
+sections are resolved and applied exactly as in PR review mode.
+
+#### What is NOT called
+
+Local mode never touches VCS: no `getPR`, no `postReview`, no
+`upsertStateComment`. The diff is the only input; findings go to stdout.
+
 ### `config validate [path]`
 
 Loads `.review-agent.yml` (or the supplied path) and checks it against

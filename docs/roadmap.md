@@ -679,9 +679,27 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 - **限界**: latency は review 実行 wall-clock（キュー待ち除外、end-to-end は将来 refine）。legacy 単一オペレーター時の
   installation スコープは [#166](https://github.com/almondoo/review-agent/issues/166)（既存 dashboard RLS バグ）に依存。judge score は scope 外。
 
+### [A8] local trial CLI — #135 landed (develop, 2026-06-05)
+
+PR・VCS credential 無しでローカルにレビューを試せる `review --local`（pre-commit / local CI / 評価者の試用向け）。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#135](https://github.com/almondoo/review-agent/issues/135) | local trial (CLI review without a PR + bundled sample) | ✅ landed (develop) |
+
+主な変更:
+- **cli**: 既存 `review` に `--local [path]` / `--range <a..b>` / `--diff-file <file>` / `--sample` / `--path` / `--fail-on <severity>` を追加。
+  local モードは **VCS 非構築・GH token 不要・no-post** で findings を stdout 表示、`--fail-on`（既定 major）以上の finding で
+  exit 非ゼロ。LLM provider key は必要。config/presets 適用。VCS 経路は完全 back-compat。
+- **同梱 sample**: `packages/cli/src/assets/sample-diff.txt`（security/bug/performance/maintainability の意図的 finding）を
+  `--sample` で利用、dist にバンドル（tsup onSuccess + package.json files）。
+- dry-run の no-post パイプラインを `lib/local-review.ts` に共有化（dry-run 本体は不変）。
+- **docs**: `docs/getting-started/cli.md` に local trial 節。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
-#134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
+#134 richer PR summary / #141 dashboard UX gaps /
 #150 onboarding & docs system /
 #153 one-command start /
 #162 platform 拡張 (GitLab/GHES)。

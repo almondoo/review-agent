@@ -1,3 +1,4 @@
+import { copyFile, mkdir } from 'node:fs/promises';
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
@@ -18,4 +19,9 @@ export default defineConfig({
     '@review-agent/config',
     '@review-agent/platform-github',
   ],
+  async onSuccess() {
+    // Copy static asset so the bundled bin can read it via import.meta.url.
+    await mkdir('dist/assets', { recursive: true });
+    await copyFile('src/assets/sample-diff.txt', 'dist/assets/sample-diff.txt');
+  },
 });

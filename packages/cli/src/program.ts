@@ -5,6 +5,7 @@ import { auditPruneCommand } from './commands/audit-prune.js';
 import { runDryRunCommand } from './commands/dry-run.js';
 import { runEvalCommand } from './commands/eval.js';
 import { feedbackBackfillCommand } from './commands/feedback-backfill.js';
+import { parseFailOn } from './commands/local-review.js';
 import { listPresetsCommand } from './commands/presets.js';
 import {
   recoverFeedbackHistoryCommand,
@@ -48,20 +49,107 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
 
   program
     .command('review')
-    .description('Run a review against a single PR using a PAT.')
-    .requiredOption('--repo <repo>', "repository: 'owner/name' for github, '<name>' for codecommit")
-    .requiredOption('--pr <n>', 'PR number', (v) => Number.parseInt(v, 10))
+    .description(
+      'Run a PR review (VCS mode) or a local diff review (--local / --sample / --range / --diff-file).\n' +
+        'VCS mode: requires --repo and --pr plus a GH token.\n' +
+        'Local mode: only ANTHROPIC_API_KEY needed; no VCS credential required.',
+    )
+    // VCS mode options (not required when using local-mode flags)
+    .option('--repo <repo>', "repository: 'owner/name' for github, '<name>' for codecommit")
+    .option('--pr <n>', 'PR number (VCS mode)', (v) => {
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n <= 0) throw new InvalidArgumentError('--pr must be positive');
+      return n;
+    })
     .addOption(
       new Option('--platform <platform>', 'VCS platform (default: github)')
         .choices([...PLATFORMS])
         .default('github'),
     )
+    // Shared options
     .option('--config <path>', 'path to .review-agent.yml', '.review-agent.yml')
     .option('--lang <code>', 'override output language (BCP 47)')
     .addOption(new Option('--profile <profile>', 'override review profile').choices([...PROFILES]))
     .option('--cost-cap-usd <usd>', 'cap total LLM spend per run', (v) => Number.parseFloat(v))
-    .option('--post', 'publish comments to the PR (default: dry run)', false)
+    // VCS mode only
+    .option('--post', 'publish comments to the PR (VCS mode, default: dry run)', false)
+    // Local mode options
+    .option('--local [path]', 'local mode: review working-tree diff (optional path overrides cwd)')
+    .option('--range <a..b>', 'local mode: review commits in range (e.g. HEAD~1..HEAD)')
+    .option('--diff-file <file>', 'local mode: review a saved unified diff file')
+    .option('--sample', 'local mode: review the bundled sample diff (no git repo required)')
+    .option('--path <dir>', 'local mode: target directory for git diff commands')
+    .option(
+      '--fail-on <severity>',
+      'local mode: exit non-zero when findings >= this severity (critical|major|minor|info)',
+      'major',
+    )
     .action(async (opts: ReviewCliOpts) => {
+      // Determine whether this is a local-mode invocation.
+      const isLocal =
+        opts.local !== undefined ||
+        opts.sample ||
+        opts.range !== undefined ||
+        opts.diffFile !== undefined;
+
+      if (isLocal) {
+        // ---- Local mode -----------------------------------------------
+        const failOn = parseFailOn(opts.failOn ?? 'major');
+        if (!failOn) {
+          io.stderr(
+            `--fail-on must be one of: critical, major, minor, info (got '${opts.failOn ?? ''}').\n`,
+          );
+          io.exit(1);
+          return;
+        }
+        // --local [path] supplies optional path; --path is an explicit alias.
+        const targetDir =
+          opts.path ?? (typeof opts.local === 'string' ? opts.local : undefined) ?? process.cwd();
+        const mode = opts.sample
+          ? ('sample' as const)
+          : opts.diffFile !== undefined
+            ? ('diff-file' as const)
+            : opts.range !== undefined
+              ? ('range' as const)
+              : ('working-tree' as const);
+        const result = await runReviewCommand(io, {
+          repo: opts.repo ?? '',
+          pr: opts.pr ?? 0,
+          configPath: opts.config,
+          post: false,
+          localMode: mode,
+          localPath: targetDir,
+          ...(opts.diffFile !== undefined ? { localDiffFile: opts.diffFile } : {}),
+          ...(opts.range !== undefined ? { localRange: opts.range } : {}),
+          failOn,
+          ...(opts.lang ? { language: opts.lang } : {}),
+          ...(opts.profile ? { profile: opts.profile } : {}),
+          ...(opts.costCapUsd !== undefined ? { costCapUsd: opts.costCapUsd } : {}),
+          env,
+        });
+        io.exit(result.exitCode ?? (result.status === 'reviewed' ? 0 : 1));
+        return;
+      }
+
+      // ---- VCS mode (original path) ------------------------------------
+      /* v8 ignore start */
+      if (!opts.repo) {
+        io.stderr(
+          '--repo is required for VCS mode. ' +
+            'Use --local / --sample / --range / --diff-file for local review without a PR.\n',
+        );
+        io.exit(1);
+        return;
+      }
+      if (opts.pr === undefined || opts.pr <= 0) {
+        io.stderr(
+          '--pr is required for VCS mode. ' +
+            'Use --local / --sample / --range / --diff-file for local review without a PR.\n',
+        );
+        io.exit(1);
+        return;
+      }
+      /* v8 ignore stop */
       const result = await runReviewCommand(io, {
         repo: opts.repo,
         pr: opts.pr,
@@ -586,14 +674,22 @@ type RecoverFeedbackHistoryCliOpts = {
 };
 
 type ReviewCliOpts = {
-  repo: string;
-  pr: number;
+  // VCS mode
+  repo?: string;
+  pr?: number;
   config: string;
   platform: (typeof PLATFORMS)[number];
   lang?: string;
   profile?: (typeof PROFILES)[number];
   costCapUsd?: number;
   post?: boolean;
+  // Local mode
+  local?: string | boolean;
+  range?: string;
+  diffFile?: string;
+  sample?: boolean;
+  path?: string;
+  failOn?: string;
 };
 
 type DryRunCliOpts = {

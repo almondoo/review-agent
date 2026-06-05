@@ -5,7 +5,7 @@ import {
   mergeWithEnv,
   resolveEffectiveConfig,
 } from '@review-agent/config';
-import type { Diff, PR, PRRef, ReviewState, VCS } from '@review-agent/core';
+import type { Diff, PR, PRRef, ReviewState, Severity, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createCodecommitVCS } from '@review-agent/platform-codecommit';
 import { createGithubVCS } from '@review-agent/platform-github';
@@ -17,10 +17,16 @@ import {
   runReview,
 } from '@review-agent/runner';
 import type { ProgramIo } from '../io.js';
+import type { SpawnResult } from '../lib/spawn.js';
+import { type LocalReviewMode, runLocalReviewCommand } from './local-review.js';
 
 export type ReviewPlatform = 'github' | 'codecommit';
 
 export type RunReviewOpts = {
+  /**
+   * VCS review mode (required when not in local mode).
+   * In local mode these are ignored; in VCS mode they are required.
+   */
   readonly repo: string;
   readonly pr: number;
   readonly configPath: string;
@@ -34,19 +40,70 @@ export type RunReviewOpts = {
   readonly createVCS?: (token: string | null, config: Config) => VCS;
   readonly createProvider?: (apiKey: string, config: Config) => LlmProvider;
   readonly confirm?: () => Promise<boolean>;
+  // ---- Local mode fields (AC: review --local) ----------------------------
+  /**
+   * When set, activates local mode — no VCS credentials required, no
+   * postReview call. Selects the diff acquisition source.
+   */
+  readonly localMode?: LocalReviewMode;
+  /** Target directory for git diff (local mode). Defaults to cwd. */
+  readonly localPath?: string;
+  /** Commit range for --range mode (local mode). */
+  readonly localRange?: string;
+  /** Patch file path for --diff-file mode (local mode). */
+  readonly localDiffFile?: string;
+  /** Minimum severity for non-zero exit in local mode. Default: 'major'. */
+  readonly failOn?: Severity;
+  /** Test seam: override git spawn in local mode. */
+  readonly spawnGit?: (args: string[], cwd: string) => Promise<SpawnResult>;
+  /** Test seam: override sample diff reader in local mode. */
+  readonly readSampleDiff?: () => Promise<string>;
 };
 
 export type RunReviewResult = {
-  readonly status: 'reviewed' | 'skipped' | 'auth_failed' | 'cancelled';
+  readonly status: 'reviewed' | 'skipped' | 'auth_failed' | 'cancelled' | 'diff_error';
   readonly reason?: string;
   readonly postedComments: number;
   readonly costUsd: number;
+  /** Non-zero when local mode has failing findings (>= --fail-on severity). */
+  readonly exitCode?: number;
 };
 
 export async function runReviewCommand(
   io: ProgramIo,
   opts: RunReviewOpts,
 ): Promise<RunReviewResult> {
+  // ---- Local mode: delegate to runLocalReviewCommand (no VCS) ------------
+  if (opts.localMode !== undefined) {
+    const localResult = await runLocalReviewCommand(io, {
+      mode: opts.localMode,
+      targetDir: opts.localPath ?? process.cwd(),
+      ...(opts.localDiffFile !== undefined ? { diffFile: opts.localDiffFile } : {}),
+      ...(opts.localRange !== undefined ? { range: opts.localRange } : {}),
+      configPath: opts.configPath,
+      failOn: opts.failOn ?? 'major',
+      ...(opts.language !== undefined ? { language: opts.language } : {}),
+      ...(opts.profile !== undefined ? { profile: opts.profile } : {}),
+      ...(opts.costCapUsd !== undefined ? { costCapUsd: opts.costCapUsd } : {}),
+      env: opts.env,
+      ...(opts.readFile !== undefined ? { readFile: opts.readFile } : {}),
+      ...(opts.createProvider !== undefined ? { createProvider: opts.createProvider } : {}),
+      ...(opts.spawnGit !== undefined ? { spawnGit: opts.spawnGit } : {}),
+      ...(opts.readSampleDiff !== undefined ? { readSampleDiff: opts.readSampleDiff } : {}),
+    });
+    return {
+      status:
+        localResult.status === 'reviewed'
+          ? 'reviewed'
+          : localResult.status === 'diff_error'
+            ? 'diff_error'
+            : 'auth_failed',
+      postedComments: 0,
+      costUsd: localResult.costUsd,
+      exitCode: localResult.exitCode,
+    };
+  }
+
   const platform: ReviewPlatform = opts.platform ?? 'github';
 
   let token: string | null = null;
