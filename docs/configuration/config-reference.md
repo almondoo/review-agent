@@ -4,6 +4,17 @@ Every key is optional. Omitted keys take the documented default.
 The YAML file lives at the repository root (`.review-agent.yml`).
 Org-central config lives in `<org>/.github/review-agent.yml`.
 
+**Schema**: [`schema/v1.json`](../../schema/v1.json) — the JSON Schema is the
+source of truth for types, defaults, and enums. Add `# yaml-language-server:
+$schema=https://review-agent.dev/schema/v1.json` to the top of your
+`.review-agent.yml` for IDE autocomplete in VS Code (requires the
+[YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)):
+
+```yaml
+# yaml-language-server: $schema=https://review-agent.dev/schema/v1.json
+language: en-US
+```
+
 Precedence (highest → lowest, per §10.2):
 
 1. PR comment commands (`@review-agent --lang ja-JP`, etc.)
@@ -55,6 +66,8 @@ Controls what gets reviewed and how.
 | `reviews.auto_review.drafts` | boolean | `false` | repo, org | Review draft PRs. |
 | `reviews.auto_review.base_branches` | string[] | `['main', 'master', 'develop']` | repo, org | Only trigger on PRs targeting these branches. |
 | `reviews.auto_review.paths` | string[] | `[]` (all paths) | repo, org | Only trigger when the diff intersects these glob patterns. Empty = always trigger. |
+| `reviews.auto_review.trigger_labels` | string[] | `[]` | repo, org | Only trigger auto-review when the PR has at least one of these labels. Empty = always trigger (regardless of labels). |
+| `reviews.auto_review.skip_labels` | string[] | `[]` | repo, org | Skip auto-review when the PR has any of these labels (e.g. `do-not-review`, `wip`). Evaluated after `trigger_labels`. |
 | `reviews.path_filters` | string[] | `[]` | repo, org | Glob patterns to exclude from review. Prefix with `!` (e.g. `!dist/**`). Org + repo lists are concatenated. |
 | `reviews.path_instructions` | array | `[]` | repo, org | Per-path agent instructions. See [path-instructions.md](./path-instructions.md). |
 | `reviews.max_files` | positive integer | `50` | repo, org | Hard cap on files reviewed per PR. PRs exceeding this are skipped with a summary comment. |
@@ -62,6 +75,8 @@ Controls what gets reviewed and how.
 | `reviews.ignore_authors` | string[] | `['dependabot[bot]', 'renovate[bot]', 'github-actions[bot]']` | repo, org | Skip review for PRs authored by these logins. Org + repo lists are concatenated. |
 | `reviews.min_confidence` | `'high'` \| `'medium'` \| `'low'` | `'low'` | repo, org | Suppress comments whose model confidence is strictly below this value. `low` = post everything. Comments with no confidence field are treated as `'high'`. |
 | `reviews.request_changes_on` | `'critical'` \| `'major'` \| `'never'` | `'critical'` | repo, org | Severity threshold at which the reviewer posts `REQUEST_CHANGES` instead of `COMMENT`. `never` = always post `COMMENT`. |
+| `reviews.max_steps` | integer (1–50) | `20` | repo, org | Maximum number of agent-loop tool-call steps per review run. Raise to allow deeper exploration of large PRs; lower to cap latency. |
+| `reviews.max_conversation_turns` | integer (1–50) | `5` | repo, org | Maximum back-and-forth turns in an inline comment thread before the agent stops replying. |
 
 ---
 
@@ -98,7 +113,7 @@ Controls what gets reviewed and how.
 
 | Key | Type | Default | Scope | Description |
 |---|---|---|---|---|
-| `skills` | string[] | `[]` | repo, org | Skill file paths or npm-distributed skill package names (e.g. `@review-agent/skill-owasp-top10`). Org + repo lists are concatenated. See [Skills docs](../getting-started/). |
+| `skills` | string[] | `[]` | repo, org | Skill file paths relative to the repo root (e.g. `.review-agent/skills/security.md`). Org + repo lists are concatenated. npm-distributed packages are planned (#154). See [Skills docs](../getting-started/skills.md). |
 
 ---
 
@@ -179,6 +194,73 @@ the AI review. See [external-tools.md](./external-tools.md) for full details.
 
 ---
 
+## `ruleset`
+
+Controls which finding categories are active and the minimum severity reported
+per category. All seven categories are enabled by default with minimum severity
+`info` (i.e., all severities posted).
+
+| Key | Type | Default | Scope | Description |
+|---|---|---|---|---|
+| `ruleset.bug.enabled` | boolean | `true` | repo, org | Enable bug findings. |
+| `ruleset.bug.min_severity` | `'critical'` \| `'major'` \| `'minor'` \| `'info'` | `'info'` | repo, org | Minimum severity to post for bug findings. Lower severity findings are suppressed. |
+| `ruleset.security.enabled` | boolean | `true` | repo, org | Enable security findings. |
+| `ruleset.security.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for security findings. |
+| `ruleset.performance.enabled` | boolean | `true` | repo, org | Enable performance findings. |
+| `ruleset.performance.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for performance findings. |
+| `ruleset.maintainability.enabled` | boolean | `true` | repo, org | Enable maintainability findings. |
+| `ruleset.maintainability.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for maintainability findings. |
+| `ruleset.style.enabled` | boolean | `true` | repo, org | Enable style findings. |
+| `ruleset.style.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for style findings. |
+| `ruleset.docs.enabled` | boolean | `true` | repo, org | Enable documentation findings. |
+| `ruleset.docs.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for documentation findings. |
+| `ruleset.test.enabled` | boolean | `true` | repo, org | Enable test-coverage / test-quality findings. |
+| `ruleset.test.min_severity` | severity enum | `'info'` | repo, org | Minimum severity for test findings. |
+
+Valid severity enum values: `'critical'` `'major'` `'minor'` `'info'`.
+
+**Example** — disable style and docs, only report major+ performance findings:
+
+```yaml
+ruleset:
+  style:
+    enabled: false
+  docs:
+    enabled: false
+  performance:
+    min_severity: major
+```
+
+See also: [schema-validation.md](./schema-validation.md) for per-path ruleset
+overrides via `path_instructions`.
+
+---
+
+## `feedback`
+
+Controls how the false-positive suppression system treats repeated findings.
+
+| Key | Type | Default | Scope | Description |
+|---|---|---|---|---|
+| `feedback.suppress_after` | positive integer | `3` | repo, org | Number of thumbs-down reactions on a finding fingerprint before that fingerprint is suppressed in future reviews. Minimum: 1. |
+
+When a reviewer reacts with 👎 to a review comment, the runner increments a
+suppression counter for that finding's fingerprint. Once the counter reaches
+`suppress_after`, the fingerprint is added to the mute list and the finding is
+silently omitted from future reviews.
+
+**Example** — require 5 negative reactions before suppressing:
+
+```yaml
+feedback:
+  suppress_after: 5
+```
+
+See also: [operations/feedback-suppression.md](../operations/feedback-suppression.md)
+for the backfill and reset procedures.
+
+---
+
 ## Effective-config resolution log
 
 Since issue #146, every run emits a `ConfigResolutionLog` that records which
@@ -220,3 +302,47 @@ Example log:
 
 Pass `job.resolutionLog` (from `resolveEffectiveConfig`) to make the hook fire.
 See `packages/config/src/loader.ts` (`resolveEffectiveConfig`) for the API.
+
+---
+
+## Keeping this reference in sync with `schema/v1.json`
+
+The JSON Schema at [`schema/v1.json`](../../schema/v1.json) is the source of
+truth for types, defaults, and allowed values. This document is a
+human-readable rendering of that schema. When the schema changes (new keys,
+changed defaults, new enum values), this reference must be updated in the same
+commit or PR.
+
+### Checklist for schema changes
+
+When modifying `schema/v1.json` or `packages/config/src/schema.ts`:
+
+- [ ] Add or update the corresponding row(s) in the table(s) above.
+- [ ] Update example YAML snippets if defaults or types changed.
+- [ ] Run `review-agent config schema > schema/v1.json` to regenerate the
+      committed schema file from the in-code Zod schema (spec §18.4):
+      ```bash
+      pnpm --filter @review-agent/cli build
+      review-agent config schema > schema/v1.json
+      ```
+- [ ] Verify the schema file and this document agree: `review-agent config validate` against the example snippets in this page.
+- [ ] Note the change in `UPGRADING.md` if the default or type of an existing key changed.
+
+### IDE autocomplete
+
+Add the following line to the top of any `.review-agent.yml` to enable IDE
+validation and autocomplete (VS Code + YAML extension):
+
+```yaml
+# yaml-language-server: $schema=https://review-agent.dev/schema/v1.json
+```
+
+Or configure globally in VS Code `settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "https://review-agent.dev/schema/v1.json": ".review-agent.yml"
+  }
+}
+```

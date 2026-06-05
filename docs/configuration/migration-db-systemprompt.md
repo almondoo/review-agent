@@ -49,7 +49,7 @@ Common patterns and their YAML equivalents:
 | "Ignore dist/ and *.lock" | `reviews.path_filters: ['!dist/**', '!**/*.lock']` |
 | "Use gpt-4o" | `provider: { type: openai, model: gpt-4o }` |
 | "Don't review Dependabot PRs" | `reviews.ignore_authors: [dependabot[bot]]` |
-| Custom domain rules / guidelines | Create a [skill file](../getting-started/) |
+| Custom domain rules / guidelines | Create a [skill file](../getting-started/skills.md) |
 
 For arbitrary free-text instructions with no direct YAML equivalent, the
 recommended approach is a **skill file**:
