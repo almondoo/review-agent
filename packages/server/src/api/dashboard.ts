@@ -1,17 +1,18 @@
 import { costLedger, repos, reviewEvalEvent } from '@review-agent/core/db';
 import type { DbClient } from '@review-agent/db';
-import { loadQualityMetrics } from '@review-agent/db';
+import { loadCostMetrics, loadQualityMetrics } from '@review-agent/db';
 import { and, count, gte, isNull, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { AuthEnv } from '../auth/types.js';
 import { installationAuthz } from './middleware/installation-authz.js';
 import type {
+  CostMetrics,
   DashboardOverview,
   QualityMetrics,
   RepoQualitySnapshot,
   SinceAlias,
 } from './schemas.js';
-import { metricsQuerySchema } from './schemas.js';
+import { costQuerySchema, metricsQuerySchema } from './schemas.js';
 
 export type DashboardDeps = {
   readonly db: DbClient;
@@ -129,6 +130,90 @@ export function createDashboardRouter(deps: DashboardDeps): Hono {
           coverageRate: r.coverageRate,
           latencyP50Ms: r.latencyP50Ms,
           latencyP95Ms: r.latencyP95Ms,
+        })),
+      };
+      return c.json(response, 200);
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // GET /cost?installationId=<n>&since=24h|7d|30d&limit=<n>&cursor=<s>  (viewer+)
+  //
+  // Returns cost analytics for the given installation over the requested period:
+  //   - overall: total cost, token breakdown, call count, budget alert threshold.
+  //   - perModel: cost by provider+model.
+  //   - perRepo: cost by repo (JOIN with review_eval_event on job_id), paginated.
+  //   - perPeriod: time-series buckets (hourly for 24h, daily for 7d/30d).
+  //
+  // `app.current_tenant` GUC is set inside `loadCostMetrics` via `withTenant`
+  // so RLS policies on `cost_ledger` and `review_eval_event` are satisfied.
+  //
+  // NOTE: budget_alert_usd notification delivery is NOT implemented here.
+  // The overall.budgetAlertUsd field exposes the threshold when exceeded so
+  // the dashboard can highlight overspend. Actual notification channels
+  // (Slack / email) are deferred to issue #144.
+  // ---------------------------------------------------------------------------
+  app.get(
+    '/cost',
+    installationAuthz({
+      required: 'viewer',
+      getInstallationId: (c) => {
+        const v = c.req.query('installationId');
+        return v !== undefined && /^\d+$/.test(v) ? v : undefined;
+      },
+      multiTenant,
+      db: deps.db,
+    }),
+    async (c) => {
+      const now = (deps.now ?? (() => new Date()))();
+
+      const installationIdStr = c.req.query('installationId');
+      if (installationIdStr === undefined || !/^\d+$/.test(installationIdStr)) {
+        return c.json({ error: 'installationId required' }, 400);
+      }
+      const installationId = BigInt(installationIdStr);
+
+      const rawQuery = Object.fromEntries(new URL(c.req.url).searchParams.entries());
+      const parsed = costQuerySchema.safeParse(rawQuery);
+      if (!parsed.success) {
+        return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
+      }
+      const { since, limit, cursor } = parsed.data;
+      const sinceAlias = since as SinceAlias;
+
+      const result = await loadCostMetrics(deps.db, {
+        installationId,
+        since: sinceAlias,
+        limit,
+        now,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+
+      const response: CostMetrics = {
+        period: sinceAlias,
+        overall: {
+          totalCostUsd: result.overall.totalCostUsd,
+          totalInputTokens: result.overall.totalInputTokens,
+          totalOutputTokens: result.overall.totalOutputTokens,
+          totalCacheReadTokens: result.overall.totalCacheReadTokens,
+          totalCacheCreationTokens: result.overall.totalCacheCreationTokens,
+          callCount: result.overall.callCount,
+          budgetAlertUsd: result.overall.budgetAlertUsd,
+        },
+        perModel: result.perModel.map((m) => ({
+          provider: m.provider,
+          model: m.model,
+          costUsd: m.costUsd,
+          callCount: m.callCount,
+        })),
+        perRepo: result.perRepo.map((r) => ({
+          repo: r.repo,
+          costUsd: r.costUsd,
+        })),
+        nextCursor: result.nextCursor,
+        perPeriod: result.perPeriod.map((p) => ({
+          bucket: p.bucket,
+          costUsd: p.costUsd,
         })),
       };
       return c.json(response, 200);

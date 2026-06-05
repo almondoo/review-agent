@@ -185,6 +185,44 @@ export type QualityMetrics = {
   perRepo: RepoQualitySnapshot[];
 };
 
+// --- Cost Analytics ---
+
+export type ModelCostSnapshot = {
+  provider: string;
+  model: string;
+  costUsd: number;
+  callCount: number;
+};
+
+export type RepoCostSnapshot = {
+  repo: string;
+  costUsd: number;
+};
+
+export type PeriodCostBucket = {
+  bucket: string;
+  costUsd: number;
+};
+
+export type CostMetricsOverall = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+  callCount: number;
+  budgetAlertUsd: number | null;
+};
+
+export type CostMetrics = {
+  period: MetricsSince;
+  overall: CostMetricsOverall;
+  perModel: ModelCostSnapshot[];
+  perRepo: RepoCostSnapshot[];
+  nextCursor: string | null;
+  perPeriod: PeriodCostBucket[];
+};
+
 // --- GitHub App onboarding ---
 
 export type InstallationRepo = {

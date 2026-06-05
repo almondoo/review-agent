@@ -860,3 +860,35 @@ describe('loadConfigFromYaml — large_pr (#158)', () => {
     ).toThrow(ConfigError);
   });
 });
+
+describe('loadConfigFromYaml — cost.budget_alert_usd (#140)', () => {
+  it('is undefined by default (alert disabled)', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.cost.budget_alert_usd).toBeUndefined();
+  });
+
+  it('accepts a positive numeric value', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 50\n');
+    expect(cfg.cost.budget_alert_usd).toBe(50);
+  });
+
+  it('accepts a fractional positive value', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 0.5\n');
+    expect(cfg.cost.budget_alert_usd).toBe(0.5);
+  });
+
+  it('rejects zero (must be positive)', () => {
+    expect(() => loadConfigFromYaml('cost:\n  budget_alert_usd: 0\n')).toThrow(ConfigError);
+  });
+
+  it('rejects negative value', () => {
+    expect(() => loadConfigFromYaml('cost:\n  budget_alert_usd: -10\n')).toThrow(ConfigError);
+  });
+
+  it('does not affect other cost defaults', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 20\n');
+    expect(cfg.cost.max_usd_per_pr).toBe(1.0);
+    expect(cfg.cost.daily_cap_usd).toBe(50.0);
+    expect(cfg.cost.hard_stop).toBe(true);
+  });
+});

@@ -32,6 +32,14 @@ export {
 } from './conversation-state.js';
 export { createCostLedgerRecorder, createCostTotalsReader } from './cost-ledger.js';
 export {
+  type CostMetricsOverall,
+  type CostMetricsResult,
+  loadCostMetrics,
+  type ModelCostSnapshot,
+  type PeriodCostBucket,
+  type RepoCostSnapshot,
+} from './cost-metrics.js';
+export {
   type SegmentVerificationReport,
   verifyAuditChainSegmentFromDb,
 } from './hmac-chain.js';

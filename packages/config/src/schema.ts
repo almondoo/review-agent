@@ -139,6 +139,17 @@ const CostSchema = z
     max_usd_per_pr: z.number().positive().default(1.0),
     hard_stop: z.boolean().default(true),
     daily_cap_usd: z.number().positive().default(50.0),
+    /**
+     * Soft budget alert threshold in USD (cumulative within the billing period).
+     * When the running cost for a job crosses this value, `onThresholdCrossed`
+     * is called with `threshold: 'budget_alert'` — a purely informational event
+     * that does NOT abort the review. The intent is to let OTel / audit logs
+     * capture the crossing so operators can act on it.
+     *
+     * Actual notification delivery (Slack / email) is deferred to issue #144.
+     * Not set by default (undefined = alert disabled).
+     */
+    budget_alert_usd: z.number().positive().optional(),
   })
   .strict();
 

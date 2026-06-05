@@ -5,6 +5,7 @@ import {
   bulkCreateMockRepos,
   deleteMockLlmKey,
   deleteMockRepo,
+  getMockCostMetrics,
   getMockInstallationRepos,
   getMockLlmKeys,
   getMockQualityMetrics,
@@ -25,6 +26,7 @@ import type {
   AuthMeResponse,
   BulkCreateRepoBody,
   BulkCreateRepoResponse,
+  CostMetrics,
   CreateRepoBody,
   DeleteLlmKeyBody,
   DeleteLlmKeyResponse,
@@ -459,6 +461,35 @@ export function useQualityMetrics(installationId: number | null, since: MetricsS
   return useQuery({
     queryKey: ['quality-metrics', installationId, since],
     queryFn: () => fetchQualityMetrics(installationId as number, since),
+    enabled: installationId !== null,
+    staleTime: 30_000,
+  });
+}
+
+// --- Cost Analytics ---
+
+async function fetchCostMetrics(
+  installationId: number,
+  since: MetricsSince,
+  cursor?: string,
+): Promise<CostMetrics> {
+  if (IS_MOCK) return Promise.resolve(getMockCostMetrics(installationId, since));
+  const params = new URLSearchParams({
+    installationId: String(installationId),
+    since,
+  });
+  if (cursor !== undefined) params.set('cursor', cursor);
+  return apiFetch<CostMetrics>(`/api/dashboard/cost?${params.toString()}`);
+}
+
+export function useCostMetrics(
+  installationId: number | null,
+  since: MetricsSince = '30d',
+  cursor?: string,
+) {
+  return useQuery({
+    queryKey: ['cost-metrics', installationId, since, cursor],
+    queryFn: () => fetchCostMetrics(installationId as number, since, cursor),
     enabled: installationId !== null,
     staleTime: 30_000,
   });

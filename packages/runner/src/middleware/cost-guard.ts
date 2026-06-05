@@ -18,7 +18,17 @@ export type CostGuardRecordContext = {
   readonly model: string;
 };
 
-export type CostThreshold = 'fallback' | 'abort' | 'kill' | 'daily_cap';
+/**
+ * Threshold kinds emitted via `onThresholdCrossed`:
+ *   fallback     — cost is above the fallback hint level but below abort.
+ *   abort        — per-PR cap exceeded; review is aborted.
+ *   kill         — per-PR cap very heavily exceeded (>1.5×); hard kill.
+ *   daily_cap    — daily cap exceeded; review is aborted.
+ *   budget_alert — soft alert: `budget_alert_usd` config key crossed.
+ *                  Informational only — review continues. Notification
+ *                  delivery (Slack/email) is deferred to issue #144.
+ */
+export type CostThreshold = 'fallback' | 'abort' | 'kill' | 'daily_cap' | 'budget_alert';
 
 export type CostThresholdEvent = {
   readonly threshold: CostThreshold;
@@ -32,11 +42,21 @@ export type CostGuardOptions = {
   readonly onFallbackHint?: () => void;
   /**
    * Fired on every threshold transition (fallback / abort / kill /
-   * daily_cap). The hook is responsible for OTel attribute
+   * daily_cap / budget_alert). The hook is responsible for OTel attribute
    * propagation, audit-log entries, and the kill-switch handler.
+   *
+   * For `budget_alert`: informational only — the review is NOT aborted.
+   * Notification channel consumption (Slack/email) is deferred to #144.
    */
   readonly onThresholdCrossed?: (event: CostThresholdEvent) => void;
   readonly dailyCapUsd?: number;
+  /**
+   * Soft budget alert threshold in USD (from `cost.budget_alert_usd` config).
+   * When the cumulative cost after a successful LLM call crosses this value,
+   * `onThresholdCrossed` is fired with `threshold: 'budget_alert'`.
+   * The review is NOT aborted. Notification delivery deferred to issue #144.
+   */
+  readonly budgetAlertUsd?: number;
   readonly readTotals?: () => Promise<CostTotals>;
   readonly recorder?: CostLedgerRecorder;
   readonly recordContext?: CostGuardRecordContext;
@@ -47,6 +67,7 @@ export function createCostGuard({
   onFallbackHint,
   onThresholdCrossed,
   dailyCapUsd = 0,
+  budgetAlertUsd,
   readTotals,
   recorder,
   recordContext,
@@ -108,6 +129,17 @@ export function createCostGuard({
       await recordExceeded(recorder, recordContext, 0);
       throw new CostExceededError(cap, cumulative);
     }
+
+    // Soft budget alert: informational only, does NOT abort the review.
+    // Notification delivery (Slack/email) is deferred to issue #144.
+    if (budgetAlertUsd !== undefined && budgetAlertUsd > 0 && state.totalCostUsd > budgetAlertUsd) {
+      onThresholdCrossed?.({
+        threshold: 'budget_alert',
+        cumulativeUsd: state.totalCostUsd,
+        capUsd: budgetAlertUsd,
+      });
+    }
+
     return result;
   };
 }

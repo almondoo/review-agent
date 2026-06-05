@@ -270,4 +270,209 @@ describe('dashboard router', () => {
       expect(res.status).toBe(422);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // GET /cost
+  // ---------------------------------------------------------------------------
+  describe('GET /cost', () => {
+    /**
+     * Build a minimal db mock for loadCostMetrics.
+     *
+     * loadCostMetrics calls inside withTenant (db.transaction):
+     *   tx.execute(set_config)   -- GUC
+     *   tx.select().from().where()                         -- overallRow
+     *   tx.select().from().where().groupBy().orderBy()     -- perModelRows
+     *   tx.select().from().innerJoin().where().groupBy().orderBy() -- perRepoAllRows
+     *   tx.select().from().where().groupBy().orderBy()     -- perPeriodRows
+     */
+    function makeMinimalCostDb(
+      overrides: {
+        overallRow?: unknown[];
+        perModelRows?: unknown[];
+        perRepoRows?: unknown[];
+        perPeriodRows?: unknown[];
+      } = {},
+    ) {
+      const sequences = [
+        overrides.overallRow ?? [
+          {
+            totalCostUsd: '5.0',
+            totalInputTokens: '100000',
+            totalOutputTokens: '10000',
+            totalCacheReadTokens: '5000',
+            totalCacheCreationTokens: '3000',
+            callCount: 20,
+          },
+        ],
+        overrides.perModelRows ?? [
+          { provider: 'anthropic', model: 'claude-sonnet-4-5', costUsd: '5.0', callCount: 20 },
+        ],
+        overrides.perRepoRows ?? [{ repo: 'owner/repo', costUsd: '5.0' }],
+        overrides.perPeriodRows ?? [{ bucket: '2026-05-15T00:00:00.000Z', costUsd: '5.0' }],
+      ];
+      let selectIdx = 0;
+      const execSpy = vi.fn().mockResolvedValue([]);
+
+      function makeChain(result: unknown[]) {
+        const resolved = Promise.resolve(result);
+        return Object.assign(resolved, {
+          groupBy: () =>
+            Object.assign(Promise.resolve(result), {
+              orderBy: () => Promise.resolve(result),
+            }),
+          orderBy: () => Promise.resolve(result),
+        });
+      }
+
+      const tx = {
+        execute: execSpy,
+        select: () => {
+          const currentIdx = selectIdx++;
+          const result = sequences[currentIdx] ?? [];
+          return {
+            from: () => ({
+              where: () => makeChain(result),
+              innerJoin: () => ({
+                where: () => makeChain(result),
+              }),
+            }),
+          };
+        },
+      };
+
+      const db = {
+        transaction: vi.fn((fn: (tx: typeof tx) => Promise<unknown>) => fn(tx)),
+        select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+      };
+
+      return { db, execSpy };
+    }
+
+    it('returns 400 when installationId is missing', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost');
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body).toMatchObject({ error: 'installationId required' });
+    });
+
+    it('returns 400 when installationId is not numeric', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=notanumber');
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 200 with CostMetrics shape for valid installationId', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=42');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toHaveProperty('period');
+      expect(body).toHaveProperty('overall');
+      expect(body).toHaveProperty('perModel');
+      expect(body).toHaveProperty('perRepo');
+      expect(body).toHaveProperty('nextCursor');
+      expect(body).toHaveProperty('perPeriod');
+      expect(['24h', '7d', '30d']).toContain(body.period);
+      expect(typeof body.overall.totalCostUsd).toBe('number');
+      expect(Array.isArray(body.perModel)).toBe(true);
+      expect(Array.isArray(body.perRepo)).toBe(true);
+      expect(Array.isArray(body.perPeriod)).toBe(true);
+    });
+
+    it('defaults since to 30d when not provided', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=1');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.period).toBe('30d');
+    });
+
+    it('accepts all valid since aliases', async () => {
+      for (const since of ['24h', '7d', '30d'] as const) {
+        const { db } = makeMinimalCostDb();
+        const app = createDashboardRouter({
+          // biome-ignore lint/suspicious/noExplicitAny: test mock
+          db: db as any,
+          now: () => NOW,
+        });
+        const res = await app.request(`http://host/cost?installationId=1&since=${since}`);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.period).toBe(since);
+      }
+    });
+
+    it('returns 422 for invalid since value', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=1&since=badvalue');
+      expect(res.status).toBe(422);
+    });
+
+    it('returns overall.budgetAlertUsd=null when not exceeded', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=1');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.overall.budgetAlertUsd).toBeNull();
+    });
+
+    it('propagates pagination cursor in query', async () => {
+      const { db } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      const res = await app.request('http://host/cost?installationId=1&cursor=owner%2Frepo-19');
+      // With only 1 repo in the mock and cursor pointing past it, perRepo will be empty.
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.nextCursor).toBeNull();
+    });
+
+    it('sets app.current_tenant GUC via withTenant', async () => {
+      const { db, execSpy } = makeMinimalCostDb();
+      const app = createDashboardRouter({
+        // biome-ignore lint/suspicious/noExplicitAny: test mock
+        db: db as any,
+        now: () => NOW,
+      });
+      await app.request('http://host/cost?installationId=99');
+      expect(execSpy).toHaveBeenCalled();
+      const firstCall = execSpy.mock.calls[0]?.[0];
+      expect(typeof firstCall).toBe('object');
+      expect(firstCall).not.toBeNull();
+    });
+  });
 });

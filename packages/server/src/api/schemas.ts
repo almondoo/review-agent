@@ -231,3 +231,72 @@ export type QualityMetrics = {
   /** Per-repo breakdown. Each entry includes a `repo` field. */
   perRepo: ReadonlyArray<RepoQualitySnapshot & { repo: string }>;
 };
+
+// ---------------------------------------------------------------------------
+// Cost analytics (issue #140)
+// ---------------------------------------------------------------------------
+
+/**
+ * Query schema for `GET /api/dashboard/cost`.
+ * `since` defaults to `'30d'`, `limit` to 20 (max 200), `cursor` is optional.
+ */
+export const costQuerySchema = z.object({
+  since: z
+    .union([z.literal('24h'), z.literal('7d'), z.literal('30d')])
+    .optional()
+    .default('30d'),
+  limit: z
+    .string()
+    .optional()
+    .transform((v) => {
+      const n = v !== undefined ? Number(v) : 20;
+      return Number.isFinite(n) && n >= 1 ? Math.min(n, 200) : 20;
+    }),
+  cursor: z.string().optional(),
+});
+
+export type ModelCostSnapshot = {
+  provider: string;
+  model: string;
+  costUsd: number;
+  callCount: number;
+};
+
+export type RepoCostSnapshot = {
+  repo: string;
+  costUsd: number;
+};
+
+export type PeriodCostBucket = {
+  /** UTC ISO-8601 string for the bucket start (hour or day). */
+  bucket: string;
+  costUsd: number;
+};
+
+export type CostMetricsOverall = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+  callCount: number;
+  /**
+   * Set when `budget_alert_usd` is configured and the period cost exceeds it,
+   * so the dashboard can highlight overspend. Null otherwise.
+   */
+  budgetAlertUsd: number | null;
+};
+
+export type CostMetrics = {
+  /** The requested period alias. */
+  period: SinceAlias;
+  overall: CostMetricsOverall;
+  perModel: ReadonlyArray<ModelCostSnapshot>;
+  perRepo: ReadonlyArray<RepoCostSnapshot>;
+  /**
+   * Opaque cursor for the next page of perRepo results.
+   * Null when there are no more results.
+   */
+  nextCursor: string | null;
+  perPeriod: ReadonlyArray<PeriodCostBucket>;
+};

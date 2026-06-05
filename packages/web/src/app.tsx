@@ -4,6 +4,7 @@ import { Layout } from './components/layout.js';
 import { LayoutFullWidth } from './components/layout-full-width.js';
 import { ProtectedRoute } from './components/protected-route.js';
 import { ByokKeysPage } from './pages/byok-keys.js';
+import { CostAnalyticsPage } from './pages/cost-analytics.js';
 import { GithubReposPage } from './pages/github-repos.js';
 import { GithubSetupPage } from './pages/github-setup.js';
 import { HistoryPage } from './pages/history.js';
@@ -46,6 +47,7 @@ export const router = createBrowserRouter([
               { path: '/history/:id', element: <HistoryDetailPage /> },
               { path: '/how-it-works', element: <HowItWorksPage /> },
               { path: '/metrics', element: <QualityMetricsPage /> },
+              { path: '/cost', element: <CostAnalyticsPage /> },
               { path: '*', element: <NotFoundPage /> },
             ],
           },

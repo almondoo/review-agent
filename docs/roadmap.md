@@ -740,6 +740,25 @@ typecheck/lint/build green。**未 push / develop→main 未マージ**。
 - **未対応（follow-up）**: VitePress サイトの build/deploy 配線（spec §18.2 が名指しするが依存+CI+deploy のインフラ判断）、
   preset 配布ガイド（#154）。
 
+### [A11] cost analytics + multi-line suggestions — #140 / #165 landed (develop, 2026-06-05)
+
+「doable subset」継続（maintainer 承認: doable な subset を続行）。develop に landed（本セッションで自律実装）。
+統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#140](https://github.com/almondoo/review-agent/issues/140) | deeper cost analytics (per-repo / per-model / per-period) | ✅ landed (develop, budget alert 送信は #144 依存) |
+| [#165](https://github.com/almondoo/review-agent/issues/165) | multi-line range committable suggestions | ✅ landed (develop) |
+
+- **#140**: `loadCostMetrics`（**withTenant で RLS GUC**、per-repo=`cost_ledger ⋈ review_eval_event(job_id)`、
+  per-model=`GROUP BY provider,model`、per-period=`date_trunc` バケット、cursor pagination）+ `GET /api/dashboard/cost?installationId&since`
+  （sessionAuth + viewer + installationAuthz）+ web `/cost` ページ（#142 同型、charting lib なし＝バケット表で表現）。
+  `cost.budget_alert_usd`（soft 閾値）+ cost-guard の `budget_alert` emit まで実装（**実通知送信と閾値源の完全配線は #144 依存**。
+  cost 分析ダッシュボード自体は完全機能）。
+- **#165**: 単一 anchor 行 suggestion(#152) を `start_line`/`start_side` で多行範囲へ拡張。range 全体が hunk 内のときのみ描画、
+  partial/範囲外は suppress（コメントのみ）、単一行は back-compat。fingerprint は anchor(line) 維持。
+- 既知: #140 の budget alert は #144（通知チャネル）依存。既存 overview/repo-metrics の RLS バグは #166 で対応（次）。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
@@ -750,8 +769,10 @@ typecheck/lint/build green。**未 push / develop→main 未マージ**。
 #132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
 フル per-principal credential 方式の最終決定は GA 据え置き) /
 #137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
-#138 (retry/DLQ/alerting — #144 依存) / #140 (cost analytics — #144/#142 依存) /
-#144 (notifications — #138/#140 のイベント源前提) / #154 (preset 配布 — npm publish 権限要)。
+#138 (retry/DLQ/alerting — #144 依存) /
+#144 (notifications — #138/#140 のイベント源前提。#140 が budget_alert イベントを emit する所まで landed、消費する channel が #144) /
+#154 (preset 配布 — npm publish 権限要)。
+（#140 cost analytics は分析+ダッシュボードを landed したため [C] から除外 → [A11] 参照。budget alert の通知送信のみ #144 待ち）
 （#161 は landed したため [C] から除外 → [A2] 参照）
 
 ---
