@@ -718,10 +718,31 @@ develop に landed（本セッションで自律実装）。docs / yaml / CI の
 - 既存 #34 compose / #5 action.yml branding を活用（重複統合なし、用途差を注記）。
 - 既知: `cli.md` の `server.md` リンク切れは #150（docs system）で対応。
 
+### [A10] onboarding & documentation system — #150 landed (develop, 2026-06-05)
+
+散在していた docs を統合し navigable な onboarding system 化（Markdown + `docs/index.md` ナビ＝issue の
+「VitePress sidebar or equivalent」の equivalent 経路）。develop に landed（本セッションで自律実装）。docs のみ。
+typecheck/lint/build green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#150](https://github.com/almondoo/review-agent/issues/150) | onboarding & documentation system | ✅ landed (develop, 一部 #154 依存・VitePress 別判断) |
+
+主な変更:
+- **getting-started**: `quickstart.md`（CLI/Action/server の 3 経路）/ `server.md`（server mode quickstart、`cli.md` の
+  `./server.md` リンク切れ修正）/ `skills.md`（`../getting-started/` ディレクトリリンク切れ修正）。
+- **providers**: `anthropic`/`openai`/`azure-openai`/`google`/`vertex`/`bedrock` の 6 ページ（env は `packages/llm` 実装準拠）
+  + 既存 `openai-compatible` と相互リンク。
+- **config-reference**: `ruleset`/`feedback`/`reviews.max_steps`/`max_conversation_turns`/`auto_review.{trigger,skip}_labels`
+  を補完 + `schema/v1.json` link + `yaml-language-server` snippet（§18.4）+ schema-sync チェックリスト（AC#7）。
+- **preset-authoring.md**（write/extend/chain。third-party publish/consume は #154 依存で stub）。
+- **docs/index.md**: 全 docs を統合した TOC（orphan 0、#12/#43/#47/#100/#104 fragment を統合）。
+- **未対応（follow-up）**: VitePress サイトの build/deploy 配線（spec §18.2 が名指しするが依存+CI+deploy のインフラ判断）、
+  preset 配布ガイド（#154）。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
-#150 onboarding & docs system /
 #162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック
