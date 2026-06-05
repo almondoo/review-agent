@@ -392,6 +392,75 @@ export const RulesetSchema = z.record(z.enum(CATEGORIES), RulesetCategorySchema)
 
 export type Ruleset = z.infer<typeof RulesetSchema>;
 
+// Notifications configuration (#144). Drives the notification dispatcher in
+// `@review-agent/server`. Secrets (webhook URL, SMTP password) are NEVER
+// placed in this config — they are read from env at runtime:
+//
+//   REVIEW_AGENT_SLACK_WEBHOOK_URL   — Slack incoming webhook URL
+//   REVIEW_AGENT_SMTP_PASSWORD       — SMTP account password
+//
+// SES authentication uses the AWS credential chain (no secret in config).
+const NotificationEventsSchema = z
+  .object({
+    job_failed: z.boolean().default(true),
+    budget_overrun: z.boolean().default(true),
+    // Defaults to false — operators must opt in to receive a notification
+    // for every completed review (can be noisy in high-PR-volume repos).
+    review_completed: z.boolean().default(false),
+  })
+  .strict();
+
+const NotificationSmtpSchema = z
+  .object({
+    host: z.string().min(1),
+    port: z.number().int().positive().default(587),
+    secure: z.boolean().default(false),
+    // SMTP account username. Password is env REVIEW_AGENT_SMTP_PASSWORD.
+    user: z.string().min(1),
+  })
+  .strict();
+
+const NotificationSesSchema = z
+  .object({
+    // AWS region for the SES client. Falls back to AWS_REGION / AWS_DEFAULT_REGION
+    // from the credential chain when absent.
+    region: z.string().optional(),
+  })
+  .strict();
+
+const NotificationEmailSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    transport: z.enum(['smtp', 'ses']).default('smtp'),
+    // Sender address in RFC 5322 format, e.g. "Review Agent <noreply@example.com>".
+    from: z.string().optional(),
+    to: z.array(z.string().min(1)).default([]),
+    smtp: NotificationSmtpSchema.optional(),
+    ses: NotificationSesSchema.optional(),
+  })
+  .strict();
+
+const NotificationSlackSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    // Webhook URL is env REVIEW_AGENT_SLACK_WEBHOOK_URL — not stored in config.
+  })
+  .strict();
+
+export const NotificationsSchema = z
+  .object({
+    events: NotificationEventsSchema.default({}),
+    slack: NotificationSlackSchema.default({}),
+    email: NotificationEmailSchema.default({}),
+  })
+  .strict();
+
+export type NotificationsConfig = z.infer<typeof NotificationsSchema>;
+export type NotificationEventsConfig = z.infer<typeof NotificationEventsSchema>;
+export type NotificationEmailConfig = z.infer<typeof NotificationEmailSchema>;
+export type NotificationSmtpConfig = z.infer<typeof NotificationSmtpSchema>;
+export type NotificationSesConfig = z.infer<typeof NotificationSesSchema>;
+
 // `extends:` (§10.2 / #151) supports three forms:
 //
 //   extends: org               — org-merge keyword (§10.2 layer 3). Merges
@@ -491,6 +560,11 @@ export const ConfigSchema = z
     // dedup + configurable merge_policy. Absent `external_tools` key == no
     // external findings injected (complete back-compat).
     external_tools: ExternalToolsSchema.default(ExternalToolsSchema.parse({})),
+    // Notification channels (#144): Slack incoming webhook and/or email (SMTP/SES).
+    // Events job_failed and budget_overrun are on by default; review_completed is off.
+    // Secrets (webhook URL, SMTP password) live in env, not in config.
+    // Absent `notifications` key == all channels disabled (back-compat).
+    notifications: NotificationsSchema.default(NotificationsSchema.parse({})),
   })
   .strict();
 

@@ -775,6 +775,28 @@ typecheck/lint/build green。**未 push / develop→main 未マージ**。
 - null-installation の repo/データは per-installation RLS で読めない（write-only と同じ限界）＝docs/コメント明記。
 - レスポンス型不変（web 無影響）。#142 `/metrics`・#140 `/cost` は元から正しいので不変。
 
+### [A13] notifications — #144 landed (develop, 2026-06-06)
+
+Slack/email 通知を develop に landed（maintainer 決定: email は **SMTP(nodemailer) + SES(@aws-sdk/client-ses) 両方**を
+pluggable channel として出荷、Slack は fetch incoming webhook）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#144](https://github.com/almondoo/review-agent/issues/144) | notifications (Slack/email: completion/failure/cost overrun) | ✅ landed (develop, job.failed の DLQ 検知は #138) |
+
+- **通知モジュール** `packages/server/src/notification/`: pluggable `NotificationChannel`（Slack=fetch / SMTP=nodemailer /
+  SES=@aws-sdk/client-ses、全て DI 可能）+ `createNotificationDispatcher`（event gate + `jobId:type` dedup + **fail-open** +
+  metadata-only payload）+ `buildNotificationChannels(config, env)`。
+- **config**: `notifications.{events:{job_failed,budget_overrun,review_completed(既定off)}, slack:{enabled}, email:{enabled,
+  transport:smtp|ses, from, to, smtp{...}, ses{region}}}`。秘密は env（`REVIEW_AGENT_SLACK_WEBHOOK_URL` /
+  `REVIEW_AGENT_SMTP_PASSWORD`）、SES は AWS credential chain。
+- **配線**: runner は `onThresholdCrossed`/`budgetAlertUsd` を RunReviewDeps→cost-guard へ透過（runner は I/O 持たず hook のみ）。
+  action 経路で budget.overrun / review.completed / job.failed を dispatch（fail-open）。server の operator 注入 JobHandler 向けに
+  `@review-agent/server/notification` subpath を seam 公開。
+- **interim/限界**: job.failed は runReview 恒久 throw 時に dispatch。**DLQ 枯渇ベースの正確な検知は #138**。CLI は通知対象外。
+  action バンドルに nodemailer+SES が入り ~2MB 増（将来 standalone package 化で解消余地）。
+- docs: `docs/operations/notifications.md`。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
@@ -785,9 +807,9 @@ typecheck/lint/build green。**未 push / develop→main 未マージ**。
 #132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
 フル per-principal credential 方式の最終決定は GA 据え置き) /
 #137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
-#138 (retry/DLQ/alerting — #144 依存) /
-#144 (notifications — #138/#140 のイベント源前提。#140 が budget_alert イベントを emit する所まで landed、消費する channel が #144) /
+#138 (retry/DLQ/alerting — #144 の通知 channel は landed 済み。残るは SQS DLQ 枯渇検知→正確な job.failed 発火 + retry/alerting 方針) /
 #154 (preset 配布 — npm publish 権限要)。
+（#144 notifications は landed したため [C] から除外 → [A13] 参照）
 （#140 cost analytics は分析+ダッシュボードを landed したため [C] から除外 → [A11] 参照。budget alert の通知送信のみ #144 待ち）
 （#161 は landed したため [C] から除外 → [A2] 参照）
 

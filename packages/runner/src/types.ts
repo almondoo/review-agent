@@ -595,6 +595,32 @@ export type RunReviewDeps = {
     readonly installationId: bigint;
     readonly repo: string;
   }) => Promise<ReadonlyArray<{ readonly factText: string }>>;
+  /**
+   * #144 Phase B: fired when the cost guard crosses the `budget_alert`
+   * threshold (`cost.budget_alert_usd` in `.review-agent.yml`). The hook
+   * is informational — the review continues. Callers (action, server
+   * job-handler) use this to dispatch a `budget.overrun` notification via
+   * `createNotificationDispatcher`.
+   *
+   * Mirrors `CostThresholdEvent` from `packages/runner/src/middleware/cost-guard.ts`.
+   * Declared inline here (structural typing) so `@review-agent/runner` has no
+   * import dependency on the notification module.
+   */
+  readonly onThresholdCrossed?: (event: {
+    readonly threshold: 'fallback' | 'abort' | 'kill' | 'daily_cap' | 'budget_alert';
+    readonly cumulativeUsd: number;
+    readonly capUsd: number;
+  }) => void;
+  /**
+   * #144 Phase B: soft budget alert threshold in USD, forwarded to
+   * `createCostGuard` as `budgetAlertUsd`. When the cumulative cost for the
+   * job crosses this value, `onThresholdCrossed` is fired with
+   * `threshold: 'budget_alert'`. Informational only — the review continues.
+   *
+   * Mapped from `config.cost.budget_alert_usd` by the action / server caller.
+   * Optional for back-compat — absent means the budget_alert event never fires.
+   */
+  readonly budgetAlertUsd?: number;
 };
 
 export type Middleware = (

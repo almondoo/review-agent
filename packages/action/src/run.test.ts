@@ -739,3 +739,146 @@ describe('runAction', () => {
     expect(warnMessages.some((m) => m.includes('not found or unreadable'))).toBe(true);
   });
 });
+
+// #144 Phase B — notification dispatch
+describe('runAction — notification dispatch', () => {
+  function makeMockDispatcher() {
+    const dispatched: Array<import('@review-agent/server/notification').NotificationEvent> = [];
+    const dispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch(event) {
+        dispatched.push(event);
+      },
+    };
+    return { dispatcher, dispatched };
+  }
+
+  it('dispatches review.completed after a successful review', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const vcs = makeVCS();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        notificationDispatcher: dispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    // review.completed is dispatched async (fire-and-forget); wait a tick.
+    await new Promise((r) => setTimeout(r, 0));
+    const completed = dispatched.find((e) => e.type === 'review.completed');
+    expect(completed).toBeDefined();
+    expect(completed?.repo).toBe('o/r');
+    expect(completed?.prNumber).toBe(1);
+    expect(completed?.summary).toContain('Review completed');
+  });
+
+  it('dispatches job.failed when runReview throws and re-throws the original error', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const provider = makeProvider();
+    // Estimate >> cap so cost-guard throws CostExceededError
+    provider.estimateCost = vi.fn(async () => ({ inputTokens: 1_000_000, estimatedUsd: 100 }));
+    const vcs = makeVCS();
+
+    await expect(
+      runAction(
+        { ...inputs, costCapUsd: 0.01 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => provider,
+          notificationDispatcher: dispatcher,
+        },
+      ),
+    ).rejects.toThrow(/cost/i);
+
+    await new Promise((r) => setTimeout(r, 0));
+    const failed = dispatched.find((e) => e.type === 'job.failed');
+    expect(failed).toBeDefined();
+    expect(failed?.repo).toBe('o/r');
+  });
+
+  it('fail-open: a throwing dispatcher does not prevent review.completed result', async () => {
+    const throwingDispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch() {
+        throw new Error('channel down');
+      },
+    };
+    const vcs = makeVCS();
+    // Should not throw despite dispatcher throwing
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        notificationDispatcher: throwingDispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(result.postedComments).toBeGreaterThanOrEqual(0);
+  });
+
+  it('dispatches budget.overrun when budget_alert threshold fires via config.cost.budget_alert_usd', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const provider = makeProvider();
+    // costUsd (0.001) exceeds budgetAlertUsd (0.0005 from yaml) → budget_alert fires
+    // The provider returns costUsd: 0.001 (from makeProvider)
+    const vcs = makeVCS();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        // Set budget_alert_usd below the provider's costUsd (0.001)
+        readFile: async () => 'cost:\n  budget_alert_usd: 0.0005\n',
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        notificationDispatcher: dispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    // budget_alert is fired synchronously in cost-guard, but dispatch is async fire-and-forget
+    await new Promise((r) => setTimeout(r, 0));
+    const overrun = dispatched.find((e) => e.type === 'budget.overrun');
+    expect(overrun).toBeDefined();
+    expect(overrun?.repo).toBe('o/r');
+    expect(overrun?.summary).toContain('Budget alert');
+  });
+
+  it('fail-open: a throwing dispatcher for job.failed does not suppress the original error', async () => {
+    const throwingDispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch() {
+        throw new Error('channel down');
+      },
+    };
+    const provider = makeProvider();
+    provider.estimateCost = vi.fn(async () => ({ inputTokens: 1_000_000, estimatedUsd: 100 }));
+    const vcs = makeVCS();
+
+    // Original cost error must propagate even if dispatcher throws
+    await expect(
+      runAction(
+        { ...inputs, costCapUsd: 0.01 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => provider,
+          notificationDispatcher: throwingDispatcher,
+        },
+      ),
+    ).rejects.toThrow(/cost/i);
+  });
+});

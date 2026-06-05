@@ -25,5 +25,9 @@ export default defineConfig({
     '@review-agent/runner',
     '@review-agent/config',
     '@review-agent/platform-github',
+    // Notification subpath only — dispatcher, factory, channel modules.
+    // The heavy transitive deps (nodemailer, @aws-sdk/client-ses) are bundled
+    // as-is; they only activate at runtime if the operator configures SMTP/SES.
+    '@review-agent/server',
   ],
 });

@@ -600,7 +600,13 @@ async function runReviewInner(
   const runSinglePass = async (diffPayload: string): Promise<ReviewOutput> => {
     const middlewares: ReadonlyArray<Middleware> = [
       createInjectionGuard(),
-      createCostGuard({ state: costState }),
+      createCostGuard({
+        state: costState,
+        ...(deps.onThresholdCrossed !== undefined
+          ? { onThresholdCrossed: deps.onThresholdCrossed }
+          : {}),
+        ...(deps.budgetAlertUsd !== undefined ? { budgetAlertUsd: deps.budgetAlertUsd } : {}),
+      }),
     ];
 
     const baseInput: ReviewInput = {

@@ -19,6 +19,11 @@ import {
   renderSkillsBlock,
   runReview,
 } from '@review-agent/runner';
+import {
+  buildNotificationChannels,
+  createNotificationDispatcher,
+  type NotificationDispatcher,
+} from '@review-agent/server/notification';
 import type { ActionInputs } from './inputs.js';
 import { withRetry } from './retry.js';
 
@@ -46,6 +51,13 @@ export type RunActionDeps = {
    * pay real wall-clock delays.
    */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * #144 Phase B: injectable notification dispatcher for tests.
+   * Production callers leave this unset — the dispatcher is built from
+   * `config.notifications` + env vars inside `runAction`. Tests inject a
+   * mock to verify event dispatch without real channel side-effects.
+   */
+  readonly notificationDispatcher?: NotificationDispatcher;
 };
 
 export type ActionContext = {
@@ -75,6 +87,19 @@ export async function runAction(
   const env = deps.env ?? process.env;
 
   const config = await loadConfigOrDefault(inputs.configPath, readFn, env);
+
+  // #144 Phase B: build the notification dispatcher from config + env.
+  // Zero channels → dispatcher is a no-op (all dispatch calls return immediately).
+  // Tests may inject deps.notificationDispatcher directly.
+  const notifier: NotificationDispatcher =
+    deps.notificationDispatcher ??
+    createNotificationDispatcher({
+      channels: buildNotificationChannels(config.notifications, {
+        REVIEW_AGENT_SLACK_WEBHOOK_URL: env.REVIEW_AGENT_SLACK_WEBHOOK_URL,
+        REVIEW_AGENT_SMTP_PASSWORD: env.REVIEW_AGENT_SMTP_PASSWORD,
+      }),
+      config: config.notifications,
+    });
 
   const vcs = (deps.createVCS ?? ((t) => createGithubVCS({ token: t })))(inputs.githubToken);
   const pr = await vcs.getPR(ctx.ref);
@@ -135,8 +160,10 @@ export async function runAction(
   // are warned and skipped — the review continues without that tool's findings.
   const externalTools = await loadExternalToolContents(config.external_tools.tools, readFn, log);
 
+  const jobId = `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`;
+  const notificationRepo = `${ctx.ref.owner}/${ctx.ref.repo}`;
   const reviewJob: Parameters<typeof runReview>[0] = {
-    jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
+    jobId,
     workspaceDir,
     diffText,
     prMetadata: {
@@ -188,7 +215,75 @@ export async function runAction(
     (reviewJob as { incrementalSinceSha?: string }).incrementalSinceSha = strategy.since;
   }
 
-  const result = await runReview(reviewJob, provider, { logger: log });
+  // #144 Phase B: budget.overrun — fired by cost-guard when cumulative cost
+  // crosses cost.budget_alert_usd. Fail-open: dispatch errors are caught so
+  // a notification failure never aborts the review.
+  const onThresholdCrossed = (e: {
+    readonly threshold: 'fallback' | 'abort' | 'kill' | 'daily_cap' | 'budget_alert';
+    readonly cumulativeUsd: number;
+    readonly capUsd: number;
+  }): void => {
+    if (e.threshold === 'budget_alert') {
+      const event = {
+        type: 'budget.overrun' as const,
+        repo: notificationRepo,
+        installationId: '0',
+        jobId,
+        timestamp: new Date().toISOString(),
+        prNumber: ctx.ref.number,
+        summary: `Budget alert: cumulative cost $${e.cumulativeUsd.toFixed(4)} exceeded alert threshold $${e.capUsd.toFixed(4)}`,
+      };
+      notifier.dispatch(event).catch(() => {
+        // fail-open: notification failure must not affect review result
+      });
+    }
+  };
+
+  let result: RunnerResult;
+  try {
+    result = await runReview(reviewJob, provider, {
+      logger: log,
+      onThresholdCrossed,
+      ...(config.cost.budget_alert_usd !== undefined
+        ? { budgetAlertUsd: config.cost.budget_alert_usd }
+        : {}),
+    });
+  } catch (err) {
+    // #144 Phase B: job.failed — runReview threw a permanent error.
+    // Dispatch the notification fail-open (swallow dispatch errors), then re-throw.
+    // Note: job.failed here is an interim signal based on runReview throw.
+    // Accurate DLQ-based permanent-failure detection is tracked in issue #138.
+    const failEvent = {
+      type: 'job.failed' as const,
+      repo: notificationRepo,
+      installationId: '0',
+      jobId,
+      timestamp: new Date().toISOString(),
+      prNumber: ctx.ref.number,
+      summary: `Job failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+    notifier.dispatch(failEvent).catch(() => {
+      // fail-open: notification failure must not shadow the original error
+    });
+    throw err;
+  }
+
+  // #144 Phase B: review.completed — successful review.
+  // Dispatch only when config.notifications.events.review_completed is enabled.
+  // The dispatcher gate handles the enable check, so we always call dispatch
+  // and let the dispatcher no-op when the event type is disabled.
+  const completeEvent = {
+    type: 'review.completed' as const,
+    repo: notificationRepo,
+    installationId: '0',
+    jobId,
+    timestamp: new Date().toISOString(),
+    prNumber: ctx.ref.number,
+    summary: `Review completed: ${result.comments.length} finding${result.comments.length !== 1 ? 's' : ''}`,
+  };
+  notifier.dispatch(completeEvent).catch(() => {
+    // fail-open
+  });
 
   await postOrUpdate(vcs, ctx.ref, pr, result, previousState, {
     stateWriteRetries: inputs.stateWriteRetries,

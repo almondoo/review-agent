@@ -2271,3 +2271,69 @@ describe('runReview — large_pr chunked review (#158)', () => {
     expect(generateReview).toHaveBeenCalledTimes(2);
   });
 });
+
+// #144 Phase B — onThresholdCrossed transparency
+describe('runReview — onThresholdCrossed deps hook', () => {
+  it('passes onThresholdCrossed from deps to cost-guard; fires on abort threshold', async () => {
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => ({
+        summary: 'ok',
+        comments: [],
+        tokensUsed: { input: 100, output: 50 },
+        costUsd: 0.5,
+      })),
+    });
+
+    const job: ReviewJob = {
+      ...baseJob,
+      // Post-LLM cost (0.5) > cap (0.01) → guard fires 'abort' or 'kill'
+      costCapUsd: 0.01,
+    };
+
+    const onThresholdCrossed = vi.fn(
+      (e: { threshold: string; cumulativeUsd: number; capUsd: number }) => {
+        events.push(e);
+      },
+    );
+
+    await runReview(job, provider, { onThresholdCrossed }).catch(() => {
+      // CostExceededError is expected
+    });
+
+    // onThresholdCrossed must have been called (abort or kill confirms wiring)
+    expect(events.length).toBeGreaterThan(0);
+    const thresholds = events.map((e) => e.threshold);
+    expect(thresholds.some((t) => t === 'abort' || t === 'kill')).toBe(true);
+  });
+
+  it('fires budget_alert via budgetAlertUsd dep when cumulative cost exceeds threshold', async () => {
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const provider = makeProvider({
+      generateReview: vi.fn(async () => ({
+        summary: 'ok',
+        comments: [],
+        tokensUsed: { input: 100, output: 50 },
+        costUsd: 0.2,
+      })),
+    });
+
+    const onThresholdCrossed = vi.fn(
+      (e: { threshold: string; cumulativeUsd: number; capUsd: number }) => {
+        events.push(e);
+      },
+    );
+
+    // budgetAlertUsd=0.05 < costUsd=0.2 → budget_alert fires after LLM call
+    await runReview(baseJob, provider, { onThresholdCrossed, budgetAlertUsd: 0.05 });
+
+    const alertEvent = events.find((e) => e.threshold === 'budget_alert');
+    expect(alertEvent).toBeDefined();
+    expect(alertEvent?.capUsd).toBe(0.05);
+  });
+
+  it('does not throw when onThresholdCrossed is absent (back-compat)', async () => {
+    const provider = makeProvider();
+    await expect(runReview(baseJob, provider, {})).resolves.toBeDefined();
+  });
+});
