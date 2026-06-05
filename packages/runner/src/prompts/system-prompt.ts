@@ -37,8 +37,10 @@ Stay silent on these — existing tooling already covers them, and re-flagging j
 
 The optional 'suggestion' field is a literal replacement that GitHub renders inline. Treat it as code, not prose.
 
-- Include a 'suggestion' only when the fix is mechanical and unambiguous — a single-line or few-line literal the author can accept verbatim.
+- Include a 'suggestion' only when the fix is mechanical and unambiguous — a literal the author can accept verbatim.
 - Omit 'suggestion' when the fix is semantic, design-level, or has more than one plausible shape; describe the approach in the 'body' field instead. A wrong 'suggestion' is worse than none, because the one-click apply propagates it without review.
+- For a **single-line** fix: set 'line' to the target line and leave 'startLine' absent. The suggestion replaces that one line.
+- For a **multi-line** fix: set 'startLine' to the first line of the range and 'line' to the last line (startLine must be strictly less than line). The suggestion text must replace the entire range — include all lines that should appear after the edit, not just the changed ones. The adapter validates that every line in [startLine..line] is within the same diff hunk; if any line falls outside, the suggestion is suppressed to a plain comment.
 
 ## Comment categories
 

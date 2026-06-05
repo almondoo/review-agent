@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSuggestionBody, buildValidRightLines } from './suggestion.js';
+import { buildSuggestionBody, buildValidRightLines, isRangeInHunk } from './suggestion.js';
 
 // ---------------------------------------------------------------------------
 // buildValidRightLines
@@ -137,5 +137,129 @@ describe('buildSuggestionBody', () => {
     );
     expect(result.startsWith('note: potential null deref\n\n```suggestion\n')).toBe(true);
     expect(result.endsWith('\n```')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isRangeInHunk (#165)
+// ---------------------------------------------------------------------------
+
+describe('isRangeInHunk', () => {
+  it('returns true when every line in range is in the valid set', () => {
+    const valid = new Set([5, 6, 7, 8, 9]);
+    expect(isRangeInHunk(5, 9, valid)).toBe(true);
+  });
+
+  it('returns true for a single-step range (startLine === endLine - 1)', () => {
+    const valid = new Set([3, 4]);
+    expect(isRangeInHunk(3, 4, valid)).toBe(true);
+  });
+
+  it('returns false when the first line of range is missing', () => {
+    const valid = new Set([6, 7, 8]);
+    expect(isRangeInHunk(5, 8, valid)).toBe(false);
+  });
+
+  it('returns false when the last line of range is missing', () => {
+    const valid = new Set([5, 6, 7]);
+    expect(isRangeInHunk(5, 8, valid)).toBe(false);
+  });
+
+  it('returns false when an interior line of range is missing (hunk gap)', () => {
+    // Line 7 is missing — range spans two hunks.
+    const valid = new Set([5, 6, 8, 9]);
+    expect(isRangeInHunk(5, 9, valid)).toBe(false);
+  });
+
+  it('returns false for an empty valid set', () => {
+    expect(isRangeInHunk(1, 3, new Set())).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSuggestionBody — multi-line range (#165)
+// ---------------------------------------------------------------------------
+
+describe('buildSuggestionBody (multi-line, #165)', () => {
+  // Range fully inside a single hunk → suggestion block rendered.
+  it('renders ```suggestion block for multi-line range when all lines are in hunk', () => {
+    const valid = new Set([3, 4, 5]);
+    const result = buildSuggestionBody(
+      'replace this block',
+      'const a = 1;\nconst b = 2;',
+      'RIGHT',
+      5, // endLine
+      valid,
+      3, // startLine
+    );
+    expect(result).toBe('replace this block\n\n```suggestion\nconst a = 1;\nconst b = 2;\n```');
+  });
+
+  // Range partially outside hunk → suppress to plain comment.
+  it('suppresses multi-line suggestion when part of range is outside hunk', () => {
+    // Lines 3-5 valid, but startLine=2 is outside.
+    const valid = new Set([3, 4, 5]);
+    const result = buildSuggestionBody('body', 'const x = 1;', 'RIGHT', 5, valid, 2);
+    expect(result).toBe('body');
+    expect(result).not.toContain('```suggestion');
+  });
+
+  it('suppresses multi-line suggestion when range spans two hunks (gap in valid set)', () => {
+    // Hunk 1 covers lines 3-5; hunk 2 covers lines 10-12. Line 6-9 are gaps.
+    const valid = new Set([3, 4, 5, 10, 11, 12]);
+    const result = buildSuggestionBody('body', 'replacement', 'RIGHT', 10, valid, 3);
+    expect(result).toBe('body');
+    expect(result).not.toContain('```suggestion');
+  });
+
+  it('suppresses multi-line suggestion when startSide is LEFT', () => {
+    const valid = new Set([3, 4, 5]);
+    const result = buildSuggestionBody(
+      'body',
+      'const x = 1;',
+      'RIGHT',
+      5,
+      valid,
+      3,
+      'LEFT', // startSide LEFT → suppress
+    );
+    expect(result).toBe('body');
+    expect(result).not.toContain('```suggestion');
+  });
+
+  it('suppresses multi-line suggestion when side is LEFT', () => {
+    const valid = new Set([3, 4, 5]);
+    const result = buildSuggestionBody(
+      'body',
+      'const x = 1;',
+      'LEFT', // side LEFT → suppress regardless of startLine
+      5,
+      valid,
+      3,
+    );
+    expect(result).toBe('body');
+    expect(result).not.toContain('```suggestion');
+  });
+
+  it('suppresses multi-line suggestion when startLine >= line (GitHub API constraint)', () => {
+    const valid = new Set([5, 6, 7]);
+    // startLine === line: violates GitHub constraint
+    const result1 = buildSuggestionBody('body', 'fix', 'RIGHT', 5, valid, 5);
+    expect(result1).toBe('body');
+    // startLine > line: inverted range
+    const result2 = buildSuggestionBody('body', 'fix', 'RIGHT', 5, valid, 7);
+    expect(result2).toBe('body');
+  });
+
+  it('uses startSide defaulting (absent → RIGHT, no suppression)', () => {
+    const valid = new Set([4, 5, 6]);
+    const result = buildSuggestionBody('body', 'fix', 'RIGHT', 6, valid, 4);
+    expect(result).toContain('```suggestion\nfix\n```');
+  });
+
+  it('back-compat: single-line path unchanged when startLine is absent', () => {
+    const valid = new Set([5]);
+    const result = buildSuggestionBody('body', 'const x = 1;', 'RIGHT', 5, valid);
+    expect(result).toBe('body\n\n```suggestion\nconst x = 1;\n```');
   });
 });

@@ -301,13 +301,30 @@ export function createGithubVCS(opts: GithubVCSOptions): VCS {
         commentSide,
         c.line,
         validLines,
+        c.startLine,
+        c.startSide,
       );
-      return {
+      const base = {
         path: c.path,
         line: c.line,
         side: c.side,
         body: appendFingerprintMarker(bodyWithSuggestion, c.fingerprint),
       };
+      // #165: wire start_line + start_side for multi-line review comments.
+      // GitHub requires start_line < line (enforced by InlineCommentSchema).
+      // We only attach these fields when startLine is present and the
+      // suggestion was not suppressed — if the body contains no suggestion
+      // block (suppressed), GitHub will still accept start_line for the
+      // comment range display even without a suggestion, which is valid and
+      // useful for multi-line context comments.
+      if (c.startLine !== undefined) {
+        return {
+          ...base,
+          start_line: c.startLine,
+          start_side: (c.startSide ?? 'RIGHT') as 'LEFT' | 'RIGHT',
+        };
+      }
+      return base;
     });
     // `event` is optional on ReviewPayload so callers that haven't
     // been updated (or third-party adapters via the VCS interface)

@@ -262,6 +262,69 @@ describe('InlineCommentSchema', () => {
     const exact = `r${'a'.repeat(63)}`;
     expect(InlineCommentSchema.safeParse({ ...validComment, ruleId: exact }).success).toBe(true);
   });
+
+  // -------------------------------------------------------------------------
+  // startLine / startSide (#165) — multi-line suggestion range
+  // -------------------------------------------------------------------------
+
+  it('#165: accepts comment without startLine (single-line back-compat)', () => {
+    expect(InlineCommentSchema.safeParse(validComment).success).toBe(true);
+  });
+
+  it('#165: accepts valid multi-line comment with startLine strictly less than line', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, line: 20, startLine: 15 }).success,
+    ).toBe(true);
+  });
+
+  it('#165: accepts multi-line comment with explicit startSide', () => {
+    expect(
+      InlineCommentSchema.safeParse({
+        ...validComment,
+        line: 20,
+        startLine: 15,
+        startSide: 'RIGHT',
+      }).success,
+    ).toBe(true);
+  });
+
+  it('#165: rejects startLine equal to line (must be strictly less)', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, line: 10, startLine: 10 }).success,
+    ).toBe(false);
+  });
+
+  it('#165: rejects startLine greater than line (inverted range)', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, line: 10, startLine: 15 }).success,
+    ).toBe(false);
+  });
+
+  it('#165: rejects non-positive startLine', () => {
+    expect(InlineCommentSchema.safeParse({ ...validComment, line: 10, startLine: 0 }).success).toBe(
+      false,
+    );
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, line: 10, startLine: -5 }).success,
+    ).toBe(false);
+  });
+
+  it('#165: rejects fractional startLine', () => {
+    expect(
+      InlineCommentSchema.safeParse({ ...validComment, line: 10, startLine: 3.5 }).success,
+    ).toBe(false);
+  });
+
+  it('#165: rejects unknown startSide value', () => {
+    expect(
+      InlineCommentSchema.safeParse({
+        ...validComment,
+        line: 20,
+        startLine: 15,
+        startSide: 'CENTER',
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('createReviewOutputSchema', () => {

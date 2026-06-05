@@ -1,5 +1,5 @@
 /**
- * Committable-suggestion helpers for the GitHub adapter (#152).
+ * Committable-suggestion helpers for the GitHub adapter (#152, #165).
  *
  * GitHub's ```suggestion block mechanism requires that the anchor line (the
  * `line` field in the review comment) exists on the RIGHT side of the diff
@@ -8,11 +8,17 @@
  * posting and suppress the suggestion block (keeping the plain comment body)
  * for any anchor that fails the check.
  *
- * ## Scope
- * - Single-anchor-line model only (#152 scope). Multi-line range (`start_line`)
- *   is NOT supported in this version. Follow-up issue to add start_line support.
+ * ## Single-line model (#152, back-compat)
+ * - `startLine` absent: the comment anchors at `line` only.
  * - Only RIGHT-side anchors are considered; LEFT-side suggestions are always
  *   suppressed (GitHub applies suggestions to the new file content only).
+ *
+ * ## Multi-line model (#165)
+ * - `startLine` present: the suggestion covers `startLine`..`line` inclusive.
+ * - Every line in the range must be a valid RIGHT-side hunk line in the same
+ *   patch. If any line is outside the hunk (or the range spans two hunks),
+ *   the suggestion is suppressed to a plain comment body.
+ * - `startLine` must be strictly less than `line` (GitHub API constraint).
  *
  * ## Patch format
  * Unified diff hunk headers look like:
@@ -80,6 +86,32 @@ export function buildValidRightLines(patch: string | null | undefined): Readonly
 }
 
 /**
+ * Check whether every line in the range [startLine..endLine] (inclusive)
+ * is a valid RIGHT-side anchor in `validRightLines`.
+ *
+ * Used for multi-line suggestion validation (#165). A range that spans a
+ * hunk boundary or includes any line outside the diff context will have
+ * at least one gap in the valid set, causing this function to return false
+ * and triggering suppression to a plain comment body.
+ *
+ * @param startLine - First line of the range (inclusive, 1-based).
+ * @param endLine   - Last line of the range (inclusive, 1-based).
+ *   Must satisfy startLine < endLine (the caller's schema enforces this).
+ * @param validRightLines - The set of valid RIGHT-side lines from
+ *   {@link buildValidRightLines}.
+ */
+export function isRangeInHunk(
+  startLine: number,
+  endLine: number,
+  validRightLines: ReadonlySet<number>,
+): boolean {
+  for (let line = startLine; line <= endLine; line++) {
+    if (!validRightLines.has(line)) return false;
+  }
+  return true;
+}
+
+/**
  * Append a GitHub committable ```suggestion block to `body` when the
  * anchor is valid (RIGHT side, line within hunk), or return `body`
  * unchanged when the suggestion should be suppressed.
@@ -87,17 +119,15 @@ export function buildValidRightLines(patch: string | null | undefined): Readonly
  * Suppression conditions (suggestion is silently dropped; body posted as-is):
  *  - `suggestion` is absent/empty.
  *  - `side` is 'LEFT' (GitHub only supports new-file suggestions).
- *  - `line` is not in `validRightLines` (anchor outside diff context).
+ *  - Single-line: `line` is not in `validRightLines`.
+ *  - Multi-line (`startLine` present): `startSide` or `side` is 'LEFT',
+ *    or any line in [startLine..line] is outside `validRightLines`,
+ *    or `startLine >= line` (GitHub API constraint).
  *
  * The suggestion block is inserted BEFORE any trailing content (e.g. the
  * fingerprint marker appended by `appendFingerprintMarker`). Callers
  * should pass the plain body here and let `appendFingerprintMarker` run
  * after this function.
- *
- * Multi-line range (start_line) is out of scope for #152. The suggestion
- * text itself may span multiple lines — GitHub replaces the single anchor
- * line with the entire multi-line suggestion text when the user clicks
- * "Apply suggestion". start_line support is tracked as a follow-up issue.
  */
 export function buildSuggestionBody(
   body: string,
@@ -105,9 +135,27 @@ export function buildSuggestionBody(
   side: 'LEFT' | 'RIGHT',
   line: number,
   validRightLines: ReadonlySet<number>,
+  startLine?: number,
+  startSide?: 'LEFT' | 'RIGHT',
 ): string {
   if (!suggestion) return body;
   if (side === 'LEFT') return body;
+
+  if (startLine !== undefined) {
+    // Multi-line range validation (#165).
+    // Suppress if startSide is explicitly LEFT.
+    if (startSide === 'LEFT') return body;
+    // Suppress if the GitHub constraint startLine < line is violated.
+    // (The schema already enforces this, but be defensive here too.)
+    if (startLine >= line) return body;
+    // Suppress if any line in the range is outside the hunk.
+    if (!isRangeInHunk(startLine, line, validRightLines)) return body;
+
+    // All lines in range are valid — emit a multi-line suggestion block.
+    return `${body}\n\n\`\`\`suggestion\n${suggestion}\n\`\`\``;
+  }
+
+  // Single-line path (back-compat with #152).
   if (!validRightLines.has(line)) return body;
 
   // Append the committable suggestion block after the comment body.
