@@ -11,7 +11,7 @@ Spec references: §15.1, §15.6.6, §18.3, §8.5, §17.1.
 
 ## 1. At a glance
 
-- **Compute**: 2× Lambda (container image) — receiver + worker.
+- **Compute**: 3× Lambda (container image) — receiver + worker + DLQ processor (#138).
 - **Queue**: SQS main + DLQ.
 - **Database**: RDS Postgres 16 (or Aurora Serverless v2 with light
   edits). Single instance — no read replicas at this scale.
@@ -36,9 +36,16 @@ state mirror, the cost ledger, and the audit log. Secrets Manager holds
 the webhook secret, the App private key, optionally the Anthropic API
 key, and the database connection string.
 
-The same container image runs both Lambdas — they differ only in the
+All three Lambdas share the same container image — they differ only in the
 `image_config.command` entrypoint. That keeps the build pipeline simple
 and the artifact small.
+
+The **DLQ processor Lambda** (`${name}-dlq-processor`) is triggered by the SQS
+DLQ event source mapping. When a job exhausts all `maxReceiveCount` delivery
+attempts, the DLQ processor writes a `FAILED (DLQ)` state comment to the PR
+and dispatches a `job.failed` notification. See
+[`docs/operations/dlq-runbook.md`](../operations/dlq-runbook.md) for inspection
+and replay procedures.
 
 For the full request flow, see the diagram in the example README.
 
@@ -349,9 +356,10 @@ Recommended alarms:
 
 | Alarm | Condition |
 |---|---|
-| `<name>-jobs-dlq messages > 0` | Worker has 5×-failed something. Pages oncall. |
+| `<name>-dlq-messages` (provisioned by Terraform) | `NumberOfMessagesSentToDeadLetterQueue > 0` — worker has 5×-failed. The DLQ processor fires `job.failed` automatically; this alarm is supplemental alerting for oncall. |
 | `<name>-jobs queue oldest message age > 10 min` | Worker is stuck or under-provisioned. |
 | `worker invocation errors > 1% over 5 min` | Recent deploy regressed. |
+| `dlq-processor invocation errors > 0` | DLQ processor itself failed — check CloudWatch Logs `/aws/lambda/<name>-dlq-processor`. |
 | `cost_usd_total > daily budget` | Per spec §8.5; cap runaway spend. |
 
 ## 11. Backup & DR

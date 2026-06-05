@@ -92,11 +92,42 @@ Uses `@aws-sdk/client-ses`. AWS credentials must be available to the process (IA
 
 A channel failure (network error, credential issue, channel misconfiguration) is logged and skipped. Other channels still receive the event. Notification failure never aborts the review or prevents the result from being posted.
 
-## `job.failed` — interim note
+## `job.failed` detection
 
-The `job.failed` event is dispatched when `runReview` throws an error at the point `runReview` is called (Action entrypoint or operator `JobHandler`). This catches cost cap exceeded, secret leak abort, schema validation abort, and similar hard failures.
+`job.failed` is dispatched through two complementary paths:
 
-**Accurate DLQ-based detection** (a message reaching the SQS dead-letter queue after all retries are exhausted) is out of scope for this wave and tracked in issue #138. Until #138 lands, transient failures that are retried and eventually succeed will not produce a `job.failed` notification, and a failure surfaced to the DLQ but not explicitly thrown by `runReview` will not be caught here. Use SQS CloudWatch alarms on `NumberOfMessagesSentToDeadLetterQueue` for production alerting on DLQ exhaustion.
+### 1. Inline permanent-failure detection (worker path)
+
+When the worker handler throws an error classified as **permanent** (cost cap
+exceeded, auth failure, context length, config/schema error, secret-leak abort,
+gitleaks scan failure), the worker:
+
+1. Classifies the error via `classifyError` from `packages/server/src/queue/error-classifier.ts`.
+2. Dispatches `job.failed` immediately (before any SQS retry).
+3. Writes a `FAILED: <reason>` marker to the PR state comment.
+4. Acks the SQS message so it is NOT re-delivered and does NOT reach the DLQ.
+
+**Transient errors** (LLM rate-limit, overloaded, transient network failures) are left for SQS visibility-timeout retry. After `maxReceiveCount` retries the message lands in the DLQ.
+
+### 2. DLQ processor (exhausted-retry path)
+
+When a message lands in the SQS dead-letter queue (all retries exhausted), the
+**DLQ processor Lambda** (`${name}-dlq-processor`) fires automatically and:
+
+1. Parses the DLQ message body as a `JobMessage`.
+2. Writes a `FAILED (DLQ): all retries exhausted` marker to the PR state comment.
+3. Dispatches `job.failed` with `summary` indicating the DLQ path.
+
+This path catches transient failures that persisted through all retries. See
+[`docs/operations/dlq-runbook.md`](./dlq-runbook.md) for inspection and replay
+procedures.
+
+### GCP Pub/Sub and Azure Service Bus
+
+DLQ-equivalent consumption on GCP Pub/Sub (dead-letter topics) and Azure
+Service Bus (dead-letter subqueues) is tracked as a follow-up issue. Until
+those adapters land, use the respective platform's console tooling for DLQ
+inspection and replay, and configure CloudWatch-equivalent alerts manually.
 
 ## Server / operator `JobHandler` wiring
 

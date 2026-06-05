@@ -797,6 +797,28 @@ pluggable channel として出荷、Slack は fetch incoming webhook）。統合
   action バンドルに nodemailer+SES が入り ~2MB 増（将来 standalone package 化で解消余地）。
 - docs: `docs/operations/notifications.md`。
 
+### [A14] failure handling: retry / DLQ / alerting — #138 landed (develop, 2026-06-06)
+
+恒久失敗の検知と DLQ 処理 → job.failed 通知(#144) + failed state comment。**AWS SQS scope**（GCP/Azure は follow-up）。
+develop に landed（本セッションで自律実装）。統合検証フル green（typecheck 13/13・lint・test:coverage・build）。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#138](https://github.com/almondoo/review-agent/issues/138) | failure handling (retry / DLQ / alerting) | ✅ landed (develop, AWS scope) |
+
+- **error-classifier**（transient: rate_limit/overloaded/transient、permanent: auth/fatal/context_length/cost-exceeded/config/schema、
+  不明は transient = SQS retry に倒す）。
+- **worker**（sqs.ts / lambda-worker.ts）: transient は SQS visibility-timeout retry 維持、permanent は終端処理
+  （job.failed 通知 + failed state comment + ack、再配信しない）。`failureDeps` 未注入時は従来 transient 動作（後方互換）。
+- **DLQ processor**（`packages/server/src/queue/dlq-processor.ts`）: DLQ 着地メッセージを `JobMessage` parse → failed state comment
+  （`modelUsed` に `FAILED (DLQ)` 前置で可視化、schema/migration 変更なし）→ job.failed dispatch。全 fail-open。
+- **Terraform**（AWS, best-effort・unit test 対象外）: DLQ processor Lambda + IAM + DLQ event source mapping + CloudWatch alarm。
+  replay runbook `docs/operations/dlq-runbook.md`。
+- #16 idempotency / #62 state-comment retry / §11.1 LLM retry とのダブルカウント無しを維持。
+- **follow-up**: Lambda handler entrypoint の build 配線（`dist/{lambda-worker,dlq-processor}.js` を composed handler として出力）は
+  worker と共通の既存 example-deployment 事項（operator 注入 seam 領域）。GCP Pub/Sub・Azure Service Bus の DLQ 消費は別 issue。
+  CloudWatch alarm の SNS action は operator 設定。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
@@ -807,9 +829,9 @@ pluggable channel として出荷、Slack は fetch incoming webhook）。統合
 #132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
 フル per-principal credential 方式の最終決定は GA 据え置き) /
 #137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
-#138 (retry/DLQ/alerting — #144 の通知 channel は landed 済み。残るは SQS DLQ 枯渇検知→正確な job.failed 発火 + retry/alerting 方針) /
 #154 (preset 配布 — npm publish 権限要)。
-（#144 notifications は landed したため [C] から除外 → [A13] 参照）
+（#144 notifications → [A13]、#138 failure handling(AWS scope) → [A14] が landed したため [C] から除外。
+#138 の GCP/Azure DLQ 消費は follow-up）
 （#140 cost analytics は分析+ダッシュボードを landed したため [C] から除外 → [A11] 参照。budget alert の通知送信のみ #144 待ち）
 （#161 は landed したため [C] から除外 → [A2] 参照）
 

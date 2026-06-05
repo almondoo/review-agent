@@ -1,4 +1,6 @@
+import { CostExceededError } from '@review-agent/core';
 import { describe, expect, it, vi } from 'vitest';
+import type { SqsFailureDeps } from './sqs.js';
 import { createSqsQueueClient } from './sqs.js';
 
 const baseMsg = {
@@ -8,6 +10,38 @@ const baseMsg = {
   triggeredBy: 'pull_request.opened' as const,
   enqueuedAt: '2026-04-30T00:00:00.000Z',
 };
+
+function makeFailureDeps(overrides: Partial<SqsFailureDeps> = {}): SqsFailureDeps {
+  return {
+    notifier: { dispatch: vi.fn().mockResolvedValue(undefined) },
+    vcs: {
+      platform: 'github',
+      capabilities: {
+        clone: true,
+        stateComment: 'native',
+        approvalEvent: 'github',
+        commitMessages: true,
+        conversationReply: true,
+        committableSuggestions: true,
+      },
+      getStateComment: vi.fn().mockResolvedValue(null),
+      upsertStateComment: vi.fn().mockResolvedValue(undefined),
+      getPR: vi.fn(),
+      getDiff: vi.fn(),
+      getFile: vi.fn(),
+      cloneRepo: vi.fn(),
+      getExistingComments: vi.fn(),
+      postReview: vi.fn(),
+      postSummary: vi.fn(),
+      postReply: vi.fn(),
+    } as unknown as SqsFailureDeps['vcs'],
+    logger: {
+      error: vi.fn(),
+      warn: vi.fn(),
+    },
+    ...overrides,
+  };
+}
 
 describe('createSqsQueueClient.enqueue', () => {
   it('sends a SendMessageCommand with JSON body and message attributes', async () => {
@@ -198,6 +232,120 @@ describe('createSqsQueueClient.dequeue', () => {
     const handler = vi.fn();
     await queue.dequeue(handler, { stopSignal: ac.signal, waitTimeSeconds: 0 });
     expect(handler).not.toHaveBeenCalled();
+    expect(calls.find((c) => c.name === 'DeleteMessageCommand')).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // #138: transient failure path
+  // -------------------------------------------------------------------------
+
+  it('does NOT delete the message on a transient handler failure (allows SQS retry)', async () => {
+    // Transient error: the message is left for SQS visibility-timeout
+    // retry. No DeleteMessageCommand must be issued.
+    const transientErr = Object.assign(new Error('rate limited'), { kind: 'rate_limit' });
+    const calls: { name: string }[] = [];
+    const ac = new AbortController();
+    let receiveCalls = 0;
+    const send = vi.fn(async (cmd: { constructor: { name: string } }) => {
+      calls.push({ name: cmd.constructor.name });
+      if (cmd.constructor.name === 'ReceiveMessageCommand') {
+        receiveCalls += 1;
+        if (receiveCalls >= 2) ac.abort();
+        if (receiveCalls === 1) {
+          return {
+            Messages: [{ MessageId: 'a', ReceiptHandle: 'r1', Body: JSON.stringify(baseMsg) }],
+          };
+        }
+      }
+      return { Messages: [] };
+    });
+    const failureDeps = makeFailureDeps();
+    const queue = createSqsQueueClient({
+      queueUrl: 'http://q',
+      // biome-ignore lint/suspicious/noExplicitAny: SDK mock surface
+      client: { send } as any,
+      failureDeps,
+    });
+    const handler = vi.fn().mockRejectedValue(transientErr);
+    await queue.dequeue(handler, { stopSignal: ac.signal, waitTimeSeconds: 0 });
+    // No DeleteMessageCommand — message left for SQS to retry.
+    expect(calls.find((c) => c.name === 'DeleteMessageCommand')).toBeUndefined();
+    // No notification for transient errors.
+    expect(failureDeps.notifier.dispatch).not.toHaveBeenCalled();
+    expect(failureDeps.vcs.upsertStateComment).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // #138: permanent failure path
+  // -------------------------------------------------------------------------
+
+  it('deletes the message on a permanent handler failure (no re-delivery)', async () => {
+    const permanentErr = new CostExceededError(1.0, 2.0);
+    const calls: { name: string }[] = [];
+    const ac = new AbortController();
+    let receiveCalls = 0;
+    const send = vi.fn(async (cmd: { constructor: { name: string } }) => {
+      calls.push({ name: cmd.constructor.name });
+      if (cmd.constructor.name === 'ReceiveMessageCommand') {
+        receiveCalls += 1;
+        if (receiveCalls >= 2) ac.abort();
+        if (receiveCalls === 1) {
+          return {
+            Messages: [{ MessageId: 'a', ReceiptHandle: 'r1', Body: JSON.stringify(baseMsg) }],
+          };
+        }
+      }
+      return { Messages: [] };
+    });
+    const failureDeps = makeFailureDeps();
+    const queue = createSqsQueueClient({
+      queueUrl: 'http://q',
+      // biome-ignore lint/suspicious/noExplicitAny: SDK mock surface
+      client: { send } as any,
+      failureDeps,
+    });
+    const handler = vi.fn().mockRejectedValue(permanentErr);
+    await queue.dequeue(handler, { stopSignal: ac.signal, waitTimeSeconds: 0 });
+    // Message must be deleted (acked) on permanent failure.
+    expect(calls.find((c) => c.name === 'DeleteMessageCommand')).toBeDefined();
+    // Notification and state comment must have been attempted.
+    expect(failureDeps.notifier.dispatch).toHaveBeenCalledOnce();
+    expect(failureDeps.vcs.upsertStateComment).toHaveBeenCalledOnce();
+    // State comment must carry the FAILED: prefix.
+    const [, state] = (failureDeps.vcs.upsertStateComment as ReturnType<typeof vi.fn>).mock
+      .calls[0];
+    expect(state.modelUsed).toMatch(/^FAILED:/);
+  });
+
+  it('does not delete message on permanent failure when failureDeps absent (backward-compat)', async () => {
+    // When no failureDeps are wired, permanent errors are downgraded to
+    // transient: no delete, no notification.
+    const permanentErr = new CostExceededError(1.0, 2.0);
+    const calls: { name: string }[] = [];
+    const ac = new AbortController();
+    let receiveCalls = 0;
+    const send = vi.fn(async (cmd: { constructor: { name: string } }) => {
+      calls.push({ name: cmd.constructor.name });
+      if (cmd.constructor.name === 'ReceiveMessageCommand') {
+        receiveCalls += 1;
+        if (receiveCalls >= 2) ac.abort();
+        if (receiveCalls === 1) {
+          return {
+            Messages: [{ MessageId: 'a', ReceiptHandle: 'r1', Body: JSON.stringify(baseMsg) }],
+          };
+        }
+      }
+      return { Messages: [] };
+    });
+    const queue = createSqsQueueClient({
+      queueUrl: 'http://q',
+      // biome-ignore lint/suspicious/noExplicitAny: SDK mock surface
+      client: { send } as any,
+      // No failureDeps.
+    });
+    const handler = vi.fn().mockRejectedValue(permanentErr);
+    await queue.dequeue(handler, { stopSignal: ac.signal, waitTimeSeconds: 0 });
+    // No deletion — backward-compat path.
     expect(calls.find((c) => c.name === 'DeleteMessageCommand')).toBeUndefined();
   });
 });
