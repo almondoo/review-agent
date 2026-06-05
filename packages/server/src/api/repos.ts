@@ -28,6 +28,7 @@
 import { type DashboardRole, roleSatisfies } from '@review-agent/core';
 import { repos, reviewEvalEvent } from '@review-agent/core/db';
 import type { AuditAppender, DbClient } from '@review-agent/db';
+import { withTenant } from '@review-agent/db';
 import { and, avg, count, desc, eq, gte, inArray, isNull, lt, or, sum } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { getMembershipsByPrincipal, type MembershipEntry } from '../auth/principal-store.js';
@@ -704,28 +705,60 @@ export function createReposRouter(deps: ReposDeps): Hono {
 
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const allTimeRows = await deps.db
-      .select({
-        totalReviews: count(),
-        avgDurationMs: avg(reviewEvalEvent.latencyMs),
-        totalCostUsd: sum(reviewEvalEvent.costUsd),
-      })
-      .from(reviewEvalEvent)
-      .where(eq(reviewEvalEvent.repo, repoRow.name));
+    // `review_eval_event` is RLS-scoped by `installation_id`. Queries against
+    // it without `app.current_tenant` set return zero rows under the
+    // `review_agent_app` role (fail-closed policy). When the repo has a non-null
+    // `installation_id` we run the aggregation inside `withTenant` so the GUC
+    // is set for the transaction lifetime.
+    //
+    // Repos with a null `installation_id` (manually-registered repos) cannot be
+    // scoped to a tenant — their review/cost data is not accessible under
+    // per-installation RLS. For those repos we return 0/0/0/0 and document the
+    // limitation: metrics for null-installation repos are unavailable because the
+    // per-installation RLS policy has no tenant to match against.
+    let agg: { totalReviews: unknown; avgDurationMs: unknown; totalCostUsd: unknown } | undefined;
+    let last30dCount: unknown = 0;
 
-    const last30dRows = await deps.db
-      .select({ reviewsLast30d: count() })
-      .from(reviewEvalEvent)
-      .where(
-        and(eq(reviewEvalEvent.repo, repoRow.name), gte(reviewEvalEvent.createdAt, thirtyDaysAgo)),
-      );
+    if (repoRow.installationId != null) {
+      const results = await withTenant(deps.db, repoRow.installationId, async (tx) => {
+        const allTimeRows = await tx
+          .select({
+            totalReviews: count(),
+            avgDurationMs: avg(reviewEvalEvent.latencyMs),
+            totalCostUsd: sum(reviewEvalEvent.costUsd),
+          })
+          .from(reviewEvalEvent)
+          .where(
+            and(
+              eq(reviewEvalEvent.installationId, repoRow.installationId as bigint),
+              eq(reviewEvalEvent.repo, repoRow.name),
+            ),
+          );
 
-    const agg = allTimeRows[0];
-    const last30d = last30dRows[0];
+        const last30dRows = await tx
+          .select({ reviewsLast30d: count() })
+          .from(reviewEvalEvent)
+          .where(
+            and(
+              eq(reviewEvalEvent.installationId, repoRow.installationId as bigint),
+              eq(reviewEvalEvent.repo, repoRow.name),
+              gte(reviewEvalEvent.createdAt, thirtyDaysAgo),
+            ),
+          );
+
+        return { allTime: allTimeRows[0], last30d: last30dRows[0] };
+      });
+
+      agg = results.allTime;
+      last30dCount = results.last30d?.reviewsLast30d ?? 0;
+    }
+    // else: null-installation repo — agg stays undefined, last30dCount stays 0.
+    // Metrics for null-installation repos are unavailable under per-installation
+    // RLS (no tenant to scope the query to). Returning zeros is the safe default.
 
     const metrics: RepoMetrics = {
       totalReviews: Number(agg?.totalReviews ?? 0),
-      reviewsLast30d: Number(last30d?.reviewsLast30d ?? 0),
+      reviewsLast30d: Number(last30dCount),
       avgDurationMs:
         agg?.avgDurationMs !== null && agg?.avgDurationMs !== undefined
           ? Math.round(Number(agg.avgDurationMs))

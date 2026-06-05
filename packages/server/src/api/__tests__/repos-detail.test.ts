@@ -81,7 +81,7 @@ type ChainResult = Promise<unknown[]> & {
   limit: (_n: number) => Promise<unknown[]>;
 };
 
-function makeSequentialDb(responses: unknown[][]) {
+function makeSequentialDb(responses: unknown[][], txResponses: unknown[][] = []) {
   let idx = 0;
 
   function chainable(rows: unknown[]): ChainResult {
@@ -109,6 +109,24 @@ function makeSequentialDb(responses: unknown[][]) {
         }),
       }),
     }),
+    // transaction() is used by withTenant for RLS-scoped queries (metrics).
+    // The callback receives a tx object whose select() consumes `txResponses`.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      let txIdx = 0;
+      const tx = {
+        execute: () => Promise.resolve([]),
+        select: (_fields?: unknown) => ({
+          from: (_table: unknown) => ({
+            where: (_cond?: unknown): ChainResult => {
+              const r = txResponses[txIdx] ?? [];
+              txIdx++;
+              return chainable(r);
+            },
+          }),
+        }),
+      };
+      return fn(tx);
+    },
     update: (_table: unknown) => ({
       set: (_patch: unknown) => ({
         where: (_cond: unknown) => Promise.resolve(),
@@ -477,12 +495,12 @@ describe('GET /repos/:id/metrics', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns zeros when no reviews exist', async () => {
-    const db = makeSequentialDb([
-      [{ name: 'org/repo' }], // repo lookup
-      [{ totalReviews: 0, avgDurationMs: null, totalCostUsd: null }], // all-time agg
-      [{ reviewsLast30d: 0 }], // last 30d count
-    ]);
+  it('returns zeros when repo has null installation_id (no RLS tenant scope)', async () => {
+    // Repo without installationId — the handler skips withTenant and returns
+    // 0/0/0/0 because null-installation repos cannot be scoped under RLS.
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: null }]], // repo lookup (no installationId)
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
@@ -497,23 +515,50 @@ describe('GET /repos/:id/metrics', () => {
     expect(body.totalCostUsd).toBe(0);
   });
 
-  it('returns numeric aggregates', async () => {
-    const db = makeSequentialDb([
-      [{ name: 'org/repo' }],
-      [{ totalReviews: 15, avgDurationMs: '1200.5', totalCostUsd: '3.75' }],
-      [{ reviewsLast30d: 5 }],
-    ]);
+  it('aggregates metrics via withTenant when repo has installationId', async () => {
+    // Repo with installationId — handler runs withTenant, which calls
+    // db.transaction(). The tx select() calls consume txResponses.
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: 42n }]], // outer: repo lookup
+      [
+        [{ totalReviews: 15, avgDurationMs: '1200.5', totalCostUsd: '3.75' }], // tx: all-time agg
+        [{ reviewsLast30d: 5 }], // tx: last 30d count
+      ],
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
       now: () => NOW,
     });
     const res = await app.request('http://host/r1/metrics');
+    expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.totalReviews).toBe(15);
     expect(body.reviewsLast30d).toBe(5);
     expect(typeof body.avgDurationMs).toBe('number');
     expect(typeof body.totalCostUsd).toBe('number');
+  });
+
+  it('returns zeros when no reviews exist (installationId present, empty data)', async () => {
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: 99n }]], // outer: repo lookup
+      [
+        [{ totalReviews: 0, avgDurationMs: null, totalCostUsd: null }], // tx: all-time agg
+        [{ reviewsLast30d: 0 }], // tx: last 30d count
+      ],
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request('http://host/r1/metrics');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.totalReviews).toBe(0);
+    expect(body.reviewsLast30d).toBe(0);
+    expect(body.avgDurationMs).toBe(0);
+    expect(body.totalCostUsd).toBe(0);
   });
 });
 

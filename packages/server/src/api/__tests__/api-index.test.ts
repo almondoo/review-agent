@@ -25,6 +25,11 @@ function makeMinimalDb() {
         orderBy: (): DbChainResult => makeChainable([]),
       }),
     }),
+    selectDistinct: () => ({
+      from: () => ({
+        where: (): DbChainResult => makeChainable([]),
+      }),
+    }),
     insert: () => ({ values: () => Promise.resolve() }),
     update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
   };

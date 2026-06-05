@@ -58,6 +58,7 @@ export {
   setPrincipalPassword,
   upsertMembership,
 } from './operator-principals.js';
+export { loadOverviewTotals, type OverviewTotals } from './overview-totals.js';
 export {
   loadQualityMetrics,
   type QualityMetricsResult,

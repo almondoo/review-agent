@@ -1,17 +1,21 @@
+import { Hono } from 'hono';
 import { describe, expect, it, vi } from 'vitest';
+import type { AuthEnv } from '../auth/types.js';
 import { createDashboardRouter } from '../dashboard.js';
 
 const NOW = new Date('2026-05-15T12:00:00Z');
 
 describe('dashboard router', () => {
   describe('GET /overview', () => {
+    // The overview handler (legacy mode, no principal):
+    //   db.select(...repos count...)            -> totalRepos
+    //   db.selectDistinct(...repos installs...)  -> installationIds
+    //   loadOverviewTotals -> db.transaction per installation (withTenant):
+    //     tx.execute(set_config); tx.select(reviews count); tx.select(cost sum)
     it('returns overview shape with zeros on empty DB', async () => {
       const db = {
-        select: () => ({
-          from: () => ({
-            where: () => Promise.resolve([{ value: 0, total: 0 }]),
-          }),
-        }),
+        select: () => ({ from: () => ({ where: () => Promise.resolve([{ value: 0 }]) }) }),
+        selectDistinct: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
       };
       const app = createDashboardRouter({
         // biome-ignore lint/suspicious/noExplicitAny: test mock
@@ -29,24 +33,25 @@ describe('dashboard router', () => {
       });
     });
 
-    it('returns numeric values from DB', async () => {
-      // Mock that returns different values per call (repos=5, reviews=42, cost=12.34)
-      const calls: number[] = [];
-      const results = [
-        [{ value: 5, total: 0 }], // repos count
-        [{ value: 42, total: 0 }], // reviews count
-        [{ value: 0, total: 12.34 }], // cost
-      ];
+    it('aggregates reviewsMonth and costMtd across installations (legacy mode)', async () => {
+      // repos=5; one installation with reviews=42, cost=12.34 summed via withTenant.
       const db = {
-        select: () => ({
-          from: () => ({
-            where: () => {
-              const idx = calls.length;
-              calls.push(idx);
-              return Promise.resolve(results[idx] ?? [{ value: 0, total: 0 }]);
-            },
-          }),
+        select: () => ({ from: () => ({ where: () => Promise.resolve([{ value: 5 }]) }) }),
+        selectDistinct: () => ({
+          from: () => ({ where: () => Promise.resolve([{ installationId: 1n }]) }),
         }),
+        transaction: (fn: (tx: unknown) => Promise<unknown>) => {
+          let i = 0;
+          const tx = {
+            execute: vi.fn().mockResolvedValue([]),
+            select: () => ({
+              from: () => ({
+                where: () => Promise.resolve(i++ === 0 ? [{ value: 42 }] : [{ total: 12.34 }]),
+              }),
+            }),
+          };
+          return fn(tx);
+        },
       };
       const app = createDashboardRouter({
         // biome-ignore lint/suspicious/noExplicitAny: test mock
@@ -56,19 +61,62 @@ describe('dashboard router', () => {
       const res = await app.request('http://host/overview');
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(typeof body.totalRepos).toBe('number');
-      expect(typeof body.reviewsMonth).toBe('number');
+      expect(body.totalRepos).toBe(5);
+      expect(body.reviewsMonth).toBe(42);
+      expect(body.costMtd).toBeCloseTo(12.34);
       expect(body.queueDepth).toBe(0);
-      expect(typeof body.costMtd).toBe('number');
+    });
+
+    it('scopes to caller memberships in session mode', async () => {
+      // principal present -> getMembershipsByPrincipal(db, id) then per-installation totals.
+      const db = {
+        // Both the repo-count query and getMembershipsByPrincipal use
+        // select().from().where(); here both resolve to the membership row set.
+        // The repo-count path reads `.value` (undefined here -> 0), which is fine
+        // since this test asserts only reviewsMonth / costMtd.
+        select: () => ({
+          from: () => ({
+            where: () => Promise.resolve([{ installationId: '7', role: 'admin' }]),
+          }),
+        }),
+        selectDistinct: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+        transaction: (fn: (tx: unknown) => Promise<unknown>) => {
+          let i = 0;
+          const tx = {
+            execute: vi.fn().mockResolvedValue([]),
+            select: () => ({
+              from: () => ({
+                where: () => Promise.resolve(i++ === 0 ? [{ value: 3 }] : [{ total: 1.5 }]),
+              }),
+            }),
+          };
+          return fn(tx);
+        },
+      };
+      const app = new Hono<AuthEnv>();
+      app.use('*', async (c, next) => {
+        c.set('principal', { id: 'p1', username: 'alice' });
+        await next();
+      });
+      app.route(
+        '/',
+        createDashboardRouter({
+          // biome-ignore lint/suspicious/noExplicitAny: test mock
+          db: db as any,
+          now: () => NOW,
+        }),
+      );
+      const res = await app.request('http://host/overview');
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.reviewsMonth).toBe(3);
+      expect(body.costMtd).toBeCloseTo(1.5);
     });
 
     it('handles missing DB rows gracefully (undefined first element)', async () => {
       const db = {
-        select: () => ({
-          from: () => ({
-            where: () => Promise.resolve([]),
-          }),
-        }),
+        select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+        selectDistinct: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
       };
       const app = createDashboardRouter({
         // biome-ignore lint/suspicious/noExplicitAny: test mock
@@ -84,11 +132,8 @@ describe('dashboard router', () => {
 
     it('uses current date when deps.now is not provided', async () => {
       const db = {
-        select: () => ({
-          from: () => ({
-            where: () => Promise.resolve([{ value: 1, total: 0.5 }]),
-          }),
-        }),
+        select: () => ({ from: () => ({ where: () => Promise.resolve([{ value: 1 }]) }) }),
+        selectDistinct: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
       };
       // No now() injection — exercises the fallback branch
       const app = createDashboardRouter({

@@ -759,6 +759,22 @@ typecheck/lint/build green。**未 push / develop→main 未マージ**。
   partial/範囲外は suppress（コメントのみ）、単一行は back-compat。fingerprint は anchor(line) 維持。
 - 既知: #140 の budget alert は #144（通知チャネル）依存。既存 overview/repo-metrics の RLS バグは #166 で対応（次）。
 
+### [A12] dashboard read-endpoint RLS fix — #166 landed (develop, 2026-06-06)
+
+#142/#140 実装中に発見した既存バグ（`GET /api/dashboard/overview` と `GET /api/repos/:id/metrics` が
+`app.current_tenant` GUC を張らず RLS 下で 0 行を返す）を修正。develop に landed。統合検証フル green。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#166](https://github.com/almondoo/review-agent/issues/166) | dashboard read endpoints omit app.current_tenant GUC | ✅ landed (develop) |
+
+- `loadOverviewTotals`（新規 `packages/db/src/overview-totals.ts`）: installation 集合を per-installation で `withTenant`
+  集計し合算（RLS を通す）。
+- overview の installation スコープ: **session = caller の memberships / legacy = repos(非RLS) 由来の distinct installation_id**。
+- repo metrics: `repo.installationId` で `withTenant`。
+- null-installation の repo/データは per-installation RLS で読めない（write-only と同じ限界）＝docs/コメント明記。
+- レスポンス型不変（web 無影響）。#142 `/metrics`・#140 `/cost` は元から正しいので不変。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /

@@ -1,8 +1,9 @@
-import { costLedger, repos, reviewEvalEvent } from '@review-agent/core/db';
+import { repos } from '@review-agent/core/db';
 import type { DbClient } from '@review-agent/db';
-import { loadCostMetrics, loadQualityMetrics } from '@review-agent/db';
-import { and, count, gte, isNull, sql } from 'drizzle-orm';
+import { loadCostMetrics, loadOverviewTotals, loadQualityMetrics } from '@review-agent/db';
+import { count, isNotNull, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { getMembershipsByPrincipal } from '../auth/principal-store.js';
 import type { AuthEnv } from '../auth/types.js';
 import { installationAuthz } from './middleware/installation-authz.js';
 import type {
@@ -31,35 +32,65 @@ export function createDashboardRouter(deps: DashboardDeps): Hono {
   app.get('/overview', async (c) => {
     const now = (deps.now ?? (() => new Date()))();
     const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const principal = c.get('principal');
 
-    // Total active repos (not soft-deleted)
+    // Total active repos (not soft-deleted). `repos` has no RLS — readable
+    // without `app.current_tenant`.
     const repoCountRows = await deps.db
       .select({ value: count() })
       .from(repos)
       .where(isNull(repos.deletedAt));
     const totalRepos = Number(repoCountRows[0]?.value ?? 0);
 
-    // Reviews this calendar month
-    const reviewCountRows = await deps.db
-      .select({ value: count() })
-      .from(reviewEvalEvent)
-      .where(gte(reviewEvalEvent.createdAt, startOfMonth));
-    const reviewsMonth = Number(reviewCountRows[0]?.value ?? 0);
+    // ---------------------------------------------------------------------------
+    // Determine the set of installation IDs to aggregate over.
+    //
+    // `review_eval_event` and `cost_ledger` are RLS-scoped by `installation_id`.
+    // Without `app.current_tenant` set these tables return zero rows for the
+    // `review_agent_app` role (fail-closed). We must iterate over the caller's
+    // installations and sum inside `withTenant` (via `loadOverviewTotals`).
+    //
+    // Session mode (principal present):
+    //   Use the caller's `installation_memberships` to bound the scope.
+    //
+    // Legacy / shared-token mode (no principal):
+    //   Use distinct non-null `installation_id` values from the `repos` table
+    //   (non-RLS) as a proxy for all known installations. `github_installations`
+    //   is RLS-enabled and cannot be queried without a GUC — avoid it here.
+    //
+    // Repos with installation_id IS NULL (manually-registered) are excluded from
+    // the review/cost totals: per-installation RLS has no tenant to match for
+    // those rows. This is documented as an inherent per-installation RLS
+    // limitation and is consistent with the behaviour of GET /metrics and
+    // GET /cost which both require an explicit installationId.
+    // ---------------------------------------------------------------------------
+    let installationIds: bigint[];
 
-    // Cost month-to-date (sum over cost_ledger since start of month)
-    const costRows = await deps.db
-      .select({ total: sql<number>`coalesce(sum(${costLedger.costUsd}), 0)` })
-      .from(costLedger)
-      .where(and(gte(costLedger.createdAt, startOfMonth)));
-    const costMtd = Number(costRows[0]?.total ?? 0);
+    if (principal !== undefined) {
+      const memberships = await getMembershipsByPrincipal(deps.db, principal.id);
+      installationIds = memberships.map((m) => BigInt(m.installationId));
+    } else {
+      // Legacy mode: derive installation IDs from the repos table (non-RLS).
+      const instRows = await deps.db
+        .selectDistinct({ installationId: repos.installationId })
+        .from(repos)
+        .where(isNotNull(repos.installationId));
+      installationIds = instRows
+        .map((r) => r.installationId)
+        .filter((id): id is bigint => id !== null);
+    }
+
+    // Aggregate reviewsMonth and costMtd across all relevant installations.
+    // Each installation is queried inside withTenant so RLS is satisfied.
+    const totals = await loadOverviewTotals(deps.db, installationIds, startOfMonth);
 
     const overview: DashboardOverview = {
       totalRepos,
-      reviewsMonth,
+      reviewsMonth: totals.reviewsMonth,
       // Queue depth is not tracked in the DB at this layer; expose 0 as a
       // safe default. Operators wiring SQS can extend this endpoint.
       queueDepth: 0,
-      costMtd,
+      costMtd: totals.costMtd,
     };
     return c.json(overview, 200);
   });
