@@ -78,7 +78,9 @@
       "submit": "[LOG IN]",
       "submitting": "[LOGGING IN...]",
       "errorInvalidCredentials": "Incorrect username or password.",
-      "errorLegacyMode": "This deployment has per-user login disabled."
+      "errorLegacyMode": "This deployment has per-user login disabled.",
+      "ssoOr": "or",
+      "ssoButton": "[SIGN IN WITH SSO]"
     },
     "overview": {
       "title": "Overview",

@@ -23,6 +23,7 @@ import {
   upsertMockLlmKey,
 } from './mocks.js';
 import type {
+  AuthConfig,
   AuthMeResponse,
   BulkCreateRepoBody,
   BulkCreateRepoResponse,
@@ -64,7 +65,7 @@ export function registerOnUnauthorized(cb: () => void): void {
 }
 
 /** Paths that must NOT send an Authorization header. */
-const NO_AUTH_PATHS = new Set(['/api/auth/login']);
+const NO_AUTH_PATHS = new Set(['/api/auth/login', '/api/auth/config']);
 
 export class UnauthorizedError extends Error {
   readonly status = 401;
@@ -110,6 +111,19 @@ export async function apiLogin(body: LoginBody): Promise<LoginResponse> {
 
 export async function apiFetchMe(): Promise<AuthMeResponse> {
   return apiFetch<AuthMeResponse>('/api/auth/me');
+}
+
+async function fetchAuthConfig(): Promise<AuthConfig> {
+  if (IS_MOCK) return Promise.resolve({ oidcEnabled: false });
+  return apiFetch<AuthConfig>('/api/auth/config');
+}
+
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ['auth-config'],
+    queryFn: fetchAuthConfig,
+    staleTime: 60_000,
+  });
 }
 
 export async function apiLogout(): Promise<void> {

@@ -87,6 +87,7 @@ single TypeScript monorepo.
 | [Skill attestation](./security/skill-attestation.md) | Skill file integrity verification |
 | [Multi-tenant authz](./security/multi-tenant-authz.md) | Installation isolation |
 | [Dashboard auth](./security/dashboard-auth.md) | Dashboard authentication |
+| [SSO (OIDC)](./security/sso.md) | OIDC single sign-on for the dashboard |
 | [Feedback command authz](./security/feedback-command-authz.md) | Who can submit 👎 reactions |
 | [On-call](./security/oncall.md) | Security on-call runbook |
 

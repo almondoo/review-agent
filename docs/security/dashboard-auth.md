@@ -7,7 +7,7 @@ versions.
 
 Related: [`multi-tenant-authz.md`](./multi-tenant-authz.md) (the per-installation
 IDOR hardening this builds on), [`byok.md`](./byok.md),
-[`audit-log.md`](./audit-log.md).
+[`audit-log.md`](./audit-log.md), [`sso.md`](./sso.md) (OIDC single sign-on).
 
 ---
 

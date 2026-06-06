@@ -1,5 +1,11 @@
 export type Platform = 'github' | 'codecommit';
 
+// --- Auth config ---
+
+export type AuthConfig = {
+  oidcEnabled: boolean;
+};
+
 // --- Auth types ---
 
 export type Role = 'viewer' | 'editor' | 'admin';

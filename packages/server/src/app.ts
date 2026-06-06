@@ -105,6 +105,19 @@ export type AppDeps = {
     input: ConversationHandlerInput,
   ) => Promise<ConversationReplyOutcome>;
   /**
+   * Pre-resolved OIDC configuration (issue #137 Phase B).
+   *
+   * When provided, overrides env-based resolution. Pass the result of
+   * `resolveOidcConfig(process.env, { kmsClient, kmsKeyId })` when the
+   * KMS decryption path is needed (async, must be called before createApp).
+   *
+   * When absent, createApp resolves OIDC config from env vars synchronously
+   * (non-KMS path only — clientSecret read from REVIEW_AGENT_OIDC_CLIENT_SECRET).
+   *
+   * null means OIDC is explicitly disabled; undefined means "resolve from env".
+   */
+  readonly oidcConfig?: import('./auth/oidc.js').OidcConfig | null;
+  /**
    * #149 self-reply guard: returns the bot's own GitHub login
    * (e.g. `review-agent[bot]`). When provided, the webhook handler checks the
    * sender against this value and silently drops the event if they match
@@ -304,6 +317,31 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
     return n;
   })();
 
+  // -------------------------------------------------------------------------
+  // OIDC config resolution (issue #137 Phase B).
+  //
+  // Caller may supply a pre-resolved OidcConfig (e.g. when KMS async decryption
+  // was performed before createApp is called). When absent, we resolve from
+  // env vars synchronously (non-KMS path: plaintext REVIEW_AGENT_OIDC_CLIENT_SECRET).
+  //
+  // null = OIDC explicitly disabled.
+  // -------------------------------------------------------------------------
+  const resolvedOidcConfig: import('./auth/oidc.js').OidcConfig | null = (() => {
+    if (deps.oidcConfig !== undefined) {
+      // Pre-resolved by caller (KMS path or explicit override in tests).
+      return deps.oidcConfig;
+    }
+    // Synchronous resolution — no KMS. Any encrypted secret requires the
+    // caller to pre-resolve with resolveOidcConfig() before calling createApp.
+    const issuer = process.env.REVIEW_AGENT_OIDC_ISSUER;
+    const clientId = process.env.REVIEW_AGENT_OIDC_CLIENT_ID;
+    const clientSecret = process.env.REVIEW_AGENT_OIDC_CLIENT_SECRET;
+    const redirectUri = process.env.REVIEW_AGENT_OIDC_REDIRECT_URI ?? '';
+    if (!issuer || !clientId || !clientSecret) return null;
+    if (resolvedAuthMode === 'legacy') return null;
+    return { issuer, clientId, clientSecret, redirectUri };
+  })();
+
   // Resolve the audit appender once at app-creation time so the same instance
   // is shared across /api routes and /github/setup. The appender now sets the
   // tenant GUC internally so no outer withTenant wrapper is required.
@@ -355,6 +393,9 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       authMode: resolvedAuthMode,
       ...(resolvedSessionSecret !== undefined ? { sessionSecret: resolvedSessionSecret } : {}),
       sessionTtlSeconds: resolvedSessionTtlSeconds,
+      // OIDC config (issue #137 Phase B).
+      oidcConfig: resolvedOidcConfig,
+      ...(dashboardOrigin !== undefined ? { dashboardOrigin } : {}),
     }),
   );
 

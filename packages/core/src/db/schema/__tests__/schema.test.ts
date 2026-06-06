@@ -252,6 +252,8 @@ describe('db schema shape', () => {
       'id',
       'username',
       'password_hash',
+      'provider',
+      'external_id',
       'token_version',
       'created_at',
       'updated_at',
@@ -264,10 +266,21 @@ describe('db schema shape', () => {
     // username is unique (column-level .unique() surfaces as isUnique on the column)
     const usernameCol = cfg.columns.find((c) => c.name === 'username');
     expect(usernameCol?.isUnique, 'username must be unique').toBe(true);
+    // password_hash is nullable (OIDC principals have no local password)
+    const passwordCol = cfg.columns.find((c) => c.name === 'password_hash');
+    expect(passwordCol?.notNull, 'password_hash must be nullable for OIDC users').toBe(false);
     // token_version has default 1
     const tokenVersionCol = cfg.columns.find((c) => c.name === 'token_version');
     expect(tokenVersionCol?.notNull).toBe(true);
     expect(tokenVersionCol?.hasDefault).toBe(true);
+    // (provider, external_id) partial index must be UNIQUE — prevents duplicate
+    // JIT-provisioned OIDC principals for the same sub (security review #137).
+    expect(
+      cfg.indexes.some(
+        (i) => i.config.name === 'operator_principals_provider_external_id_uidx' && i.config.unique,
+      ),
+      'provider+external_id index must be UNIQUE',
+    ).toBe(true);
     // RLS intentionally omitted (control-plane auth table)
     expect(cfg.enableRLS).toBe(false);
     expect(cfg.policies).toEqual([]);

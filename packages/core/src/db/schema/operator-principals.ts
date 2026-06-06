@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import { integer, pgTable, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 /**
  * Stores operator (dashboard) principals — human users who log in to the
@@ -58,7 +58,7 @@ export const operatorPrincipals = pgTable(
      * principals. Rows with external_id IS NULL (local users) are excluded
      * from this constraint.
      */
-    index('operator_principals_provider_external_id_uidx')
+    uniqueIndex('operator_principals_provider_external_id_uidx')
       .on(table.provider, table.externalId)
       .where(sql`${table.externalId} IS NOT NULL`),
   ],

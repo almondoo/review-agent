@@ -144,9 +144,19 @@ export type UpsertOidcPrincipalOpts = {
 export type UpsertOidcPrincipalResult = {
   readonly id: string;
   readonly username: string;
+  /**
+   * The principal's current tokenVersion. The OIDC callback must embed this in
+   * the issued session JWT so that `sessionAuth` (which re-checks the JWT's
+   * tokenVersion against the DB on every request) accepts it. New rows are
+   * created with tokenVersion 1 (the schema default).
+   */
+  readonly tokenVersion: number;
   /** True when a new principal row was inserted; false when an existing one was returned. */
   readonly created: boolean;
 };
+
+/** tokenVersion assigned to freshly JIT-provisioned principals (schema default). */
+const NEW_PRINCIPAL_TOKEN_VERSION = 1;
 
 /**
  * JIT-provision an OIDC principal.
@@ -170,7 +180,12 @@ export async function upsertOidcPrincipal(
   // 1. Check for an existing principal by (provider, externalId).
   const existing = await findPrincipalByExternalId(db, opts.provider, opts.externalId);
   if (existing !== null) {
-    return { id: existing.id, username: existing.username, created: false };
+    return {
+      id: existing.id,
+      username: existing.username,
+      tokenVersion: existing.tokenVersion,
+      created: false,
+    };
   }
 
   // 2. Attempt INSERT with preferred username.
@@ -184,25 +199,68 @@ export async function upsertOidcPrincipal(
       passwordHash: null,
       provider: opts.provider,
       externalId: opts.externalId,
+      tokenVersion: NEW_PRINCIPAL_TOKEN_VERSION,
     });
-    return { id: opts.id, username: opts.username, created: true };
+    return {
+      id: opts.id,
+      username: opts.username,
+      tokenVersion: NEW_PRINCIPAL_TOKEN_VERSION,
+      created: true,
+    };
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code !== '23505') {
+    if ((err as { code?: string }).code !== '23505') {
       throw err;
     }
-    // Username collision — try with suffix. Use a new UUID for the retry row
-    // to avoid confusion (opts.id was already rejected above).
-    // Note: we reuse opts.id here because the INSERT above failed atomically
-    // (no row was written). opts.id is still a fresh UUID that can be used.
-    await db.insert(operatorPrincipals).values({
-      id: opts.id,
-      username: usernameWithSuffix,
-      passwordHash: null,
-      provider: opts.provider,
-      externalId: opts.externalId,
-    });
-    return { id: opts.id, username: usernameWithSuffix, created: true };
+    // A 23505 here is one of two cases:
+    //   (a) a concurrent first-login for the SAME (provider, external_id) — a
+    //       JIT race (e.g. double-clicked SSO button). The other request won the
+    //       INSERT; re-fetch and return its row.
+    //   (b) a username collision with a DIFFERENT principal. Retry with a
+    //       suffixed username.
+    // Disambiguate by re-checking the external identity first.
+    const raced = await findPrincipalByExternalId(db, opts.provider, opts.externalId);
+    if (raced !== null) {
+      return {
+        id: raced.id,
+        username: raced.username,
+        tokenVersion: raced.tokenVersion,
+        created: false,
+      };
+    }
+
+    // (b) username collision — retry with a suffixed username. opts.id is still
+    // a fresh UUID (the INSERT above failed atomically, no row was written).
+    try {
+      await db.insert(operatorPrincipals).values({
+        id: opts.id,
+        username: usernameWithSuffix,
+        passwordHash: null,
+        provider: opts.provider,
+        externalId: opts.externalId,
+        tokenVersion: NEW_PRINCIPAL_TOKEN_VERSION,
+      });
+      return {
+        id: opts.id,
+        username: usernameWithSuffix,
+        tokenVersion: NEW_PRINCIPAL_TOKEN_VERSION,
+        created: true,
+      };
+    } catch (retryErr) {
+      // A concurrent request may have provisioned the same external_id between
+      // our re-check and this retry — return the winner instead of failing.
+      if ((retryErr as { code?: string }).code === '23505') {
+        const racedAgain = await findPrincipalByExternalId(db, opts.provider, opts.externalId);
+        if (racedAgain !== null) {
+          return {
+            id: racedAgain.id,
+            username: racedAgain.username,
+            tokenVersion: racedAgain.tokenVersion,
+            created: false,
+          };
+        }
+      }
+      throw retryErr;
+    }
   }
 }
 

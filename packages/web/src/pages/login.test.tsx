@@ -18,10 +18,13 @@ vi.mock('react-router-dom', async (importOriginal) => {
 // Mock apiLogin — control success/failure per test.
 const mockApiLogin = vi.hoisted(() => vi.fn());
 const mockInvalidateQueries = vi.hoisted(() => vi.fn());
+// Controllable oidcEnabled flag for SSO button tests.
+let mockOidcEnabled = false;
 
 vi.mock('../api/client.js', () => ({
   apiLogin: mockApiLogin,
   IS_MOCK: false,
+  useAuthConfig: () => ({ data: { oidcEnabled: mockOidcEnabled } }),
 }));
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
@@ -70,6 +73,7 @@ describe('LoginPage', () => {
     mockApiLogin.mockReset();
     mockSetSessionToken.mockReset();
     mockInvalidateQueries.mockReset().mockResolvedValue(undefined);
+    mockOidcEnabled = false;
   });
 
   afterEach(() => {
@@ -183,5 +187,33 @@ describe('LoginPage', () => {
       target: { value: 'alice2' },
     });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // --- SSO button ---
+
+  it('does not render SSO button when oidcEnabled is false', () => {
+    mockOidcEnabled = false;
+    render();
+    expect(screen.queryByRole('button', { name: /sign in with sso/i })).toBeNull();
+  });
+
+  it('renders SSO button when oidcEnabled is true', () => {
+    mockOidcEnabled = true;
+    render();
+    expect(screen.getByRole('button', { name: /sign in with sso/i })).toBeInTheDocument();
+  });
+
+  it('navigates to /api/auth/oidc/authorize on SSO button click', () => {
+    mockOidcEnabled = true;
+    const originalLocation = window.location;
+    // jsdom does not allow direct assignment to window.location, so we replace it.
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { ...originalLocation, href: '' },
+    });
+    render();
+    fireEvent.click(screen.getByRole('button', { name: /sign in with sso/i }));
+    expect(window.location.href).toBe('/api/auth/oidc/authorize');
+    Object.defineProperty(window, 'location', { writable: true, value: originalLocation });
   });
 });

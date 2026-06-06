@@ -312,7 +312,9 @@ describe('upsertOidcPrincipal', () => {
       id: 'new-id',
     });
 
-    expect(result).toEqual({ id: 'oidc-old', username: 'alice', created: false });
+    // tokenVersion is passed through from the existing row so the OIDC callback
+    // can embed the correct value in the session JWT (sessionAuth re-checks it).
+    expect(result).toEqual({ id: 'oidc-old', username: 'alice', tokenVersion: 2, created: false });
   });
 
   it('inserts a new principal and returns (created: true) when not found', async () => {
@@ -329,7 +331,7 @@ describe('upsertOidcPrincipal', () => {
       id: 'uuid-new',
     });
 
-    expect(result).toEqual({ id: 'uuid-new', username: 'bob', created: true });
+    expect(result).toEqual({ id: 'uuid-new', username: 'bob', tokenVersion: 1, created: true });
     expect(insertFn).toHaveBeenCalledOnce();
     const insertArg = valuesFn.mock.calls[0]?.[0];
     expect(insertArg?.passwordHash).toBeNull();
@@ -357,10 +359,42 @@ describe('upsertOidcPrincipal', () => {
     });
 
     // externalId.toLowerCase().slice(0,8) = 'sub-1234'
-    expect(result).toEqual({ id: 'uuid-retry', username: 'alice_sub-1234', created: true });
+    expect(result).toEqual({
+      id: 'uuid-retry',
+      username: 'alice_sub-1234',
+      tokenVersion: 1,
+      created: true,
+    });
     expect(insertFn).toHaveBeenCalledTimes(2);
     const secondInsertArg = valuesFn.mock.calls[1]?.[0];
     expect(secondInsertArg?.username).toBe('alice_sub-1234');
+  });
+
+  it('returns the race winner when a concurrent first-login wins the INSERT (TOCTOU)', async () => {
+    // Initial lookup: not found. INSERT loses the race (23505). Re-check by
+    // external_id finds the winner → return it (created: false), no suffix retry.
+    const whereFn = vi
+      .fn()
+      .mockResolvedValueOnce([]) // findPrincipalByExternalId → not found
+      .mockResolvedValueOnce([{ id: 'winner', username: 'carol', tokenVersion: 1 }]); // re-check → winner
+    const fromFn = vi.fn().mockReturnValue({ where: whereFn });
+    const selectFn = vi.fn().mockReturnValue({ from: fromFn });
+    const valuesFn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('dup'), { code: '23505' }));
+    const insertFn = vi.fn().mockReturnValue({ values: valuesFn });
+    const db = { select: selectFn, insert: insertFn } as never;
+
+    const result = await upsertOidcPrincipal(db, {
+      provider: 'google',
+      externalId: 'sub-race',
+      username: 'carol',
+      id: 'my-id',
+    });
+
+    expect(result).toEqual({ id: 'winner', username: 'carol', tokenVersion: 1, created: false });
+    // No suffix retry — the race was detected via the external_id re-check.
+    expect(insertFn).toHaveBeenCalledOnce();
   });
 
   it('propagates non-unique errors from INSERT', async () => {

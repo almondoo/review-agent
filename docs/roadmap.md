@@ -819,6 +819,30 @@ develop に landed（本セッションで自律実装）。統合検証フル g
   worker と共通の既存 example-deployment 事項（operator 注入 seam 領域）。GCP Pub/Sub・Azure Service Bus の DLQ 消費は別 issue。
   CloudWatch alarm の SNS action は operator 設定。
 
+### [A15] SSO (OIDC) dashboard auth — #137 landed (develop, 2026-06-06)
+
+#161 の per-user 認証の上に汎用 OIDC（Authorization Code + PKCE）SSO を実装（3 フェーズ）。develop に landed
+（本セッションで自律実装）。security-review 実施 — 検出 High1/Medium1/Low2 を**全修正**し Critical/High/Medium 0 に。
+統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#137](https://github.com/almondoo/review-agent/issues/137) | SSO support (OIDC) | ✅ landed (develop) |
+
+- **Phase A**: `operator_principals` に password nullable + provider/external_id + **unique** partial index（migration
+  `0014_oidc_principals`）。db `upsertOidcPrincipal`（JIT, TOCTOU race 対応）/ `findPrincipalByExternalId`。OIDC ユーザーは
+  password login 不可。
+- **Phase B**: server OIDC（`oidc.ts`: discovery / PKCE(S256) / id_token 検証[jose, **RS256/ES256 固定**, issuer/audience/nonce/exp]
+  / client secret は **KMS 設定時 envelope・無ければ env**）+ `/api/auth/{config, oidc/authorize, oidc/callback}`
+  （state/nonce/PKCE を HttpOnly cookie、sessionAuth 外）。callback で JIT → **実 tokenVersion** で session JWT 発行（#161 再利用）。
+- **Phase C**: web「Sign in with SSO」ボタン（`/api/auth/config` の oidcEnabled 駆動）+ callback の `#token` fragment 処理
+  （保存後 `history.replaceState` で URL/履歴から除去）+ docs `docs/security/sso.md`。
+- **role 付与**: 認証のみ（JIT）。membership/role は admin が CLI で付与（最小権限・groups→membership 自動は将来）。
+- **env**: `REVIEW_AGENT_OIDC_{ISSUER,CLIENT_ID,CLIENT_SECRET / CLIENT_SECRET_ENCRYPTED,REDIRECT_URI}`、`REVIEW_AGENT_DASHBOARD_ORIGIN`。
+  AUTH_MODE=session/both で有効、legacy で無効（404）。
+- **security-review 修正**: schema を `uniqueIndex` 化（将来 generate での UNIQUE drift 防止）/ JIT の TOCTOU race（concurrent
+  first-login で winner を返却し 500 回避）/ `clearOidcCookies` の secure/httpOnly/sameSite 付与 / schema test 追加。SAML は follow-up。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
 #134 richer PR summary / #141 dashboard UX gaps /
@@ -826,10 +850,10 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 
 ### [C] 外部リソース / 前提ブロック
 
-#132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証は landed したが
+#132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証 + #137 で OIDC SSO が landed したが
 フル per-principal credential 方式の最終決定は GA 据え置き) /
-#137 (SSO — #161 の per-user 認証基盤の上に OIDC/IdP 連携を載せる。spec 判断要) /
 #154 (preset 配布 — npm publish 権限要)。
+（#137 SSO(OIDC) は landed したため [C] から除外 → [A15] 参照。SAML は follow-up）
 （#144 notifications → [A13]、#138 failure handling(AWS scope) → [A14] が landed したため [C] から除外。
 #138 の GCP/Azure DLQ 消費は follow-up）
 （#140 cost analytics は分析+ダッシュボードを landed したため [C] から除外 → [A11] 参照。budget alert の通知送信のみ #144 待ち）

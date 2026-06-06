@@ -78,7 +78,9 @@
       "submit": "[ログイン]",
       "submitting": "[ログイン中...]",
       "errorInvalidCredentials": "ユーザー名またはパスワードが正しくありません。",
-      "errorLegacyMode": "このデプロイは per-user ログインを無効化しています。"
+      "errorLegacyMode": "このデプロイは per-user ログインを無効化しています。",
+      "ssoOr": "または",
+      "ssoButton": "[SSOでサインイン]"
     },
     "overview": {
       "title": "概要",

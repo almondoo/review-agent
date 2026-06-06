@@ -3,6 +3,7 @@ import { Outlet, useNavigate } from 'react-router-dom';
 import { apiLogout, IS_MOCK, registerOnUnauthorized, useAuthMe } from '../api/client.js';
 import type { Membership, Role } from '../api/types.js';
 import { AuthContext, computeMaxRole, hasRoleForInstallation } from '../contexts/auth-context.js';
+import { setSessionToken } from '../lib/session-token.js';
 
 /**
  * AuthProvider is a router layout element that bootstraps auth state by
@@ -12,6 +13,14 @@ import { AuthContext, computeMaxRole, hasRoleForInstallation } from '../contexts
  * - legacy response     → legacy mode, all operations permitted.
  * - session response    → principal + memberships stored in context.
  * - 401 from /me        → apiFetch fires onUnauthorized → redirect /login.
+ *
+ * OIDC callback handling:
+ * - On mount, checks location.hash for `#token=<jwt>` written by the server
+ *   after a successful OIDC flow (GET /api/auth/oidc/callback → 302 to
+ *   <dashboardOrigin>/#token=<urlencoded session JWT>).
+ * - If found: stores the token via setSessionToken, removes the hash from
+ *   browser history (token must not persist in the URL or history), then
+ *   lets useAuthMe proceed normally — identical to the password login path.
  */
 export function AuthProvider() {
   const navigate = useNavigate();
@@ -22,6 +31,22 @@ export function AuthProvider() {
       void navigate('/login', { replace: true });
     });
   }, [navigate]);
+
+  // OIDC callback: consume #token=<jwt> from the hash, store it, strip hash.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const hash = window.location.hash;
+    if (!hash.startsWith('#token=')) return;
+    const raw = hash.slice('#token='.length);
+    const token = decodeURIComponent(raw);
+    if (token) {
+      setSessionToken(token);
+    }
+    // Remove the fragment from URL and history so the token is not visible
+    // after navigation or in the browser history stack.
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    // useAuthMe will now pick up the freshly stored token on its next fetch.
+  }, []);
 
   const { data, isError } = useAuthMe();
 

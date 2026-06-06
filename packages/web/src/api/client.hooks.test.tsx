@@ -6,6 +6,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  useAuthConfig,
   useBulkCreateRepos,
   useCreateRepo,
   useDeleteLlmKey,
@@ -39,6 +40,12 @@ function makeWrapper() {
 describe('client hooks (mock mode)', () => {
   // Each test gets a fresh QueryClient via makeWrapper() — no cross-test pollution.
   afterEach(() => {});
+
+  it('useAuthConfig returns oidcEnabled:false in mock mode', async () => {
+    const { result } = renderHook(() => useAuthConfig(), { wrapper: makeWrapper() });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.oidcEnabled).toBe(false);
+  });
 
   it('useOverview returns overview metrics', async () => {
     const { result } = renderHook(() => useOverview(), { wrapper: makeWrapper() });

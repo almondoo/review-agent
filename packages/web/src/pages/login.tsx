@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { type FormEvent, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { apiLogin } from '../api/client.js';
+import { apiLogin, useAuthConfig } from '../api/client.js';
 import { setSessionToken } from '../lib/session-token.js';
 
 const inputStyle: React.CSSProperties = {
@@ -38,6 +38,7 @@ export function LoginPage() {
   const usernameId = useId();
   const passwordId = useId();
   const errorId = useId();
+  const { data: authConfig } = useAuthConfig();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -206,6 +207,52 @@ export function LoginPage() {
             {isPending ? t('pages.login.submitting') : t('pages.login.submit')}
           </button>
         </form>
+
+        {/* SSO button — shown only when OIDC is enabled server-side */}
+        {authConfig?.oidcEnabled === true && (
+          <div style={{ marginTop: '1.25rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                marginBottom: '1rem',
+              }}
+            >
+              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--hairline)' }} />
+              <span
+                className="label-mono"
+                style={{ color: 'var(--graphite)', whiteSpace: 'nowrap' }}
+              >
+                {t('pages.login.ssoOr')}
+              </span>
+              <div style={{ flex: 1, height: '1px', backgroundColor: 'var(--hairline)' }} />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = '/api/auth/oidc/authorize';
+              }}
+              style={{
+                width: '100%',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.6875rem',
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--ink)',
+                backgroundColor: 'var(--bg-raised)',
+                border: '1px solid var(--hairline)',
+                padding: '0.75rem 1.25rem',
+                borderRadius: 'var(--radius)',
+                cursor: 'pointer',
+                transition: 'background-color var(--transition-fast)',
+              }}
+            >
+              {t('pages.login.ssoButton')}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

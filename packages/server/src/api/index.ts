@@ -6,10 +6,12 @@ import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { issueSessionToken } from '../auth/jwt.js';
+import type { OidcConfig } from '../auth/oidc.js';
 import { findPrincipalByUsername } from '../auth/principal-store.js';
 import type { AuthMode } from '../auth/session-auth.js';
 import { sessionAuth } from '../auth/session-auth.js';
 import { createAuthRouter } from './auth.js';
+import { createOidcRouter } from './auth-oidc.js';
 import { createDashboardRouter } from './dashboard.js';
 import { createGithubReposRouter } from './github-repos.js';
 import { createIntegrationsRouter, type IntegrationsEnv } from './integrations.js';
@@ -108,6 +110,22 @@ export type ApiDeps = {
    * Default: 43200 (12h).
    */
   readonly sessionTtlSeconds?: number;
+  /**
+   * Resolved OIDC configuration (issue #137 Phase B).
+   * When null, OIDC endpoints return 404. Built by resolveOidcConfig() in app.ts.
+   * GET /api/auth/config always responds (oidcEnabled: false) even when null.
+   */
+  readonly oidcConfig?: OidcConfig | null;
+  /**
+   * Dashboard origin URL for OIDC post-callback redirect.
+   * Forwarded to createOidcRouter so callbacks can redirect to the SPA.
+   * Sourced from REVIEW_AGENT_DASHBOARD_ORIGIN env in app.ts.
+   */
+  readonly dashboardOrigin?: string;
+  /**
+   * DI: custom fetch for OIDC discovery + token exchange (tests only).
+   */
+  readonly fetchFn?: typeof fetch;
 };
 
 /**
@@ -212,6 +230,27 @@ export function createApi(deps: ApiDeps): Hono {
 
     return c.json({ token, expiresIn: sessionTtlSeconds }, 200);
   });
+
+  // -------------------------------------------------------------------------
+  // OIDC routes — OUTSIDE sessionAuth (unauthenticated).
+  //
+  // Registered after POST /auth/login but before sessionAuth so these routes
+  // are accessible without a token:
+  //   GET /auth/config             → { oidcEnabled: boolean }
+  //   GET /auth/oidc/authorize     → redirect to IdP
+  //   GET /auth/oidc/callback      → exchange code → issue JWT → redirect
+  // -------------------------------------------------------------------------
+  api.route(
+    '/auth',
+    createOidcRouter({
+      oidcConfig: deps.oidcConfig ?? null,
+      db: deps.db,
+      sessionSecret: deps.sessionSecret,
+      sessionTtlSeconds,
+      ...(deps.dashboardOrigin !== undefined ? { dashboardOrigin: deps.dashboardOrigin } : {}),
+      ...(deps.fetchFn !== undefined ? { fetchFn: deps.fetchFn } : {}),
+    }),
+  );
 
   // -------------------------------------------------------------------------
   // Apply sessionAuth to ALL subsequent routes.
