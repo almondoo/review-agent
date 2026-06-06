@@ -194,6 +194,11 @@ export async function runDryRunCommand(io: ProgramIo, opts: DryRunOpts): Promise
       prRepo: resolvePrRepo(platform, ref, opts.env),
       resolutionLog,
       ...(externalTools.length > 0 ? { externalTools } : {}),
+      summary: {
+        walkthrough: config.summary.walkthrough,
+        changeImpact: config.summary.change_impact,
+        dependencyView: config.summary.dependency_view,
+      },
     },
     provider,
     // No onConfigResolution hook — we already printed the config above.

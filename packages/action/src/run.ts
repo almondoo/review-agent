@@ -209,6 +209,11 @@ export async function runAction(
       repo: ctx.ref.repo,
     },
     ...(externalTools.length > 0 ? { externalTools } : {}),
+    summary: {
+      walkthrough: config.summary.walkthrough,
+      changeImpact: config.summary.change_impact,
+      dependencyView: config.summary.dependency_view,
+    },
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;

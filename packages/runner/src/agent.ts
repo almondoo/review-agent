@@ -384,6 +384,11 @@ async function runReviewInner(
     skills: job.skills,
     pathInstructions: job.pathInstructions,
     language: job.language,
+    summaryConfig: {
+      walkthrough: job.summary?.walkthrough ?? true,
+      changeImpact: job.summary?.changeImpact ?? true,
+      dependencyView: job.summary?.dependencyView ?? false,
+    },
   };
   if (job.incrementalContext === true) {
     (promptOptions as { incrementalContext?: boolean }).incrementalContext = true;

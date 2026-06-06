@@ -243,6 +243,11 @@ export async function runReviewCommand(
       // can log it at the start of the review (issue #146 AC2).
       resolutionLog,
       ...(externalTools.length > 0 ? { externalTools } : {}),
+      summary: {
+        walkthrough: config.summary.walkthrough,
+        changeImpact: config.summary.change_impact,
+        dependencyView: config.summary.dependency_view,
+      },
     },
     provider,
     {

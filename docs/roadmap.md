@@ -843,9 +843,26 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 - **security-review 修正**: schema を `uniqueIndex` 化（将来 generate での UNIQUE drift 防止）/ JIT の TOCTOU race（concurrent
   first-login で winner を返却し 500 回避）/ `clearOidcCookies` の secure/httpOnly/sameSite 付与 / schema test 追加。SAML は follow-up。
 
+### [A16] richer PR summary — #134 landed (develop, 2026-06-06)
+
+レビュー summary に walkthrough / change-impact / dependency view（opt-in）を追加。**LLM 1 回生成・ReviewOutput
+スキーマ変更なし**（summary 文字列に Markdown セクションで埋め込み）。develop に landed（本セッションで自律実装）。
+統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#134](https://github.com/almondoo/review-agent/issues/134) | richer PR summary (walkthrough / change-impact / dependency view) | ✅ landed (develop) |
+
+- **config**: `summary.{walkthrough(既定 on), change_impact(既定 on), dependency_view(既定 off = opt-in)}`。
+- **system-prompt**: summary に `## Walkthrough` / `## Change impact` /（dependency_view 時のみ）`## Dependencies` セクションを
+  出す指示。別 LLM 呼び出しなし（コスト不変）。
+- **dependency view は LLM テキスト推測のみ**（静的 import 解析なし・visual graph なし。AC 準拠）。
+- **large-PR**: 最優先ファイル要約 + 明示的 truncation note（既存 coverage 機構と整合、サイレント打ち切りなし）。
+- 配線: action / cli(review, dry-run)。docs: `docs/configuration/review-output.md`。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
-#134 richer PR summary / #141 dashboard UX gaps /
+#141 dashboard UX gaps /
 #162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック

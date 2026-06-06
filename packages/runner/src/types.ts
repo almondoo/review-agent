@@ -301,6 +301,24 @@ export type ReviewJob = {
     readonly prioritization: ReadonlyArray<'path_instructions' | 'diff_size' | 'alphabetical'>;
   };
   /**
+   * PR summary section configuration (#134). Controls which Markdown sections
+   * the LLM includes in the `summary` field:
+   *
+   *   - `walkthrough`    — per-file / per-area narrative (default ON).
+   *   - `changeImpact`   — blast-radius analysis of affected modules (default ON).
+   *   - `dependencyView` — opt-in plain-text list of files depending on the
+   *                        changed files, inferred by the LLM from import lines
+   *                        in the diff (no static analysis). Default OFF.
+   *
+   * Optional for back-compat — absent means walkthrough=true, changeImpact=true,
+   * dependencyView=false (the same as the explicit default object).
+   */
+  readonly summary?: {
+    readonly walkthrough: boolean;
+    readonly changeImpact: boolean;
+    readonly dependencyView: boolean;
+  };
+  /**
    * External static-analysis tool findings to merge with the AI review (#160).
    * Each entry carries the SARIF file content (as a string) already read by
    * the entry point (action / cli). The runner normalises the SARIF, assigns

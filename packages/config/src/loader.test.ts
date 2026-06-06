@@ -892,3 +892,45 @@ describe('loadConfigFromYaml — cost.budget_alert_usd (#140)', () => {
     expect(cfg.cost.hard_stop).toBe(true);
   });
 });
+
+describe('loadConfigFromYaml — summary (#134)', () => {
+  it('defaults summary to walkthrough=true, change_impact=true, dependency_view=false', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.summary.walkthrough).toBe(true);
+    expect(cfg.summary.change_impact).toBe(true);
+    expect(cfg.summary.dependency_view).toBe(false);
+  });
+
+  it('parses summary.walkthrough: false', () => {
+    const cfg = loadConfigFromYaml('summary:\n  walkthrough: false\n');
+    expect(cfg.summary.walkthrough).toBe(false);
+    // other defaults unchanged
+    expect(cfg.summary.change_impact).toBe(true);
+    expect(cfg.summary.dependency_view).toBe(false);
+  });
+
+  it('parses summary.change_impact: false', () => {
+    const cfg = loadConfigFromYaml('summary:\n  change_impact: false\n');
+    expect(cfg.summary.change_impact).toBe(false);
+  });
+
+  it('parses summary.dependency_view: true (opt-in)', () => {
+    const cfg = loadConfigFromYaml('summary:\n  dependency_view: true\n');
+    expect(cfg.summary.dependency_view).toBe(true);
+  });
+
+  it('parses all summary toggles together', () => {
+    const yaml =
+      'summary:\n  walkthrough: false\n  change_impact: false\n  dependency_view: true\n';
+    const cfg = loadConfigFromYaml(yaml);
+    expect(cfg.summary.walkthrough).toBe(false);
+    expect(cfg.summary.change_impact).toBe(false);
+    expect(cfg.summary.dependency_view).toBe(true);
+  });
+
+  it('rejects extra keys in summary block (strict)', () => {
+    expect(() =>
+      loadConfigFromYaml('summary:\n  walkthrough: true\n  unknown_key: nope\n'),
+    ).toThrow(ConfigError);
+  });
+});
