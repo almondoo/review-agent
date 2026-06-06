@@ -26,6 +26,16 @@ vi.mock('../api/client.js', () => ({
     ],
     isLoading: false,
     error: null,
+    refetch: vi.fn(),
+  }),
+  useIntegrations: () => ({
+    data: {
+      github: { configured: true, appId: 'app-1', appSlug: 'app', installationCount: 1 },
+      codecommit: { configured: false, region: null },
+      llm: { configured: false, provider: null, model: null },
+    },
+    isLoading: false,
+    error: null,
   }),
   usePatchRepo: () => ({ mutate: mockPatchMutate, isPending: false }),
   useDeleteRepo: () => ({ mutate: mockDeleteMutate, isPending: false }),

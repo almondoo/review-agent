@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useCostMetrics } from '../api/client.js';
 import type { MetricsSince, PeriodCostBucket, RepoCostSnapshot } from '../api/types.js';
+import { ErrorState } from '../components/error-state.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
 import { useAuth } from '../contexts/auth-context.js';
@@ -461,7 +462,7 @@ export function CostAnalyticsPage() {
   const numericInstallationId =
     selectedInstallationId !== null ? Number(selectedInstallationId) : null;
 
-  const { data, isLoading, error } = useCostMetrics(numericInstallationId, since, cursor);
+  const { data, isLoading, error, refetch } = useCostMetrics(numericInstallationId, since, cursor);
 
   // When a new page of data arrives, accumulate per-repo rows.
   // Reset when since or installation changes (cursor resets to undefined on those changes).
@@ -582,9 +583,13 @@ export function CostAnalyticsPage() {
       {/* Error */}
       {error && !isLoading && (
         <StaggerItem>
-          <div className="label-mono" style={{ color: 'var(--rust)', padding: '2rem 0' }}>
-            {t('pages.costAnalytics.loadingError')}
-          </div>
+          <ErrorState
+            message={t('pages.costAnalytics.loadingError')}
+            onRetry={() => {
+              void refetch();
+            }}
+            retryLabel={t('common.retry')}
+          />
         </StaggerItem>
       )}
 

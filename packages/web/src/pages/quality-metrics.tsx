@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useQualityMetrics } from '../api/client.js';
 import type { MetricsSince, RepoQualitySnapshot } from '../api/types.js';
+import { ErrorState } from '../components/error-state.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
 import { useAuth } from '../contexts/auth-context.js';
@@ -409,7 +410,7 @@ export function QualityMetricsPage() {
   const numericInstallationId =
     selectedInstallationId !== null ? Number(selectedInstallationId) : null;
 
-  const { data, isLoading, error } = useQualityMetrics(numericInstallationId, since);
+  const { data, isLoading, error, refetch } = useQualityMetrics(numericInstallationId, since);
 
   const na = t('pages.qualityMetrics.naValue');
 
@@ -522,9 +523,13 @@ export function QualityMetricsPage() {
       {/* Error */}
       {error && !isLoading && (
         <StaggerItem>
-          <div className="label-mono" style={{ color: 'var(--rust)', padding: '2rem 0' }}>
-            {t('pages.qualityMetrics.loadingError')}
-          </div>
+          <ErrorState
+            message={t('pages.qualityMetrics.loadingError')}
+            onRetry={() => {
+              void refetch();
+            }}
+            retryLabel={t('common.retry')}
+          />
         </StaggerItem>
       )}
 

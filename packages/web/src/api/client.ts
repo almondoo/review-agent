@@ -191,7 +191,7 @@ async function deleteRepo(id: string): Promise<void> {
 }
 
 export function useRepos() {
-  return useQuery({ queryKey: ['repos'], queryFn: fetchRepos });
+  return useQuery({ queryKey: ['repos'], queryFn: fetchRepos, retry: 1, staleTime: 30_000 });
 }
 
 export function useCreateRepo() {

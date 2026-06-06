@@ -860,9 +860,27 @@ develop に landed（本セッションで自律実装）。統合検証フル g
 - **large-PR**: 最優先ファイル要約 + 明示的 truncation note（既存 coverage 機構と整合、サイレント打ち切りなし）。
 - 配線: action / cli(review, dry-run)。docs: `docs/configuration/review-output.md`。
 
+### [A17] dashboard UX gaps — #141 landed (develop, 2026-06-06)
+
+dashboard の UX gap を解消（disconnected /repos stuck / 一貫した loading-empty-error / connect-edit 導線 /
+filter 永続化・検索・pagination）。web-only。develop に landed（本セッションで自律実装）。統合検証フル green。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#141](https://github.com/almondoo/review-agent/issues/141) | dashboard UX gaps | ✅ landed (develop) |
+
+- 共通 `ErrorState`(+retry) / `EmptyState`(+CTA) を新設し全 major ビューに適用。
+- **/repos**: fetch error→ErrorState+retry、GitHub 未接続(`installationCount===0`)→Connect GitHub CTA、接続済み空→
+  Add repo CTA（=disconnected stuck の解消）。name 検索 + status filter + client pagination、状態を URL query 永続化。
+  `useRepos` に `retry:1`+`staleTime`。
+- **/history**: error→retry、フィルタを URL query 永続化（cursor pagination 維持、`since` を date-range として維持）。
+- **/integrations**: error→retry、connect/manage 導線（App 未設定時の案内含む）、BYOK manage リンク。
+- overview / repo-detail / byok-keys / metrics / cost: `ErrorState`+retry に統一。byok-keys は installationId を
+  memberships から自動取得（複数はセレクタ、legacy は手動入力維持）。
+- i18n(ja/en) 追加。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
-#141 dashboard UX gaps /
 #162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック

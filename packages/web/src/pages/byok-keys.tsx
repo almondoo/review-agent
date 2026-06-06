@@ -4,6 +4,7 @@ import { useDeleteLlmKey, useLlmKeys, useRotateLlmKey, useUpsertLlmKey } from '.
 import type { BYOKProvider } from '../api/types.js';
 import { BYOK_PROVIDERS } from '../api/types.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
+import { ErrorState } from '../components/error-state.js';
 import { Hairline } from '../components/hairline.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
@@ -72,14 +73,33 @@ const actionBtnStyle: React.CSSProperties = {
 export function ByokKeysPage() {
   const { t } = useTranslation();
   const { messages, toast, dismiss } = useToast();
-  const { maxRole, legacy } = useAuth();
+  const { maxRole, legacy, memberships } = useAuth();
   // BYOK key management is admin-only.
   const canManageKeys = legacy || maxRole === 'admin';
 
-  // Installation ID input state
+  // Derive installation IDs from non-legacy memberships only.
+  // Legacy mode keeps the manual-input flow (no real installation concept).
+  const membershipInstallationIds: string[] = legacy
+    ? []
+    : memberships.map((m) => m.installationId);
+
+  // Auto-select first installation ID if any memberships are available.
+  const autoInstallationId =
+    membershipInstallationIds.length > 0 ? Number(membershipInstallationIds[0]) : null;
+
+  // Selected installation from the selector (for multiple memberships).
+  const [selectedInstallationId, setSelectedInstallationId] = useState<number | null>(
+    autoInstallationId,
+  );
+
+  // Installation ID manual input state — shown in legacy mode or when no memberships.
   const [installationIdInput, setInstallationIdInput] = useState('');
   const [installationIdError, setInstallationIdError] = useState<string | null>(null);
-  const [resolvedInstallationId, setResolvedInstallationId] = useState<number | null>(null);
+  const [manualInstallationId, setManualInstallationId] = useState<number | null>(null);
+
+  // Effective resolved installation ID: from selector (non-legacy) or manual input (legacy/no-membership).
+  const resolvedInstallationId =
+    membershipInstallationIds.length > 0 ? selectedInstallationId : manualInstallationId;
 
   // Add/replace form state
   const [provider, setProvider] = useState<BYOKProvider>(PRISTINE_PROVIDER);
@@ -110,7 +130,7 @@ export function ByokKeysPage() {
     cancel: cancelLeave,
   } = useUnsavedChangesPrompt(isDirty);
 
-  function resolveInstallationId() {
+  function resolveManualInstallationId() {
     setInstallationIdError(null);
     const trimmed = installationIdInput.trim();
     if (!trimmed) {
@@ -122,13 +142,13 @@ export function ByokKeysPage() {
       setInstallationIdError(t('pages.byokKeys.validationInstallationIdInvalid'));
       return;
     }
-    setResolvedInstallationId(n);
+    setManualInstallationId(n);
   }
 
   function handleInstallationIdKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      resolveInstallationId();
+      resolveManualInstallationId();
     }
   }
 
@@ -242,69 +262,95 @@ export function ByokKeysPage() {
           />
         </StaggerItem>
 
-        {/* Installation ID lookup */}
-        <StaggerItem>
-          <div style={{ maxWidth: '420px', marginBottom: '2rem' }}>
-            <label htmlFor={installationIdInputId} style={labelStyle}>
-              {t('pages.byokKeys.labelInstallationId')}
-            </label>
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <input
-                  id={installationIdInputId}
-                  type="text"
-                  inputMode="numeric"
-                  value={installationIdInput}
-                  onChange={(e) => {
-                    setInstallationIdInput(e.target.value);
-                    setInstallationIdError(null);
-                  }}
-                  onKeyDown={handleInstallationIdKeyDown}
-                  placeholder={t('pages.byokKeys.placeholderInstallationId')}
-                  autoComplete="off"
-                  style={inputStyle}
-                  aria-describedby={installationIdError ? installationIdErrorId : undefined}
-                  aria-invalid={installationIdError ? 'true' : undefined}
-                />
-                {installationIdError && (
-                  <p
-                    id={installationIdErrorId}
-                    role="alert"
-                    style={{
-                      marginTop: '0.375rem',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '0.625rem',
-                      color: 'var(--rust)',
-                    }}
-                  >
-                    {installationIdError}
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={resolveInstallationId}
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '0.6875rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  color: 'var(--paper)',
-                  backgroundColor: 'var(--ink)',
-                  border: 'none',
-                  padding: '0.625rem 1rem',
-                  borderRadius: 'var(--radius)',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  transition: 'background-color var(--transition-fast)',
-                }}
+        {/* Installation selector — shown only when multiple memberships */}
+        {membershipInstallationIds.length > 1 && (
+          <StaggerItem>
+            <div style={{ maxWidth: '320px', marginBottom: '1.5rem' }}>
+              <label htmlFor={installationIdInputId} style={labelStyle}>
+                {t('pages.byokKeys.selectInstallationLabel')}
+              </label>
+              <select
+                id={installationIdInputId}
+                value={selectedInstallationId ?? ''}
+                onChange={(e) => setSelectedInstallationId(Number(e.target.value))}
+                style={inputStyle}
+                aria-label={t('pages.byokKeys.selectInstallationLabel')}
               >
-                {t('common.save')}
-              </button>
+                {membershipInstallationIds.map((id) => (
+                  <option key={id} value={id}>
+                    {t('pages.byokKeys.autoInstallationId', { id })}
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
-        </StaggerItem>
+          </StaggerItem>
+        )}
+
+        {/* Manual installation ID lookup — only when no memberships (non-legacy, no membership) */}
+        {membershipInstallationIds.length === 0 && (
+          <StaggerItem>
+            <div style={{ maxWidth: '420px', marginBottom: '2rem' }}>
+              <label htmlFor={installationIdInputId} style={labelStyle}>
+                {t('pages.byokKeys.labelInstallationId')}
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <input
+                    id={installationIdInputId}
+                    type="text"
+                    inputMode="numeric"
+                    value={installationIdInput}
+                    onChange={(e) => {
+                      setInstallationIdInput(e.target.value);
+                      setInstallationIdError(null);
+                    }}
+                    onKeyDown={handleInstallationIdKeyDown}
+                    placeholder={t('pages.byokKeys.placeholderInstallationId')}
+                    autoComplete="off"
+                    style={inputStyle}
+                    aria-describedby={installationIdError ? installationIdErrorId : undefined}
+                    aria-invalid={installationIdError ? 'true' : undefined}
+                  />
+                  {installationIdError && (
+                    <p
+                      id={installationIdErrorId}
+                      role="alert"
+                      style={{
+                        marginTop: '0.375rem',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '0.625rem',
+                        color: 'var(--rust)',
+                      }}
+                    >
+                      {installationIdError}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={resolveManualInstallationId}
+                  style={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '0.6875rem',
+                    fontWeight: 700,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--paper)',
+                    backgroundColor: 'var(--ink)',
+                    border: 'none',
+                    padding: '0.625rem 1rem',
+                    borderRadius: 'var(--radius)',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    transition: 'background-color var(--transition-fast)',
+                  }}
+                >
+                  {t('common.save')}
+                </button>
+              </div>
+            </div>
+          </StaggerItem>
+        )}
 
         {/* Key list */}
         {resolvedInstallationId === null && (
@@ -325,9 +371,7 @@ export function ByokKeysPage() {
 
         {resolvedInstallationId !== null && loadError && (
           <StaggerItem>
-            <p className="label-mono" style={{ color: 'var(--rust)' }}>
-              {t('pages.byokKeys.loadingError')}
-            </p>
+            <ErrorState message={t('pages.byokKeys.loadingError')} retryLabel={t('common.retry')} />
           </StaggerItem>
         )}
 
