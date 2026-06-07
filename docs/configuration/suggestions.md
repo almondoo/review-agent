@@ -30,10 +30,12 @@ therefore validates each anchor before posting:
 **Suppression is fail-closed**: when no diff is available (e.g. the reviewer
 payload was built without diff data), all suggestions are suppressed.
 
-**Multi-line range (`start_line`) is out of scope for this release.**  The
-current model supports a single anchor line; the suggestion text itself may span
-multiple lines (GitHub replaces the single anchor line with the entire
-multi-line suggestion block). Follow-up issue to add `start_line` support.
+**Multi-line range (`start_line`) is supported (#165).**  When a finding
+supplies a `startLine` that is strictly less than `line`, the adapter emits a
+GitHub range suggestion covering `startLine`..`line` inclusive — but only when
+every line in that range lies within a single diff hunk. If the range crosses a
+hunk boundary (or any line is outside the diff context), the suggestion is
+suppressed to a plain comment body.
 
 ---
 
@@ -97,14 +99,8 @@ on the tag severity), matching the existing behavior for `body` and `summary`.
 
 ## Out of scope
 
-The following are **not** implemented in this release and are tracked as
-separate future issues:
+The following are **not** implemented and are tracked as separate future issues:
 
-- **Multi-line range (`start_line`)**: GitHub supports replacing a range of
-  lines with a suggestion by setting `start_line < line`. This adapter uses a
-  single-anchor model only. The suggestion text may span multiple lines
-  (GitHub replaces the anchor line with the full text), but `start_line` is not
-  set.
 - **Fix-commit (auto-push)**: automatically committing and pushing applied
   suggestions is outside scope. The agent's mission (spec §1.2) is read-only on
   source files. Committable suggestions give the human reviewer a one-click
