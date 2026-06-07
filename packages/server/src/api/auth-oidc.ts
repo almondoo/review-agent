@@ -288,7 +288,7 @@ export function createOidcRouter(deps: OidcRouterDeps): Hono {
     let principal: Awaited<ReturnType<typeof upsertOidcPrincipal>>;
     try {
       principal = await upsertOidcPrincipal(deps.db, {
-        provider: 'oidc',
+        provider: oidcConfig.issuer,
         externalId: claims.sub,
         username: preferredUsername,
         id: (deps.generateId ?? randomUUID)(),
