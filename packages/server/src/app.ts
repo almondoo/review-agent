@@ -1,5 +1,5 @@
 import type { KmsClient, QueueClient } from '@review-agent/core';
-import type { AuditAppender, DbClient } from '@review-agent/db';
+import { type AuditAppender, createAuditAppender, type DbClient } from '@review-agent/db';
 import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
@@ -104,6 +104,19 @@ export type AppDeps = {
   readonly handleConversation?: (
     input: ConversationHandlerInput,
   ) => Promise<ConversationReplyOutcome>;
+  /**
+   * Pre-resolved OIDC configuration (issue #137 Phase B).
+   *
+   * When provided, overrides env-based resolution. Pass the result of
+   * `resolveOidcConfig(process.env, { kmsClient, kmsKeyId })` when the
+   * KMS decryption path is needed (async, must be called before createApp).
+   *
+   * When absent, createApp resolves OIDC config from env vars synchronously
+   * (non-KMS path only — clientSecret read from REVIEW_AGENT_OIDC_CLIENT_SECRET).
+   *
+   * null means OIDC is explicitly disabled; undefined means "resolve from env".
+   */
+  readonly oidcConfig?: import('./auth/oidc.js').OidcConfig | null;
   /**
    * #149 self-reply guard: returns the bot's own GitHub login
    * (e.g. `review-agent[bot]`). When provided, the webhook handler checks the
@@ -257,6 +270,87 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
   // BYOK KMS key ID: caller may supply via deps.api.kmsKeyId, otherwise fall back to env.
   const kmsKeyId = deps.api?.kmsKeyId ?? process.env.REVIEW_AGENT_BYOK_KMS_KEY_ID;
 
+  // -------------------------------------------------------------------------
+  // AUTH_MODE / SESSION_SECRET / SESSION_TTL_SECONDS resolution (issue #161).
+  //
+  // Caller (deps.api.*) wins; env fallback applies when absent.
+  //
+  // Fail-closed: when AUTH_MODE is 'session' or 'both', SESSION_SECRET is
+  // required and must be at least 32 characters. Startup throws with a clear
+  // message if this is violated so the operator cannot accidentally ship an
+  // insecure deployment.
+  // -------------------------------------------------------------------------
+  const resolvedAuthMode = (() => {
+    const raw = deps.api?.authMode ?? process.env.REVIEW_AGENT_AUTH_MODE;
+    if (raw === undefined) return 'legacy' as const;
+    if (raw === 'legacy' || raw === 'session' || raw === 'both') return raw;
+    throw new Error(
+      `[review-agent] Invalid REVIEW_AGENT_AUTH_MODE value: "${raw}". ` +
+        'Allowed values: legacy | session | both',
+    );
+  })();
+
+  const resolvedSessionSecret = deps.api?.sessionSecret ?? process.env.REVIEW_AGENT_SESSION_SECRET;
+
+  if (resolvedAuthMode === 'session' || resolvedAuthMode === 'both') {
+    if (resolvedSessionSecret === undefined || resolvedSessionSecret.length < 32) {
+      throw new Error(
+        '[review-agent] REVIEW_AGENT_SESSION_SECRET must be set and at least 32 characters ' +
+          `when REVIEW_AGENT_AUTH_MODE is "${resolvedAuthMode}". ` +
+          'Set a strong random secret (e.g. openssl rand -hex 32).',
+      );
+    }
+  }
+
+  const resolvedSessionTtlSeconds = (() => {
+    const raw =
+      deps.api?.sessionTtlSeconds !== undefined
+        ? String(deps.api.sessionTtlSeconds)
+        : process.env.REVIEW_AGENT_SESSION_TTL_SECONDS;
+    if (raw === undefined) return 43200; // 12h default
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(
+        `[review-agent] REVIEW_AGENT_SESSION_TTL_SECONDS must be a positive integer (got "${raw}").`,
+      );
+    }
+    return n;
+  })();
+
+  // -------------------------------------------------------------------------
+  // OIDC config resolution (issue #137 Phase B).
+  //
+  // Caller may supply a pre-resolved OidcConfig (e.g. when KMS async decryption
+  // was performed before createApp is called). When absent, we resolve from
+  // env vars synchronously (non-KMS path: plaintext REVIEW_AGENT_OIDC_CLIENT_SECRET).
+  //
+  // null = OIDC explicitly disabled.
+  // -------------------------------------------------------------------------
+  const resolvedOidcConfig: import('./auth/oidc.js').OidcConfig | null = (() => {
+    if (deps.oidcConfig !== undefined) {
+      // Pre-resolved by caller (KMS path or explicit override in tests).
+      return deps.oidcConfig;
+    }
+    // Synchronous resolution — no KMS. Any encrypted secret requires the
+    // caller to pre-resolve with resolveOidcConfig() before calling createApp.
+    const issuer = process.env.REVIEW_AGENT_OIDC_ISSUER;
+    const clientId = process.env.REVIEW_AGENT_OIDC_CLIENT_ID;
+    const clientSecret = process.env.REVIEW_AGENT_OIDC_CLIENT_SECRET;
+    const redirectUri = process.env.REVIEW_AGENT_OIDC_REDIRECT_URI ?? '';
+    if (!issuer || !clientId || !clientSecret) return null;
+    if (resolvedAuthMode === 'legacy') return null;
+    return { issuer, clientId, clientSecret, redirectUri };
+  })();
+
+  // Resolve the audit appender once at app-creation time so the same instance
+  // is shared across /api routes and /github/setup. The appender now sets the
+  // tenant GUC internally so no outer withTenant wrapper is required.
+  const resolvedAppAuditAppender: AuditAppender =
+    deps.auditAppender ??
+    (deps.now !== undefined
+      ? createAuditAppender(deps.db, deps.now)
+      : createAuditAppender(deps.db));
+
   // GitHub App onboarding — mounted BEFORE /api and OUTSIDE the bearer-token guard.
   // spec §8.2.2: /github/* uses CSRF state cookie as the sole auth mechanism.
   const githubAppSlug = deps.githubAppSlug ?? process.env.GITHUB_APP_SLUG;
@@ -268,6 +362,7 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       ...(githubAppSlug !== undefined ? { githubAppSlug } : {}),
       ...(dashboardOrigin !== undefined ? { dashboardOrigin } : {}),
       ...(deps.github !== undefined ? { github: deps.github } : {}),
+      auditAppender: resolvedAppAuditAppender,
     }),
   );
 
@@ -292,8 +387,15 @@ export function createApp(deps: AppDeps): Hono<VerifyEnv & VerifySnsEnv> {
       // BYOK / KMS: thread kmsClient from AppDeps into ApiDeps so the
       // /integrations/llm-keys routes can wrap/unwrap data keys per request.
       ...(deps.kmsClient !== undefined ? { kmsClient: deps.kmsClient } : {}),
-      ...(deps.auditAppender !== undefined ? { auditAppender: deps.auditAppender } : {}),
+      auditAppender: resolvedAppAuditAppender,
       ...(kmsKeyId !== undefined && kmsKeyId.length > 0 ? { kmsKeyId } : {}),
+      // Auth mode and session config (issue #161).
+      authMode: resolvedAuthMode,
+      ...(resolvedSessionSecret !== undefined ? { sessionSecret: resolvedSessionSecret } : {}),
+      sessionTtlSeconds: resolvedSessionTtlSeconds,
+      // OIDC config (issue #137 Phase B).
+      oidcConfig: resolvedOidcConfig,
+      ...(dashboardOrigin !== undefined ? { dashboardOrigin } : {}),
     }),
   );
 

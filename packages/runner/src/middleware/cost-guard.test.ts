@@ -177,4 +177,59 @@ describe('createCostGuard', () => {
       status: 'cost_exceeded',
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // budget_alert (issue #140 AC#2)
+  // ---------------------------------------------------------------------------
+  it('emits budget_alert threshold event when cumulative cost exceeds budgetAlertUsd', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const events: Array<{ threshold: string; cumulativeUsd: number; capUsd: number }> = [];
+    const mw = createCostGuard({
+      state,
+      budgetAlertUsd: 0.05,
+      onThresholdCrossed: (e) => events.push(e),
+    });
+    // okResult.costUsd = 0.1 which exceeds budgetAlertUsd=0.05
+    const result = await mw(makeCtx(0.01), async () => okResult);
+    expect(result).toBe(okResult);
+    const alertEvent = events.find((e) => e.threshold === 'budget_alert');
+    expect(alertEvent).toBeDefined();
+    expect(alertEvent?.capUsd).toBe(0.05);
+    expect(alertEvent?.cumulativeUsd).toBeGreaterThan(0.05);
+  });
+
+  it('does NOT abort the review when budget_alert fires', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const mw = createCostGuard({
+      state,
+      budgetAlertUsd: 0.05,
+    });
+    // Should complete successfully even though cost exceeds budgetAlertUsd
+    await expect(mw(makeCtx(0.01), async () => okResult)).resolves.toBe(okResult);
+  });
+
+  it('does NOT emit budget_alert when cumulative cost stays below threshold', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const events: Array<{ threshold: string }> = [];
+    const mw = createCostGuard({
+      state,
+      budgetAlertUsd: 10.0,
+      onThresholdCrossed: (e) => events.push(e),
+    });
+    await mw(makeCtx(0.01), async () => okResult);
+    const alertEvents = events.filter((e) => e.threshold === 'budget_alert');
+    expect(alertEvents).toHaveLength(0);
+  });
+
+  it('does NOT emit budget_alert when budgetAlertUsd is not set', async () => {
+    const state: CostState = { totalCostUsd: 0 };
+    const events: Array<{ threshold: string }> = [];
+    const mw = createCostGuard({
+      state,
+      onThresholdCrossed: (e) => events.push(e),
+    });
+    await mw(makeCtx(0.01), async () => okResult);
+    const alertEvents = events.filter((e) => e.threshold === 'budget_alert');
+    expect(alertEvents).toHaveLength(0);
+  });
 });

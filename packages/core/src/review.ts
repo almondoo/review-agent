@@ -68,6 +68,27 @@ export type InlineComment = {
    */
   readonly ruleId?: string;
   readonly suggestion?: string;
+  /**
+   * First line of a multi-line suggestion range (#165). When set, the
+   * suggestion spans `startLine`..`line` (inclusive). `line` remains
+   * the anchor (the end line). When absent the comment is single-line
+   * (back-compat with #152).
+   *
+   * GitHub requires `start_line < line`; the schema enforces this
+   * (`startLine` must be a positive integer strictly less than `line`).
+   * The GitHub adapter validates that every line in the range is within
+   * the same diff hunk before emitting `start_line`; if any line falls
+   * outside the hunk the suggestion is suppressed to a plain comment.
+   */
+  readonly startLine?: number;
+  /**
+   * Side for the start anchor of a multi-line range. Defaults to the
+   * same side as `side` (RIGHT) when absent. Only meaningful when
+   * `startLine` is set. GitHub only supports RIGHT-side suggestions,
+   * so the adapter suppresses the suggestion block if either side is
+   * LEFT.
+   */
+  readonly startSide?: Side;
 };
 
 export type ReviewState = {
@@ -173,6 +194,21 @@ export type ReviewPayload = {
    * comment API.
    */
   readonly event?: ReviewEvent;
+  /**
+   * The diff used for this review. Optional for back-compat.
+   *
+   * When present, the GitHub adapter uses `DiffFile.patch` per file to
+   * validate whether a `suggestion` anchor line is within a diff hunk
+   * (committable-suggestion validity gate, #152). Absent means no diff
+   * is available and all suggestions are suppressed to plain comment
+   * bodies (fail-closed — never post a suggestion GitHub would reject).
+   */
+  readonly diff?: {
+    readonly files: ReadonlyArray<{
+      readonly path: string;
+      readonly patch: string | null;
+    }>;
+  };
 };
 
 /**

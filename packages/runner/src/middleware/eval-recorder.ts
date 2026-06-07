@@ -76,6 +76,9 @@ export function buildReviewEvalEvent(
     confidenceDist[conf] = (confidenceDist[conf] ?? 0) + 1;
   }
   const abortReason: ReviewAbortReason | null = result.aborted?.reason ?? null;
+  // Coverage: carry filesTotal / filesReviewed when the runner supplied them.
+  const filesTotal = result.filesTotal ?? null;
+  const filesReviewed = result.filesReviewed ?? null;
   return {
     installationId: ctx.installationId,
     jobId: ctx.jobId,
@@ -95,6 +98,8 @@ export function buildReviewEvalEvent(
     tokensInput: result.tokensUsed.input,
     tokensOutput: result.tokensUsed.output,
     abortReason,
+    filesTotal,
+    filesReviewed,
   };
 }
 

@@ -1,5 +1,49 @@
 export type Platform = 'github' | 'codecommit';
 
+// --- Auth config ---
+
+export type AuthConfig = {
+  oidcEnabled: boolean;
+};
+
+// --- Auth types ---
+
+export type Role = 'viewer' | 'editor' | 'admin';
+
+export type Membership = {
+  installationId: string;
+  role: Role;
+};
+
+export type AuthPrincipal = {
+  id: string;
+  username: string;
+};
+
+export type AuthMeResponseSession = {
+  authenticated: true;
+  legacy: false;
+  principal: AuthPrincipal;
+  memberships: Membership[];
+};
+
+export type AuthMeResponseLegacy = {
+  authenticated: true;
+  legacy: true;
+};
+
+export type AuthMeResponse = AuthMeResponseSession | AuthMeResponseLegacy;
+
+export type LoginBody = {
+  username: string;
+  password: string;
+};
+
+export type LoginResponse = {
+  token: string;
+  expiresIn: number;
+};
+
 export type Outcome = 'approved' | 'changes_requested' | 'commented' | 'failed';
 
 export type RepoSummary = {
@@ -118,6 +162,71 @@ export type ReviewEventDetail = ReviewEvent & {
   provider: { name: string; model: string };
   systemPromptAtReview: string | null;
   externalUrl: string | null;
+};
+
+// --- Quality Metrics ---
+
+export type MetricsSince = '24h' | '7d' | '30d';
+
+export type RepoQualitySnapshot = {
+  repo: string;
+  reviewCount: number;
+  acceptanceRate: number | null;
+  falsePositiveRate: number | null;
+  coverageRate: number | null;
+  latencyP50Ms: number | null;
+  latencyP95Ms: number | null;
+};
+
+export type QualityMetrics = {
+  period: MetricsSince;
+  overall: {
+    reviewCount: number;
+    acceptanceRate: number | null;
+    falsePositiveRate: number | null;
+    coverageRate: number | null;
+    latencyP50Ms: number | null;
+    latencyP95Ms: number | null;
+  };
+  perRepo: RepoQualitySnapshot[];
+};
+
+// --- Cost Analytics ---
+
+export type ModelCostSnapshot = {
+  provider: string;
+  model: string;
+  costUsd: number;
+  callCount: number;
+};
+
+export type RepoCostSnapshot = {
+  repo: string;
+  costUsd: number;
+};
+
+export type PeriodCostBucket = {
+  bucket: string;
+  costUsd: number;
+};
+
+export type CostMetricsOverall = {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+  callCount: number;
+  budgetAlertUsd: number | null;
+};
+
+export type CostMetrics = {
+  period: MetricsSince;
+  overall: CostMetricsOverall;
+  perModel: ModelCostSnapshot[];
+  perRepo: RepoCostSnapshot[];
+  nextCursor: string | null;
+  perPeriod: PeriodCostBucket[];
 };
 
 // --- GitHub App onboarding ---

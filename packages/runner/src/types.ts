@@ -262,6 +262,77 @@ export type ReviewJob = {
    * env var when the YAML key is absent). Bounds: 1–50.
    */
   readonly maxSteps?: number;
+  /**
+   * Committable-suggestion gating (#152). Controls whether and for which
+   * categories the runner forwards `suggestion` fields to the platform adapter.
+   *
+   * - `enabled: false` — all `suggestion` fields are stripped from every
+   *   comment before posting; only the comment body reaches the VCS.
+   * - `categories` — only comments whose `category` is in this list keep
+   *   their suggestion. Comments in other categories have their suggestion
+   *   field removed (body is preserved). Comments with no `category` field
+   *   always keep their suggestion.
+   *
+   * Optional for back-compat — absent means no suggestion gating is applied
+   * (suggestions flow to the adapter unchanged, subject only to the adapter's
+   * hunk-validity check for GitHub).
+   */
+  readonly suggestions?: {
+    readonly enabled: boolean;
+    readonly categories: ReadonlyArray<(typeof CATEGORIES)[number]>;
+  };
+  /**
+   * Large-PR / monorepo strategy (#158). Controls chunked multi-pass review
+   * for PRs that exceed `maxFiles` / `maxDiffLines` caps.
+   *
+   * - `enabled: true` (default) — split the diff into chunks and review each
+   *   chunk in sequence, up to `maxChunks`.
+   * - `enabled: false` — preserve legacy skip behaviour (cap exceeded = no LLM).
+   * - `maxChunks` — maximum number of chunks to review. Files that would fall
+   *   in chunk N+1 are recorded in ExclusionReport with reason='max_chunks_exceeded'.
+   * - `prioritization` — ordered criteria for ranking files before chunking.
+   *
+   * Optional for back-compat — absent is equivalent to `{ enabled: true, maxChunks: 5,
+   * prioritization: ['path_instructions', 'diff_size'] }`.
+   */
+  readonly largePr?: {
+    readonly enabled: boolean;
+    readonly maxChunks: number;
+    readonly prioritization: ReadonlyArray<'path_instructions' | 'diff_size' | 'alphabetical'>;
+  };
+  /**
+   * PR summary section configuration (#134). Controls which Markdown sections
+   * the LLM includes in the `summary` field:
+   *
+   *   - `walkthrough`    — per-file / per-area narrative (default ON).
+   *   - `changeImpact`   — blast-radius analysis of affected modules (default ON).
+   *   - `dependencyView` — opt-in plain-text list of files depending on the
+   *                        changed files, inferred by the LLM from import lines
+   *                        in the diff (no static analysis). Default OFF.
+   *
+   * Optional for back-compat — absent means walkthrough=true, changeImpact=true,
+   * dependencyView=false (the same as the explicit default object).
+   */
+  readonly summary?: {
+    readonly walkthrough: boolean;
+    readonly changeImpact: boolean;
+    readonly dependencyView: boolean;
+  };
+  /**
+   * External static-analysis tool findings to merge with the AI review (#160).
+   * Each entry carries the SARIF file content (as a string) already read by
+   * the entry point (action / cli). The runner normalises the SARIF, assigns
+   * fingerprints, applies the same dedup / ruleset / suppression filters as AI
+   * findings, and merges via `mergePolicy`.
+   *
+   * Optional for back-compat — absent (or empty array) keeps the existing
+   * behaviour: only AI findings are posted (zero external injection).
+   */
+  readonly externalTools?: ReadonlyArray<{
+    readonly name: string;
+    readonly mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    readonly sarif: string;
+  }>;
 };
 
 export type FinalizedComment = InlineComment & {
@@ -307,13 +378,23 @@ export type ExcludedFile = {
   readonly path: string;
   /**
    * Human-readable reason for the exclusion. One of:
-   * - `'path_filter'`       — matched a `reviews.path_filters` glob.
-   * - `'max_files_cap'`     — diff exceeded `reviews.max_files`; this
-   *                           file was part of the overflow.
-   * - `'max_diff_lines_cap'`— diff exceeded `reviews.max_diff_lines`;
-   *                           this file was part of the overflow.
+   * - `'path_filter'`         — matched a `reviews.path_filters` glob.
+   * - `'max_files_cap'`       — diff exceeded `reviews.max_files`; this
+   *                             file was part of the overflow.
+   * - `'max_diff_lines_cap'`  — diff exceeded `reviews.max_diff_lines`;
+   *                             this file was part of the overflow.
+   * - `'max_chunks_exceeded'` — large_pr chunk limit reached; file was
+   *                             in a chunk beyond `large_pr.max_chunks`.
+   * - `'budget_exhausted'`    — cost cap (`cost.max_usd_per_pr`) was
+   *                             reached mid-chunk-review; remaining files
+   *                             were not reviewed.
    */
-  readonly reason: 'path_filter' | 'max_files_cap' | 'max_diff_lines_cap';
+  readonly reason:
+    | 'path_filter'
+    | 'max_files_cap'
+    | 'max_diff_lines_cap'
+    | 'max_chunks_exceeded'
+    | 'budget_exhausted';
 };
 
 /**
@@ -323,13 +404,17 @@ export type ExcludedFile = {
  * back-compat — callers that pre-date #145 will not supply this field.
  *
  * The `capsApplied` field names which hard caps fired during this run:
- * - `max_files`      — the post-path-filter file count exceeded `maxFiles`.
- * - `max_diff_lines` — the post-path-filter line count exceeded `maxDiffLines`.
- * Both may be set simultaneously when both thresholds are exceeded.
+ * - `max_files`       — the post-path-filter file count exceeded `maxFiles`.
+ * - `max_diff_lines`  — the post-path-filter line count exceeded `maxDiffLines`.
+ * - `max_chunks`      — large_pr chunk limit was reached.
+ * - `budget_exhausted`— cost cap hit mid-chunk-review.
+ * Multiple caps may be set simultaneously.
  */
 export type ExclusionReport = {
   readonly excludedFiles: ReadonlyArray<ExcludedFile>;
-  readonly capsApplied: ReadonlyArray<'max_files' | 'max_diff_lines'>;
+  readonly capsApplied: ReadonlyArray<
+    'max_files' | 'max_diff_lines' | 'max_chunks' | 'budget_exhausted'
+  >;
 };
 
 export type RunnerResult = {
@@ -392,6 +477,18 @@ export type RunnerResult = {
    */
   readonly exclusionReport?: ExclusionReport;
   /**
+   * Total number of files after path-filter exclusions (i.e. the universe
+   * the runner was asked to review). Used by the eval recorder to persist
+   * coverage metrics. Optional for back-compat — absent means coverage
+   * cannot be computed for this run.
+   */
+  readonly filesTotal?: number;
+  /**
+   * Number of files actually handed to the LLM (filesTotal minus files
+   * dropped by cap exclusions). Optional for back-compat.
+   */
+  readonly filesReviewed?: number;
+  /**
    * Set when the agent loop gracefully aborted (spec §7.3 #4): the
    * LLM produced output that failed the response schema twice — once
    * on the first attempt and again on the retry that injects the
@@ -430,6 +527,13 @@ export type RunReviewDeps = {
    * logger, test spy, etc.).
    */
   readonly onConfigResolution?: (log: ConfigResolutionLog) => void;
+  /**
+   * General-purpose warn/info log sink. Used by the SARIF ingestion path
+   * (#160) to surface skip/parse warnings (e.g. malformed SARIF, results
+   * missing location) without writing to stdout/stderr directly. Optional
+   * for back-compat — absent means SARIF warnings are silently discarded.
+   */
+  readonly logger?: (msg: string) => void;
   readonly fileReader?: (path: string) => Promise<string>;
   readonly fingerprintComment?: (c: {
     readonly path: string;
@@ -509,6 +613,32 @@ export type RunReviewDeps = {
     readonly installationId: bigint;
     readonly repo: string;
   }) => Promise<ReadonlyArray<{ readonly factText: string }>>;
+  /**
+   * #144 Phase B: fired when the cost guard crosses the `budget_alert`
+   * threshold (`cost.budget_alert_usd` in `.review-agent.yml`). The hook
+   * is informational — the review continues. Callers (action, server
+   * job-handler) use this to dispatch a `budget.overrun` notification via
+   * `createNotificationDispatcher`.
+   *
+   * Mirrors `CostThresholdEvent` from `packages/runner/src/middleware/cost-guard.ts`.
+   * Declared inline here (structural typing) so `@review-agent/runner` has no
+   * import dependency on the notification module.
+   */
+  readonly onThresholdCrossed?: (event: {
+    readonly threshold: 'fallback' | 'abort' | 'kill' | 'daily_cap' | 'budget_alert';
+    readonly cumulativeUsd: number;
+    readonly capUsd: number;
+  }) => void;
+  /**
+   * #144 Phase B: soft budget alert threshold in USD, forwarded to
+   * `createCostGuard` as `budgetAlertUsd`. When the cumulative cost for the
+   * job crosses this value, `onThresholdCrossed` is fired with
+   * `threshold: 'budget_alert'`. Informational only — the review continues.
+   *
+   * Mapped from `config.cost.budget_alert_usd` by the action / server caller.
+   * Optional for back-compat — absent means the budget_alert event never fires.
+   */
+  readonly budgetAlertUsd?: number;
 };
 
 export type Middleware = (

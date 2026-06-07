@@ -4,6 +4,8 @@ import i18n from 'i18next';
 import type { ReactElement } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
+import type { AuthContextValue } from '../contexts/auth-context.js';
+import { AuthContext } from '../contexts/auth-context.js';
 
 function makeTestQueryClient() {
   return new QueryClient({
@@ -16,17 +18,37 @@ function makeTestQueryClient() {
   });
 }
 
-type RenderOptions = {
-  route?: string;
+/**
+ * Default auth context for tests: legacy mode (all permissions, no login required).
+ * Tests that need to verify role-gating should pass a custom authContext value.
+ */
+const defaultTestAuthContext: AuthContextValue = {
+  legacy: true,
+  authenticated: true,
+  principal: undefined,
+  memberships: [],
+  hasRole: () => true,
+  maxRole: 'admin',
+  logout: async () => {},
 };
 
-export function renderWithProviders(ui: ReactElement, { route = '/' }: RenderOptions = {}) {
+type RenderOptions = {
+  route?: string;
+  authContext?: AuthContextValue;
+};
+
+export function renderWithProviders(
+  ui: ReactElement,
+  { route = '/', authContext = defaultTestAuthContext }: RenderOptions = {},
+) {
   const queryClient = makeTestQueryClient();
 
   return render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+        <AuthContext.Provider value={authContext}>
+          <MemoryRouter initialEntries={[route]}>{ui}</MemoryRouter>
+        </AuthContext.Provider>
       </QueryClientProvider>
     </I18nextProvider>,
   );
@@ -35,6 +57,7 @@ export function renderWithProviders(ui: ReactElement, { route = '/' }: RenderOpt
 type DataRouterRenderOptions = {
   initialEntries?: string[];
   routes?: Parameters<typeof createMemoryRouter>[0];
+  authContext?: AuthContextValue;
 };
 
 /**
@@ -51,7 +74,10 @@ type DataRouterRenderOptions = {
  */
 export function renderWithDataRouter(
   routes: Parameters<typeof createMemoryRouter>[0],
-  { initialEntries = ['/'] }: Pick<DataRouterRenderOptions, 'initialEntries'> = {},
+  {
+    initialEntries = ['/'],
+    authContext = defaultTestAuthContext,
+  }: Pick<DataRouterRenderOptions, 'initialEntries' | 'authContext'> = {},
 ) {
   const queryClient = makeTestQueryClient();
 
@@ -60,8 +86,12 @@ export function renderWithDataRouter(
   return render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <AuthContext.Provider value={authContext}>
+          <RouterProvider router={router} />
+        </AuthContext.Provider>
       </QueryClientProvider>
     </I18nextProvider>,
   );
 }
+
+export { defaultTestAuthContext };

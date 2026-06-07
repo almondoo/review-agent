@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveSince, reviewsQuerySchema } from '../schemas.js';
+import { costQuerySchema, resolveSince, reviewsQuerySchema } from '../schemas.js';
 
 describe('resolveSince', () => {
   const NOW = new Date('2026-05-01T12:00:00Z');
@@ -84,5 +84,56 @@ describe('reviewsQuerySchema', () => {
   it('accepts ISO datetime string for since', () => {
     const parsed = reviewsQuerySchema.safeParse({ since: '2026-01-01T00:00:00Z' });
     expect(parsed.success).toBe(true);
+  });
+});
+
+describe('costQuerySchema', () => {
+  it('defaults since to 30d and limit to 20 when omitted', () => {
+    const parsed = costQuerySchema.safeParse({});
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.since).toBe('30d');
+    expect(parsed.data.limit).toBe(20);
+    expect(parsed.data.cursor).toBeUndefined();
+  });
+
+  it('accepts all valid since aliases', () => {
+    for (const since of ['24h', '7d', '30d']) {
+      const parsed = costQuerySchema.safeParse({ since });
+      expect(parsed.success).toBe(true);
+    }
+  });
+
+  it('rejects invalid since value', () => {
+    const parsed = costQuerySchema.safeParse({ since: 'yesterday' });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('clamps limit to 200 max', () => {
+    const parsed = costQuerySchema.safeParse({ limit: '500' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.limit).toBe(200);
+  });
+
+  it('defaults to 20 for non-finite limit string', () => {
+    const parsed = costQuerySchema.safeParse({ limit: 'abc' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.limit).toBe(20);
+  });
+
+  it('defaults to 20 for limit below 1', () => {
+    const parsed = costQuerySchema.safeParse({ limit: '0' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.limit).toBe(20);
+  });
+
+  it('passes cursor through', () => {
+    const parsed = costQuerySchema.safeParse({ cursor: 'owner/repo-5' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.cursor).toBe('owner/repo-5');
   });
 });

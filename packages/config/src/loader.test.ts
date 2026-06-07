@@ -365,6 +365,42 @@ describe('loadConfigFromYaml — ruleset block (#148)', () => {
   });
 });
 
+describe('loadConfigFromYaml — suggestions block (#152)', () => {
+  it('defaults suggestions to enabled=true and all categories', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.suggestions.enabled).toBe(true);
+    // All 7 CATEGORIES should be present in the default list.
+    expect(cfg.suggestions.categories).toHaveLength(7);
+    expect(cfg.suggestions.categories).toContain('bug');
+    expect(cfg.suggestions.categories).toContain('security');
+  });
+
+  it('parses suggestions.enabled: false', () => {
+    const cfg = loadConfigFromYaml('suggestions:\n  enabled: false\n');
+    expect(cfg.suggestions.enabled).toBe(false);
+  });
+
+  it('parses suggestions.categories as a restricted list', () => {
+    const cfg = loadConfigFromYaml(
+      'suggestions:\n  enabled: true\n  categories:\n    - security\n    - bug\n',
+    );
+    expect(cfg.suggestions.enabled).toBe(true);
+    expect(cfg.suggestions.categories).toEqual(['security', 'bug']);
+  });
+
+  it('rejects unknown categories in suggestions.categories', () => {
+    expect(() => loadConfigFromYaml('suggestions:\n  categories:\n    - unknown_cat\n')).toThrow(
+      ConfigError,
+    );
+  });
+
+  it('rejects extra keys in suggestions block (strict)', () => {
+    expect(() => loadConfigFromYaml('suggestions:\n  enabled: true\n  extra_key: nope\n')).toThrow(
+      ConfigError,
+    );
+  });
+});
+
 describe('resolveEffectiveConfig', () => {
   describe('precedence: repo > org > defaults', () => {
     it('primarySource is "repo-yaml" when repo YAML is provided', () => {
@@ -721,5 +757,180 @@ describe('mergeWithEnv', () => {
 
   it('returns config unchanged when env has no matching keys', () => {
     expect(mergeWithEnv(base, {})).toEqual(base);
+  });
+});
+
+describe('loadConfigFromYaml — large_pr (#158)', () => {
+  it('applies defaults when large_pr is absent', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.large_pr.enabled).toBe(true);
+    expect(cfg.large_pr.max_chunks).toBe(5);
+    expect(cfg.large_pr.prioritization).toEqual(['path_instructions', 'diff_size']);
+  });
+
+  it('parses explicit large_pr.enabled=false', () => {
+    const cfg = loadConfigFromYaml('large_pr:\n  enabled: false\n');
+    expect(cfg.large_pr.enabled).toBe(false);
+  });
+
+  it('parses explicit large_pr.max_chunks', () => {
+    const cfg = loadConfigFromYaml('large_pr:\n  max_chunks: 10\n');
+    expect(cfg.large_pr.max_chunks).toBe(10);
+  });
+
+  it('parses explicit large_pr.prioritization', () => {
+    const cfg = loadConfigFromYaml(
+      'large_pr:\n  prioritization:\n    - diff_size\n    - alphabetical\n',
+    );
+    expect(cfg.large_pr.prioritization).toEqual(['diff_size', 'alphabetical']);
+  });
+
+  it('rejects unknown keys in large_pr (strict)', () => {
+    expect(() => loadConfigFromYaml('large_pr:\n  unknown_key: true\n')).toThrow(ConfigError);
+  });
+
+  it('rejects invalid prioritization values', () => {
+    expect(() =>
+      loadConfigFromYaml('large_pr:\n  prioritization:\n    - unknown_criterion\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects non-positive max_chunks', () => {
+    expect(() => loadConfigFromYaml('large_pr:\n  max_chunks: 0\n')).toThrow(ConfigError);
+  });
+
+  // external_tools (#160)
+  it('defaults external_tools to empty tools list', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.external_tools.tools).toEqual([]);
+  });
+
+  it('parses external_tools.tools with single tool and default merge_policy', () => {
+    const cfg = loadConfigFromYaml(
+      'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: results/codeql.sarif\n',
+    );
+    expect(cfg.external_tools.tools).toHaveLength(1);
+    expect(cfg.external_tools.tools[0]?.name).toBe('codeql');
+    expect(cfg.external_tools.tools[0]?.sarif_path).toBe('results/codeql.sarif');
+    expect(cfg.external_tools.tools[0]?.merge_policy).toBe('tool_wins');
+  });
+
+  it('parses external_tools.tools with explicit merge_policy values', () => {
+    const yaml = [
+      'external_tools:',
+      '  tools:',
+      '    - name: semgrep',
+      '      sarif_path: semgrep.sarif',
+      '      merge_policy: ai_wins',
+      '    - name: eslint',
+      '      sarif_path: eslint.sarif',
+      '      merge_policy: annotate',
+    ].join('\n');
+    const cfg = loadConfigFromYaml(yaml);
+    expect(cfg.external_tools.tools).toHaveLength(2);
+    expect(cfg.external_tools.tools[0]?.merge_policy).toBe('ai_wins');
+    expect(cfg.external_tools.tools[1]?.merge_policy).toBe('annotate');
+  });
+
+  it('rejects an unknown merge_policy value', () => {
+    expect(() =>
+      loadConfigFromYaml(
+        'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: x.sarif\n      merge_policy: first_wins\n',
+      ),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects an external_tools.tools entry with empty name', () => {
+    expect(() =>
+      loadConfigFromYaml('external_tools:\n  tools:\n    - name: ""\n      sarif_path: x.sarif\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects an external_tools.tools entry with empty sarif_path', () => {
+    expect(() =>
+      loadConfigFromYaml('external_tools:\n  tools:\n    - name: codeql\n      sarif_path: ""\n'),
+    ).toThrow(ConfigError);
+  });
+
+  it('rejects extra keys in an external_tools.tools entry (strict)', () => {
+    expect(() =>
+      loadConfigFromYaml(
+        'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: x.sarif\n      unknown_field: true\n',
+      ),
+    ).toThrow(ConfigError);
+  });
+});
+
+describe('loadConfigFromYaml — cost.budget_alert_usd (#140)', () => {
+  it('is undefined by default (alert disabled)', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.cost.budget_alert_usd).toBeUndefined();
+  });
+
+  it('accepts a positive numeric value', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 50\n');
+    expect(cfg.cost.budget_alert_usd).toBe(50);
+  });
+
+  it('accepts a fractional positive value', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 0.5\n');
+    expect(cfg.cost.budget_alert_usd).toBe(0.5);
+  });
+
+  it('rejects zero (must be positive)', () => {
+    expect(() => loadConfigFromYaml('cost:\n  budget_alert_usd: 0\n')).toThrow(ConfigError);
+  });
+
+  it('rejects negative value', () => {
+    expect(() => loadConfigFromYaml('cost:\n  budget_alert_usd: -10\n')).toThrow(ConfigError);
+  });
+
+  it('does not affect other cost defaults', () => {
+    const cfg = loadConfigFromYaml('cost:\n  budget_alert_usd: 20\n');
+    expect(cfg.cost.max_usd_per_pr).toBe(1.0);
+    expect(cfg.cost.daily_cap_usd).toBe(50.0);
+    expect(cfg.cost.hard_stop).toBe(true);
+  });
+});
+
+describe('loadConfigFromYaml — summary (#134)', () => {
+  it('defaults summary to walkthrough=true, change_impact=true, dependency_view=false', () => {
+    const cfg = loadConfigFromYaml('');
+    expect(cfg.summary.walkthrough).toBe(true);
+    expect(cfg.summary.change_impact).toBe(true);
+    expect(cfg.summary.dependency_view).toBe(false);
+  });
+
+  it('parses summary.walkthrough: false', () => {
+    const cfg = loadConfigFromYaml('summary:\n  walkthrough: false\n');
+    expect(cfg.summary.walkthrough).toBe(false);
+    // other defaults unchanged
+    expect(cfg.summary.change_impact).toBe(true);
+    expect(cfg.summary.dependency_view).toBe(false);
+  });
+
+  it('parses summary.change_impact: false', () => {
+    const cfg = loadConfigFromYaml('summary:\n  change_impact: false\n');
+    expect(cfg.summary.change_impact).toBe(false);
+  });
+
+  it('parses summary.dependency_view: true (opt-in)', () => {
+    const cfg = loadConfigFromYaml('summary:\n  dependency_view: true\n');
+    expect(cfg.summary.dependency_view).toBe(true);
+  });
+
+  it('parses all summary toggles together', () => {
+    const yaml =
+      'summary:\n  walkthrough: false\n  change_impact: false\n  dependency_view: true\n';
+    const cfg = loadConfigFromYaml(yaml);
+    expect(cfg.summary.walkthrough).toBe(false);
+    expect(cfg.summary.change_impact).toBe(false);
+    expect(cfg.summary.dependency_view).toBe(true);
+  });
+
+  it('rejects extra keys in summary block (strict)', () => {
+    expect(() =>
+      loadConfigFromYaml('summary:\n  walkthrough: true\n  unknown_key: nope\n'),
+    ).toThrow(ConfigError);
   });
 });

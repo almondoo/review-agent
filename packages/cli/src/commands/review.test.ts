@@ -47,6 +47,8 @@ function fakeVcs(overrides: Partial<VCS> = {}): VCS {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
+      committableSuggestions: true,
     },
     getPR: async () => fakePR(),
     getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
@@ -615,5 +617,299 @@ describe('runReviewCommand', () => {
       createProvider: () => fakeProvider(),
     });
     expect(io.err.join('')).toContain('env=true');
+  });
+
+  // -------------------------------------------------------------------------
+  // #152: suggestions config and diff propagation
+  // -------------------------------------------------------------------------
+
+  it('forwards config.suggestions into ReviewJob (suggestions.enabled=false propagates to runner)', async () => {
+    const generateReview = vi.fn(async () => ({
+      comments: [],
+      summary: 'ok',
+      tokensUsed: { input: 0, output: 0 },
+      costUsd: 0,
+    }));
+    const provider = fakeProvider();
+    const vcs = fakeVcs({
+      getPR: async () => fakePR(),
+      getDiff: async () => ({ baseSha: 'b1', headSha: 'h1', files: [] }),
+    });
+    const io = recordingIo();
+    // suggestions.enabled: false via YAML — the runner gating must fire
+    // (no suggestion fields survive to postReview). We verify the round-trip
+    // ran without error; gating unit tests live in agent.test.ts.
+    await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: '.review-agent.yml',
+      post: false,
+      env: baseEnv,
+      readFile: async () => 'suggestions:\n  enabled: false\n',
+      createVCS: () => vcs,
+      createProvider: () => ({ ...provider, generateReview }),
+    });
+    expect(generateReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards diff into ReviewPayload.diff when --post is set (#152)', async () => {
+    const patch = '@@ -1,2 +1,2 @@\n context\n+added';
+    const getDiff = vi.fn(async () => ({
+      baseSha: 'b1',
+      headSha: 'h1',
+      files: [
+        {
+          path: 'src/a.ts',
+          patch,
+          previousPath: null,
+          status: 'modified' as const,
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    }));
+    const postReview = vi.fn(async () => undefined);
+    const vcs = fakeVcs({ getDiff, postReview });
+    const io = recordingIo();
+    await runReviewCommand(io, {
+      repo: 'o/r',
+      pr: 1,
+      configPath: 'missing.yml',
+      post: true,
+      env: baseEnv,
+      readFile: async () => {
+        throw new Error('not found');
+      },
+      createVCS: () => vcs,
+      createProvider: () => fakeProvider(),
+    });
+    expect(postReview).toHaveBeenCalledTimes(1);
+    const payload = (postReview as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      diff?: { files: Array<{ path: string; patch: string | null }> };
+    };
+    expect(payload.diff).toBeDefined();
+    expect(payload.diff?.files).toHaveLength(1);
+    expect(payload.diff?.files[0]?.path).toBe('src/a.ts');
+    expect(payload.diff?.files[0]?.patch).toBe(patch);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// review --local integration (AC: review --local delegates to local pipeline)
+// ---------------------------------------------------------------------------
+
+const MINIMAL_DIFF = `diff --git a/src/foo.ts b/src/foo.ts
+index 1111111..2222222 100644
+--- a/src/foo.ts
++++ b/src/foo.ts
+@@ -1,3 +1,4 @@
+ export function foo() {
+-  return 1;
++  return 0;
+ }
+`;
+
+const noopReadFile = async (_p: string, _enc: 'utf8'): Promise<string> => {
+  throw new Error('not found');
+};
+
+describe('runReviewCommand — local mode (review --local)', () => {
+  it('runs in sample mode without a GH token', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'sample',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider({ summary: 'sample ok' }),
+      readSampleDiff: async () => MINIMAL_DIFF,
+    });
+    expect(result.status).toBe('reviewed');
+    expect(result.postedComments).toBe(0);
+    expect(io.out.join('')).toContain('Local Review Results');
+  });
+
+  it('returns auth_failed when ANTHROPIC_API_KEY is missing in local mode', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'sample',
+      failOn: 'major',
+      env: {} as NodeJS.ProcessEnv,
+      readSampleDiff: async () => MINIMAL_DIFF,
+    });
+    expect(result.status).toBe('auth_failed');
+    expect(io.err.join('')).toContain('ANTHROPIC_API_KEY');
+  });
+
+  it('returns exitCode 0 when no failing findings', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'sample',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider({ comments: [] }),
+      readSampleDiff: async () => MINIMAL_DIFF,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('returns exitCode 1 when major finding and failOn=major', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'sample',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () =>
+        fakeProvider({
+          comments: [
+            {
+              path: 'src/foo.ts',
+              line: 2,
+              side: 'RIGHT',
+              body: 'Logic error.',
+              fingerprint: 'fp1',
+              severity: 'major',
+            },
+          ],
+        }),
+      readSampleDiff: async () => MINIMAL_DIFF,
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('runs in working-tree mode via spawnGit seam', async () => {
+    const spawnGit = vi.fn(async () => ({
+      ok: true,
+      stdout: MINIMAL_DIFF,
+      stderr: '',
+      exitCode: 0 as number | null,
+    }));
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'working-tree',
+      localPath: '/tmp/repo',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider(),
+      spawnGit,
+    });
+    expect(result.status).toBe('reviewed');
+    expect(spawnGit).toHaveBeenCalledWith(['diff', 'HEAD'], '/tmp/repo');
+  });
+
+  it('returns diff_error when git spawn fails', async () => {
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'working-tree',
+      localPath: '/tmp/repo',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider(),
+      spawnGit: async () => ({
+        ok: false,
+        stdout: '',
+        stderr: 'not a git repository',
+        exitCode: 128 as number | null,
+      }),
+    });
+    expect(result.status).toBe('diff_error');
+  });
+
+  it('runs in range mode and passes --range to spawnGit', async () => {
+    const spawnGit = vi.fn(async () => ({
+      ok: true,
+      stdout: MINIMAL_DIFF,
+      stderr: '',
+      exitCode: 0 as number | null,
+    }));
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'range',
+      localRange: 'HEAD~2..HEAD',
+      localPath: '/tmp/repo',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider(),
+      spawnGit,
+    });
+    expect(result.status).toBe('reviewed');
+    expect(spawnGit).toHaveBeenCalledWith(['diff', 'HEAD~2..HEAD'], '/tmp/repo');
+  });
+
+  it('runs in diff-file mode via readFile seam', async () => {
+    const readFile = vi.fn(async (p: string, _enc: 'utf8') => {
+      if (p === 'my.patch') return MINIMAL_DIFF;
+      throw new Error('not found');
+    });
+    const io = recordingIo();
+    const result = await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'diff-file',
+      localDiffFile: 'my.patch',
+      localPath: '/tmp/repo',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile,
+      createProvider: () => fakeProvider(),
+    });
+    expect(result.status).toBe('reviewed');
+    expect(readFile).toHaveBeenCalledWith('my.patch', 'utf8');
+  });
+
+  it('VCS paths are not called in local mode (no postReview, no getPR)', async () => {
+    const vcs = fakeVcs();
+    const io = recordingIo();
+    await runReviewCommand(io, {
+      repo: '',
+      pr: 0,
+      configPath: '.review-agent.yml',
+      post: false,
+      localMode: 'sample',
+      failOn: 'major',
+      env: { ANTHROPIC_API_KEY: 'k' } as NodeJS.ProcessEnv,
+      readFile: noopReadFile,
+      createProvider: () => fakeProvider(),
+      // createVCS is supplied but must NOT be called in local mode
+      createVCS: () => vcs,
+      readSampleDiff: async () => MINIMAL_DIFF,
+    });
+    expect(vcs.postReview).not.toHaveBeenCalled();
+    expect(vcs.upsertStateComment).not.toHaveBeenCalled();
   });
 });

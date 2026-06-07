@@ -26,6 +26,7 @@ export const DEFAULT_FAKE_CAPABILITIES: VcsCapabilities = {
   approvalEvent: 'github',
   commitMessages: true,
   conversationReply: true,
+  committableSuggestions: true,
 };
 
 /**

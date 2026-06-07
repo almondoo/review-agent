@@ -24,6 +24,12 @@ export const auditLog = pgTable(
     outputTokens: integer('output_tokens'),
     prevHash: text('prev_hash'),
     hash: text('hash').notNull(),
+    /** Optional identity of the operator or system process that triggered this event. */
+    actor: text('actor'),
+    /** Optional resource type that was mutated (e.g. 'repo', 'principal', 'membership', 'github_installation'). */
+    resourceType: text('resource_type'),
+    /** Optional resource identifier (e.g. repo UUID, principal ID, or composite key). */
+    resourceId: text('resource_id'),
   },
   (t) => [
     index('audit_log_installation_idx').on(t.installationId, t.ts),

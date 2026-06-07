@@ -15,7 +15,7 @@ CLAUDE.md / `.changeset/*` / GitHub issue body はここを参照する。逆方
 | 観点 | 状態 |
 |---|---|
 | Latest wave on `main` | **post-v1.2 waves A–C** — PR [#133](https://github.com/almondoo/review-agent/pull/133) merged 2026-06-04（GitHub App dashboard onboarding + dashboard SPA + eval/feedback hardening、#123〜#131 を main へ）。直前は v1.0.1+v1.1+v1.2（PR [#94](https://github.com/almondoo/review-agent/pull/94), 2026-05-18, `Closes #83〜#93`）|
-| Latest wave on `develop` | **config-as-code & quality wave（進行中、2026-06-04〜）** — landed: #143 eval gate / #139 OSS governance / #147 BYOK doc / #146 config resolution+provenance / #148 ruleset。実装中/予定: #156→#159→#151→#145（config chain）+ #155/#157/#149（runner/platform）。直前は #132 interim IDOR interlock（`REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書）|
+| Latest wave on `develop` | **config-as-code & quality wave（[A] 全12 issue landed）+ dashboard 認証/RBAC（#161 landed, 2026-06-04）** — [A]: #143/#139/#147/#146/#148/#156/#159/#151/#145/#155/#157/#149。#161: per-user 認証 + RBAC（共有 token 置換、`REVIEW_AGENT_AUTH_MODE`、viewer/editor/admin、security-review 済み）。直前は #132 interim IDOR interlock（`REVIEW_AGENT_MULTI_TENANT` fail-closed guard + GA 設計文書）|
 | post-v1.2 follow-on (#95–#110) | **全 close 済み** — recover-sync-state(#105) / fail-open OTel metrics(#106) / docs(#98/#100/#103) / test(#107/#108) / baseline(#97) / parity(#102) / CodeCommit feedback re-scrape(#110) すべて shipped・closed |
 | Active GA tracking | **#132** (per-installation IDOR hardening) — interim fail-closed interlock + GA 設計文書を develop に landed。**フル per-principal authz（AC#1/#2）は GA 据え置き**（認証モデル決定待ち）で #132 は GA tracking ticket として open 継続。#161 (dashboard RBAC) は #132 の認証モデルに依存 |
 | 次wave候補 (open, 未refined) | **#134–#160 / #162** — richer PR summary / local trial / audit log / SSO / cost analytics / quality metrics / notifications / presets / platform 拡張(GitLab/GHES) 等の大型 epic 群。多くは spec 沈黙で製品/UX 判断 (spec §22) を要する。#136/#137/#138/#140/#144/#154 は外部リソース・他issue依存でブロック |
@@ -533,19 +533,366 @@ develop に commit 済み、統合検証フル green（typecheck 13/13・lint・
 operator の Lambda entrypoint が compose する設計（既存 historyReader/evalRecorder と同モデル、
 in-repo 未配線）。
 
+### [A2] dashboard 認証 & RBAC — #161 landed (develop, 2026-06-04)
+
+共有 bearer token に代わる **per-user 認証 + RBAC** を develop に landed（本セッションで自律実装、
+maintainer 決定の "local accounts + session JWT" 方針）。後方互換（既定 `legacy` モードで既存デプロイ
+無破壊）。security-review 実施済み（Critical/High/Medium 0、Low 1 = scrypt パラメータ上限キャップを適用）。
+統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。**未 push / develop→main
+未マージ**（maintainer 判断）。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#161](https://github.com/almondoo/review-agent/issues/161) | dashboard 認証/RBAC（共有 token 置換、viewer/editor/admin） | ✅ landed (develop) |
+
+主な変更:
+- **core**: `operator_principals` / `installation_memberships` テーブル + migration `0011_dashboard_auth`、
+  scrypt パスワード hash（自己記述フォーマット + パラメータ上限）、`DASHBOARD_ROLES`/`roleSatisfies`、
+  `audit_log.actor`（canonicalPayload は actor 非 null 時のみ含め HMAC チェーン後方互換）。
+- **server**: JWT(jose HS256) + `tokenVersion` 失効、`sessionAuth`（`REVIEW_AGENT_AUTH_MODE=legacy|session|both`、
+  `REVIEW_AGENT_SESSION_SECRET` fail-closed 起動）、`installationAuthz`/`requireRole`（membership 由来、
+  cross-principal=404 / role 不足=403、#132 の 501 interlock を legacy で温存）、`/api/auth/{login,me,logout}`、
+  admin アクションに audit actor 配線。
+- **cli**: `review-agent user create|list|set-password|delete|grant|revoke`。
+- **web**: `/login` + 保護ルート + セッショントークン(localStorage) + ロール出し分け + i18n(ja/en)。
+- **docs**: [`docs/security/dashboard-auth.md`](./security/dashboard-auth.md)（auth モード / ロール / 後方互換 移行手順）。
+
+新規 env: `REVIEW_AGENT_AUTH_MODE`, `REVIEW_AGENT_SESSION_SECRET`, `REVIEW_AGENT_SESSION_TTL_SECONDS`。
+新規 migration: `0011_dashboard_auth`。
+**unblock**: #136（actor identity 基盤が入った）/ #141（dashboard auth フロー）/ #137（SSO は #161 の
+per-user 認証の上に OIDC/IdP を載せる形で着手可）。
+
+### [A3] committable suggestions — #152（suggestions 本体）landed (develop, 2026-06-04)
+
+GitHub の committable ```suggestion ブロック生成を develop に landed（本セッションで自律実装）。
+mission §1.2 の範囲内（PR コメントへの write のみ）。fix-commit（自動 push）は §1.2 を緩和するため
+maintainer 判断で**見送り → #164** に分割、multi-line range（start_line）は **#165** に分割。
+統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#152](https://github.com/almondoo/review-agent/issues/152) | committable suggestions（suggestions 本体） | ✅ landed (develop, 一部 #164/#165 へ分割) |
+
+主な変更:
+- **config**: `suggestions.{enabled(既定 true), categories(既定 全カテゴリ)}`（JSON Schema 自動反映）。
+- **core**: `VcsCapabilities.committableSuggestions`（GitHub=true / CodeCommit=false）、
+  `ReviewPayload.diff`（hunk validation 用 per-file patch）。
+- **platform-github**: unified diff の hunk 解析で valid な RIGHT 行を判定し、hunk 内のみ ```suggestion 化。
+  hunk 外 / LEFT / diff 無は suppress（コメントのみ・fail-closed）。
+- **platform-codecommit**: committable 非対応のため informational な fenced block で描画。
+- **runner**: config gating（enabled/categories で suggestion を strip、本文は維持）+ output secret scan に
+  suggestion フィールドを追加。
+- **配線**: action / cli(review, dry-run) で `config.suggestions`→ReviewJob、`ReviewPayload.diff`→postReview。
+  server は queue JobHandler で operator 注入（既存 seam 方針、in-repo 未配線）。
+- **docs**: `docs/configuration/suggestions.md` + config-reference 追記。
+
+**分割した follow-up**: [#164](https://github.com/almondoo/review-agent/issues/164)（opt-in fix-commit、§1.2 緩和で要判断）/
+[#165](https://github.com/almondoo/review-agent/issues/165)（multi-line range start_line）。
+
+### [A4] large-PR / monorepo strategy — #158 landed (develop, 2026-06-04)
+
+単一パス上限超過 PR を「skip」から「chunk 分割による multi-pass レビュー」に置換。develop に landed
+（本セッションで自律実装）。統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。
+**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#158](https://github.com/almondoo/review-agent/issues/158) | large-PR / monorepo strategy（chunking / prioritization / token-budget） | ✅ landed (develop) |
+
+主な変更:
+- **config**: `large_pr.{enabled(既定 true), max_chunks(既定 5), prioritization(既定 [path_instructions, diff_size])}`。
+  chunk サイズは既存 `reviews.max_files/max_diff_lines` を per-chunk 上限として再利用。
+- **runner**: caps 超過時に prioritized ファイル順で chunk 分割し最大 max_chunks パスでレビュー、findings を
+  fingerprint で merge + cross-chunk dedup（dedup の previousState seam を再利用）。単一パス経路は完全 back-compat、
+  `enabled=false` で従来 skip。
+- **cost**: CostState を chunk ループで共有し `max_usd_per_pr` を PR 全体に適用。cost cap / max_chunks 到達で
+  打ち切り、未レビューファイルを coverage summary に `budget_exhausted` / `max_chunks_exceeded` 理由で報告
+  （無言 truncation 禁止）。`call_phase` は review_main に集約（DB 変更なし）。
+- **配線**: action / cli(review, dry-run)。server は queue JobHandler seam（既存方針）。
+- **docs/spec**: `docs/configuration/large-pr.md` + config-reference、spec §10.4「Chunked multi-pass review」追記。
+- **既知の限界**: chunk はファイル独立（cross-chunk の diff context は read_file/glob/grep tools で補完）。
+
+### [A5] external static-analysis tool ingestion — #160 landed (develop, 2026-06-04)
+
+CI 等が生成した SARIF 2.1.0 を取り込み AI findings と正規化・統合・dedup（gitleaks 統合の一般化）。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#160](https://github.com/almondoo/review-agent/issues/160) | external tool ingestion (SARIF / lint / SAST) | ✅ landed (develop) |
+
+主な変更:
+- **config**: `external_tools.tools[].{name, sarif_path, merge_policy(tool_wins|annotate|ai_wins, 既定 tool_wins)}`。
+- **runner**: pure SARIF 2.1.0 パーサ（level→severity / ruleId 解決 / location 欠落 skip / 壊れ JSON は空+warn）+
+  正規化（InlineComment, side=RIGHT, confidence=high, category 推論）+ `mergeExternalFindings`（fingerprint で
+  AI と衝突解決、previousState/rejected dedup・ruleset/suppression 適用）。chunk merge 後・postReview 前に注入。
+- **入力は SARIF ファイルパスのみ**（agent はツールを実行しない＝§1.2 / sandbox 整合）。URL/stdin・tool 固有 JSON は scope 外。
+- **配線**: action / cli(review, dry-run) が sarif_path を読み job.externalTools へ（欠落は warn+skip）。server は queue seam。
+- gitleaks(#8/#58) 不変、`external_tools` 無しは完全 back-compat。
+- **docs/spec**: `docs/configuration/external-tools.md` + config-reference、spec §7.4.1「External static-analysis tool ingestion」追記。
+
+### [A6] admin-mutation audit log — #136 landed (develop, 2026-06-05)
+
+config/prompt/keys/repo/role 変更を authenticated actor + resource 付きで `audit_log` に記録（#161 の actor
+基盤を網羅化）。あわせて **#161 由来の audit RLS 潜在バグ**（appender がプール tx で tenant GUC 未設定 →
+非 null installation の INSERT が RLS withCheck で拒否される問題、byok.key.* 含む全 audit が対象）を根本修正。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#136](https://github.com/almondoo/review-agent/issues/136) | audit log（誰がいつ config/prompt/keys を変更したか） | ✅ landed (develop) |
+
+主な変更:
+- **RLS 根本修正**: `createAuditAppender` が `event.installationId` から tenant GUC（`app.current_tenant`）を自前
+  設定し、per-installation の HMAC チェーンで INSERT する。verify/export も GUC を設定。これにより
+  byok / repos / membership / review-event の全 audit 書込・読取・検証が RLS（`review_agent_app` ロール）下で成立。
+- **#161 の actor 永続化漏れ修正**: appender INSERT・verify SELECT・export に `actor` が欠落していたのを修正
+  （session モードで hash に actor が入るのに DB 列 NULL → verify でチェーンが壊れる問題）。
+- **schema**: `audit_log` に `resource_type`/`resource_id`（migration `0012_audit_admin_fields`）+ AuditEvent +
+  canonicalPayload（非 null 時のみ含め後方互換）。
+- **監査追加**: server `repo.create`/`enable`/`disable`/`delete`・`prompt.update`・`repo.bulk_register`・
+  `github_installation.setup`（app.ts の appender 配線漏れも修正）、CLI `membership.grant`/`revoke`・`principal.*`。
+  actor=server は principal.id / cli は `cli:<user>` / github-setup は null。秘密値は非記録（resource_id は id/provider のみ）。
+- **閲覧**: 既存 `review-agent audit export` CLI に actor/resource を反映（dashboard UI / GET API は scope 外＝follow-up）。
+- **既知の限界**: installation に紐づかない global principal イベント（`--installation` 無しの principal.create 等）は
+  per-installation RLS で read/verify 不可（write-only）。docs に明記。
+- RLS round-trip の integration test 追加（`TEST_DATABASE_APP_URL` gate）、docs(audit-log.md) + spec §13.3 更新。
+
+### [A7] quality metrics dashboard — #142 landed (develop, 2026-06-05)
+
+レビュー品質メトリクス（acceptance rate / false-positive rate / coverage / latency P50・P95）を既存ストア
+（`review_eval_event` / `review_history`）から算出し dashboard で per-repo・期間別（24h/7d/30d）に可視化。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#142](https://github.com/almondoo/review-agent/issues/142) | quality metrics (acceptance / FP / coverage / latency) | ✅ landed (develop) |
+
+主な変更:
+- **core**: `review_eval_event` に `files_total`/`files_reviewed`（migration `0013_eval_coverage`）。runner eval-recorder が
+  ExclusionReport から coverage を永続化。
+- **db**: `loadQualityMetrics`（**`withTenant` で RLS GUC を張る** per-installation 集計。acceptance=accepted/(accepted+rejected)、
+  FP=(rejected+suppression)/comments、coverage=reviewed/total、latency P50/P95。feedback/データ 0 件は N/A=null）。
+- **server**: `GET /api/dashboard/metrics?installationId&since=24h|7d|30d`（sessionAuth + viewer + installationAuthz）。
+- **web**: `/metrics` ページ（period/installation セレクタ・overall カード・per-repo テーブル・N/A 処理・各指標の定義 tooltip[AC#2]・nav・i18n）。新規 charting lib なし。
+- **docs**: playbook に acceptance/FP/coverage/latency-P50P95 クエリ + 定義追記。
+- **限界**: latency は review 実行 wall-clock（キュー待ち除外、end-to-end は将来 refine）。legacy 単一オペレーター時の
+  installation スコープは [#166](https://github.com/almondoo/review-agent/issues/166)（既存 dashboard RLS バグ）に依存。judge score は scope 外。
+
+### [A8] local trial CLI — #135 landed (develop, 2026-06-05)
+
+PR・VCS credential 無しでローカルにレビューを試せる `review --local`（pre-commit / local CI / 評価者の試用向け）。
+develop に landed（本セッションで自律実装）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#135](https://github.com/almondoo/review-agent/issues/135) | local trial (CLI review without a PR + bundled sample) | ✅ landed (develop) |
+
+主な変更:
+- **cli**: 既存 `review` に `--local [path]` / `--range <a..b>` / `--diff-file <file>` / `--sample` / `--path` / `--fail-on <severity>` を追加。
+  local モードは **VCS 非構築・GH token 不要・no-post** で findings を stdout 表示、`--fail-on`（既定 major）以上の finding で
+  exit 非ゼロ。LLM provider key は必要。config/presets 適用。VCS 経路は完全 back-compat。
+- **同梱 sample**: `packages/cli/src/assets/sample-diff.txt`（security/bug/performance/maintainability の意図的 finding）を
+  `--sample` で利用、dist にバンドル（tsup onSuccess + package.json files）。
+- dry-run の no-post パイプラインを `lib/local-review.ts` に共有化（dry-run 本体は不変）。
+- **docs**: `docs/getting-started/cli.md` に local trial 節。
+
+### [A9] one-command start / Marketplace 導線 — #153 landed (develop, 2026-06-05)
+
+評価者が最短で試せる導線を整備（docker compose / コピペ Action template / Marketplace listing メタデータ）。
+develop に landed（本セッションで自律実装）。docs / yaml / CI のみで TS 変更なし。typecheck/lint/build green。
+**未 push / develop→main 未マージ**。Marketplace の実公開は GitHub UI の手動操作（runbook 化）。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#153](https://github.com/almondoo/review-agent/issues/153) | one-command start (compose / Action template / Marketplace) | ✅ landed (develop) |
+
+主な変更:
+- コピペ可能な Action テンプレート `examples/workflows/review-agent.yml`（`@v1` pin・permissions・`anthropic-api-key` secrets）。
+- `.github/workflows/release.yml` に `tag-action` job（**release イベント時のみ** `v1`/`v1.x` を force-update。既存
+  Docker/Trivy/cosign/SBOM は不変、tag 名は env 経由で workflow-injection safe）。
+- `docs/deployment/marketplace.md`（publish runbook + `v1`/`v1.x`/`v1.x.y` tag 戦略）。**実公開は手動 GitHub UI 操作**と明記。
+- `docs/getting-started/action.md`（Action quickstart、`cli.md` の `./action.md` リンク切れ修正）。
+- README に「3 ways to try」（CLI `review --local --sample` / Action template / self-host compose）+ self-host 節（spec §18 充足）、`@v0`→`@v1`。
+- root `docker-compose.yml`（Action smoke-test 用）と `examples/docker-compose/`（canonical self-host）の用途差を冒頭コメントで明示。
+- 既存 #34 compose / #5 action.yml branding を活用（重複統合なし、用途差を注記）。
+- 既知: `cli.md` の `server.md` リンク切れは #150（docs system）で対応。
+
+### [A10] onboarding & documentation system — #150 landed (develop, 2026-06-05)
+
+散在していた docs を統合し navigable な onboarding system 化（Markdown + `docs/index.md` ナビ＝issue の
+「VitePress sidebar or equivalent」の equivalent 経路）。develop に landed（本セッションで自律実装）。docs のみ。
+typecheck/lint/build green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#150](https://github.com/almondoo/review-agent/issues/150) | onboarding & documentation system | ✅ landed (develop, 一部 #154 依存・VitePress 別判断) |
+
+主な変更:
+- **getting-started**: `quickstart.md`（CLI/Action/server の 3 経路）/ `server.md`（server mode quickstart、`cli.md` の
+  `./server.md` リンク切れ修正）/ `skills.md`（`../getting-started/` ディレクトリリンク切れ修正）。
+- **providers**: `anthropic`/`openai`/`azure-openai`/`google`/`vertex`/`bedrock` の 6 ページ（env は `packages/llm` 実装準拠）
+  + 既存 `openai-compatible` と相互リンク。
+- **config-reference**: `ruleset`/`feedback`/`reviews.max_steps`/`max_conversation_turns`/`auto_review.{trigger,skip}_labels`
+  を補完 + `schema/v1.json` link + `yaml-language-server` snippet（§18.4）+ schema-sync チェックリスト（AC#7）。
+- **preset-authoring.md**（write/extend/chain。third-party publish/consume は #154 依存で stub）。
+- **docs/index.md**: 全 docs を統合した TOC（orphan 0、#12/#43/#47/#100/#104 fragment を統合）。
+- **未対応（follow-up）**: VitePress サイトの build/deploy 配線（spec §18.2 が名指しするが依存+CI+deploy のインフラ判断）、
+  preset 配布ガイド（#154）。
+
+### [A11] cost analytics + multi-line suggestions — #140 / #165 landed (develop, 2026-06-05)
+
+「doable subset」継続（maintainer 承認: doable な subset を続行）。develop に landed（本セッションで自律実装）。
+統合検証フル green（typecheck 13/13・lint・test:coverage 全パッケージ・build）。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#140](https://github.com/almondoo/review-agent/issues/140) | deeper cost analytics (per-repo / per-model / per-period) | ✅ landed (develop, budget alert 送信は #144 依存) |
+| [#165](https://github.com/almondoo/review-agent/issues/165) | multi-line range committable suggestions | ✅ landed (develop) |
+
+- **#140**: `loadCostMetrics`（**withTenant で RLS GUC**、per-repo=`cost_ledger ⋈ review_eval_event(job_id)`、
+  per-model=`GROUP BY provider,model`、per-period=`date_trunc` バケット、cursor pagination）+ `GET /api/dashboard/cost?installationId&since`
+  （sessionAuth + viewer + installationAuthz）+ web `/cost` ページ（#142 同型、charting lib なし＝バケット表で表現）。
+  `cost.budget_alert_usd`（soft 閾値）+ cost-guard の `budget_alert` emit まで実装（**実通知送信と閾値源の完全配線は #144 依存**。
+  cost 分析ダッシュボード自体は完全機能）。
+- **#165**: 単一 anchor 行 suggestion(#152) を `start_line`/`start_side` で多行範囲へ拡張。range 全体が hunk 内のときのみ描画、
+  partial/範囲外は suppress（コメントのみ）、単一行は back-compat。fingerprint は anchor(line) 維持。
+- 既知: #140 の budget alert は #144（通知チャネル）依存。既存 overview/repo-metrics の RLS バグは #166 で対応（次）。
+
+### [A12] dashboard read-endpoint RLS fix — #166 landed (develop, 2026-06-06)
+
+#142/#140 実装中に発見した既存バグ（`GET /api/dashboard/overview` と `GET /api/repos/:id/metrics` が
+`app.current_tenant` GUC を張らず RLS 下で 0 行を返す）を修正。develop に landed。統合検証フル green。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#166](https://github.com/almondoo/review-agent/issues/166) | dashboard read endpoints omit app.current_tenant GUC | ✅ landed (develop) |
+
+- `loadOverviewTotals`（新規 `packages/db/src/overview-totals.ts`）: installation 集合を per-installation で `withTenant`
+  集計し合算（RLS を通す）。
+- overview の installation スコープ: **session = caller の memberships / legacy = repos(非RLS) 由来の distinct installation_id**。
+- repo metrics: `repo.installationId` で `withTenant`。
+- null-installation の repo/データは per-installation RLS で読めない（write-only と同じ限界）＝docs/コメント明記。
+- レスポンス型不変（web 無影響）。#142 `/metrics`・#140 `/cost` は元から正しいので不変。
+
+### [A13] notifications — #144 landed (develop, 2026-06-06)
+
+Slack/email 通知を develop に landed（maintainer 決定: email は **SMTP(nodemailer) + SES(@aws-sdk/client-ses) 両方**を
+pluggable channel として出荷、Slack は fetch incoming webhook）。統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#144](https://github.com/almondoo/review-agent/issues/144) | notifications (Slack/email: completion/failure/cost overrun) | ✅ landed (develop, job.failed の DLQ 検知は #138) |
+
+- **通知モジュール** `packages/server/src/notification/`: pluggable `NotificationChannel`（Slack=fetch / SMTP=nodemailer /
+  SES=@aws-sdk/client-ses、全て DI 可能）+ `createNotificationDispatcher`（event gate + `jobId:type` dedup + **fail-open** +
+  metadata-only payload）+ `buildNotificationChannels(config, env)`。
+- **config**: `notifications.{events:{job_failed,budget_overrun,review_completed(既定off)}, slack:{enabled}, email:{enabled,
+  transport:smtp|ses, from, to, smtp{...}, ses{region}}}`。秘密は env（`REVIEW_AGENT_SLACK_WEBHOOK_URL` /
+  `REVIEW_AGENT_SMTP_PASSWORD`）、SES は AWS credential chain。
+- **配線**: runner は `onThresholdCrossed`/`budgetAlertUsd` を RunReviewDeps→cost-guard へ透過（runner は I/O 持たず hook のみ）。
+  action 経路で budget.overrun / review.completed / job.failed を dispatch（fail-open）。server の operator 注入 JobHandler 向けに
+  `@review-agent/server/notification` subpath を seam 公開。
+- **interim/限界**: job.failed は runReview 恒久 throw 時に dispatch。**DLQ 枯渇ベースの正確な検知は #138**。CLI は通知対象外。
+  action バンドルに nodemailer+SES が入り ~2MB 増（将来 standalone package 化で解消余地）。
+- docs: `docs/operations/notifications.md`。
+
+### [A14] failure handling: retry / DLQ / alerting — #138 landed (develop, 2026-06-06)
+
+恒久失敗の検知と DLQ 処理 → job.failed 通知(#144) + failed state comment。**AWS SQS scope**（GCP/Azure は follow-up）。
+develop に landed（本セッションで自律実装）。統合検証フル green（typecheck 13/13・lint・test:coverage・build）。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#138](https://github.com/almondoo/review-agent/issues/138) | failure handling (retry / DLQ / alerting) | ✅ landed (develop, AWS scope) |
+
+- **error-classifier**（transient: rate_limit/overloaded/transient、permanent: auth/fatal/context_length/cost-exceeded/config/schema、
+  不明は transient = SQS retry に倒す）。
+- **worker**（sqs.ts / lambda-worker.ts）: transient は SQS visibility-timeout retry 維持、permanent は終端処理
+  （job.failed 通知 + failed state comment + ack、再配信しない）。`failureDeps` 未注入時は従来 transient 動作（後方互換）。
+- **DLQ processor**（`packages/server/src/queue/dlq-processor.ts`）: DLQ 着地メッセージを `JobMessage` parse → failed state comment
+  （`modelUsed` に `FAILED (DLQ)` 前置で可視化、schema/migration 変更なし）→ job.failed dispatch。全 fail-open。
+- **Terraform**（AWS, best-effort・unit test 対象外）: DLQ processor Lambda + IAM + DLQ event source mapping + CloudWatch alarm。
+  replay runbook `docs/operations/dlq-runbook.md`。
+- #16 idempotency / #62 state-comment retry / §11.1 LLM retry とのダブルカウント無しを維持。
+- **follow-up**: Lambda handler entrypoint の build 配線（`dist/{lambda-worker,dlq-processor}.js` を composed handler として出力）は
+  worker と共通の既存 example-deployment 事項（operator 注入 seam 領域）。GCP Pub/Sub・Azure Service Bus の DLQ 消費は別 issue。
+  CloudWatch alarm の SNS action は operator 設定。
+
+### [A15] SSO (OIDC) dashboard auth — #137 landed (develop, 2026-06-06)
+
+#161 の per-user 認証の上に汎用 OIDC（Authorization Code + PKCE）SSO を実装（3 フェーズ）。develop に landed
+（本セッションで自律実装）。security-review 実施 — 検出 High1/Medium1/Low2 を**全修正**し Critical/High/Medium 0 に。
+統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#137](https://github.com/almondoo/review-agent/issues/137) | SSO support (OIDC) | ✅ landed (develop) |
+
+- **Phase A**: `operator_principals` に password nullable + provider/external_id + **unique** partial index（migration
+  `0014_oidc_principals`）。db `upsertOidcPrincipal`（JIT, TOCTOU race 対応）/ `findPrincipalByExternalId`。OIDC ユーザーは
+  password login 不可。
+- **Phase B**: server OIDC（`oidc.ts`: discovery / PKCE(S256) / id_token 検証[jose, **RS256/ES256 固定**, issuer/audience/nonce/exp]
+  / client secret は **KMS 設定時 envelope・無ければ env**）+ `/api/auth/{config, oidc/authorize, oidc/callback}`
+  （state/nonce/PKCE を HttpOnly cookie、sessionAuth 外）。callback で JIT → **実 tokenVersion** で session JWT 発行（#161 再利用）。
+- **Phase C**: web「Sign in with SSO」ボタン（`/api/auth/config` の oidcEnabled 駆動）+ callback の `#token` fragment 処理
+  （保存後 `history.replaceState` で URL/履歴から除去）+ docs `docs/security/sso.md`。
+- **role 付与**: 認証のみ（JIT）。membership/role は admin が CLI で付与（最小権限・groups→membership 自動は将来）。
+- **env**: `REVIEW_AGENT_OIDC_{ISSUER,CLIENT_ID,CLIENT_SECRET / CLIENT_SECRET_ENCRYPTED,REDIRECT_URI}`、`REVIEW_AGENT_DASHBOARD_ORIGIN`。
+  AUTH_MODE=session/both で有効、legacy で無効（404）。
+- **security-review 修正**: schema を `uniqueIndex` 化（将来 generate での UNIQUE drift 防止）/ JIT の TOCTOU race（concurrent
+  first-login で winner を返却し 500 回避）/ `clearOidcCookies` の secure/httpOnly/sameSite 付与 / schema test 追加。SAML は follow-up。
+
+### [A16] richer PR summary — #134 landed (develop, 2026-06-06)
+
+レビュー summary に walkthrough / change-impact / dependency view（opt-in）を追加。**LLM 1 回生成・ReviewOutput
+スキーマ変更なし**（summary 文字列に Markdown セクションで埋め込み）。develop に landed（本セッションで自律実装）。
+統合検証フル green。**未 push / develop→main 未マージ**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#134](https://github.com/almondoo/review-agent/issues/134) | richer PR summary (walkthrough / change-impact / dependency view) | ✅ landed (develop) |
+
+- **config**: `summary.{walkthrough(既定 on), change_impact(既定 on), dependency_view(既定 off = opt-in)}`。
+- **system-prompt**: summary に `## Walkthrough` / `## Change impact` /（dependency_view 時のみ）`## Dependencies` セクションを
+  出す指示。別 LLM 呼び出しなし（コスト不変）。
+- **dependency view は LLM テキスト推測のみ**（静的 import 解析なし・visual graph なし。AC 準拠）。
+- **large-PR**: 最優先ファイル要約 + 明示的 truncation note（既存 coverage 機構と整合、サイレント打ち切りなし）。
+- 配線: action / cli(review, dry-run)。docs: `docs/configuration/review-output.md`。
+
+### [A17] dashboard UX gaps — #141 landed (develop, 2026-06-06)
+
+dashboard の UX gap を解消（disconnected /repos stuck / 一貫した loading-empty-error / connect-edit 導線 /
+filter 永続化・検索・pagination）。web-only。develop に landed（本セッションで自律実装）。統合検証フル green。**未 push**。
+
+| # | タイトル | 状態 |
+|---|---|---|
+| [#141](https://github.com/almondoo/review-agent/issues/141) | dashboard UX gaps | ✅ landed (develop) |
+
+- 共通 `ErrorState`(+retry) / `EmptyState`(+CTA) を新設し全 major ビューに適用。
+- **/repos**: fetch error→ErrorState+retry、GitHub 未接続(`installationCount===0`)→Connect GitHub CTA、接続済み空→
+  Add repo CTA（=disconnected stuck の解消）。name 検索 + status filter + client pagination、状態を URL query 永続化。
+  `useRepos` に `retry:1`+`staleTime`。
+- **/history**: error→retry、フィルタを URL query 永続化（cursor pagination 維持、`since` を date-range として維持）。
+- **/integrations**: error→retry、connect/manage 導線（App 未設定時の案内含む）、BYOK manage リンク。
+- overview / repo-detail / byok-keys / metrics / cost: `ErrorState`+retry に統一。byok-keys は installationId を
+  memberships から自動取得（複数はセレクタ、legacy は手動入力維持）。
+- i18n(ja/en) 追加。
+
 ### [B] 設計判断が必要（spec 沈黙 / 大型・要 refine）
 
-#134 richer PR summary / #135 local trial / #141 dashboard UX gaps /
-#142 quality metrics / #150 onboarding & docs system / #152 committable suggestions /
-#153 one-command start / #158 large-PR/monorepo strategy /
-#160 external-tool ingestion (lint/types/SAST) / #162 platform 拡張 (GitLab/GHES)。
+#162 platform 拡張 (GitLab/GHES)。
 
 ### [C] 外部リソース / 前提ブロック
 
-#132 (GA per-principal authz — 認証モデル決定待ち) / #161 (dashboard RBAC — #132 依存) /
-#137 (SSO — #161 依存) / #136 (audit log — #161 の actor identity 前提) /
-#138 (retry/DLQ/alerting — #144 依存) / #140 (cost analytics — #144/#142 依存) /
-#144 (notifications — #138/#140 のイベント源前提) / #154 (preset 配布 — npm publish 権限要)。
+#132 (GA per-principal authz — 認証モデル決定待ち。#161 で per-user 認証 + #137 で OIDC SSO が landed したが
+フル per-principal credential 方式の最終決定は GA 据え置き) /
+#154 (preset 配布 — npm publish 権限要)。
+（#137 SSO(OIDC) は landed したため [C] から除外 → [A15] 参照。SAML は follow-up）
+（#144 notifications → [A13]、#138 failure handling(AWS scope) → [A14] が landed したため [C] から除外。
+#138 の GCP/Azure DLQ 消費は follow-up）
+（#140 cost analytics は分析+ダッシュボードを landed したため [C] から除外 → [A11] 参照。budget alert の通知送信のみ #144 待ち）
+（#161 は landed したため [C] から除外 → [A2] 参照）
 
 ---
 

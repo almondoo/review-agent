@@ -375,6 +375,130 @@ resource "aws_lambda_event_source_mapping" "worker" {
 }
 
 # -----------------------------------------------------------------------------
+# DLQ processor Lambda — fires when a job exhausts all SQS retries (#138)
+# -----------------------------------------------------------------------------
+
+resource "aws_cloudwatch_log_group" "dlq_processor" {
+  name              = "/aws/lambda/${var.name}-dlq-processor"
+  retention_in_days = var.log_retention_days
+}
+
+resource "aws_iam_role" "dlq_processor" {
+  name               = "${var.name}-dlq-processor"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+resource "aws_iam_role_policy_attachment" "dlq_processor_basic" {
+  role       = aws_iam_role.dlq_processor.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "dlq_processor_vpc" {
+  role       = aws_iam_role.dlq_processor.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+# DLQ processor: read + delete from DLQ, write to main queue for manual replay.
+data "aws_iam_policy_document" "dlq_processor" {
+  statement {
+    sid     = "ReadSecrets"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = compact([
+      aws_secretsmanager_secret.db.arn,
+      local.manage_app_key
+      ? aws_secretsmanager_secret.app_key[0].arn
+      : "arn:aws:secretsmanager:${local.region}:${local.account_id}:secret:${local.app_key_secret_name}-*",
+    ])
+  }
+  statement {
+    sid = "ConsumeDlq"
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueAttributes",
+    ]
+    resources = [aws_sqs_queue.dlq.arn]
+  }
+  # Allow the DLQ processor to replay a message back onto the main queue
+  # (useful for operator-driven replay after root-cause fix; see runbook).
+  statement {
+    sid       = "ReplayToMainQueue"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.jobs.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "dlq_processor" {
+  role   = aws_iam_role.dlq_processor.id
+  policy = data.aws_iam_policy_document.dlq_processor.json
+}
+
+resource "aws_lambda_function" "dlq_processor" {
+  function_name = "${var.name}-dlq-processor"
+  role          = aws_iam_role.dlq_processor.arn
+  package_type  = "Image"
+  image_uri     = var.image_uri
+  # DLQ messages are processed one-at-a-time; a 60 s timeout is generous
+  # for a notification dispatch + VCS comment upsert.
+  timeout     = 60
+  memory_size = 256
+
+  image_config {
+    command = ["packages/server/dist/dlq-processor.js"]
+  }
+
+  vpc_config {
+    subnet_ids         = local.effective_subnet_ids
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  environment {
+    variables = local.worker_env
+  }
+
+  depends_on = [aws_cloudwatch_log_group.dlq_processor]
+}
+
+resource "aws_lambda_event_source_mapping" "dlq_processor" {
+  event_source_arn = aws_sqs_queue.dlq.arn
+  function_name    = aws_lambda_function.dlq_processor.arn
+  batch_size       = 10
+  enabled          = true
+}
+
+resource "aws_lambda_permission" "dlq_processor_sqs" {
+  statement_id  = "AllowSQSDlqTrigger"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.dlq_processor.function_name
+  principal     = "sqs.amazonaws.com"
+  source_arn    = aws_sqs_queue.dlq.arn
+}
+
+# CloudWatch alarm: any DLQ message that the DLQ processor itself cannot parse
+# (double-failure) lands in the alarm, paging oncall.
+resource "aws_cloudwatch_metric_alarm" "dlq_messages" {
+  alarm_name          = "${var.name}-dlq-messages"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "NumberOfMessagesSentToDeadLetterQueue"
+  namespace           = "AWS/SQS"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Messages landed in the DLQ — the DLQ processor will fire job.failed notifications. Review CloudWatch logs for /aws/lambda/${var.name}-dlq-processor."
+
+  dimensions = {
+    QueueName = aws_sqs_queue.dlq.name
+  }
+
+  # Wire to an SNS topic if you have one; otherwise leave actions empty for
+  # a metric-only alarm (visible in the CloudWatch console).
+  alarm_actions             = []
+  ok_actions                = []
+  insufficient_data_actions = []
+}
+
+# -----------------------------------------------------------------------------
 # API Gateway HTTP API → receiver Lambda
 # -----------------------------------------------------------------------------
 

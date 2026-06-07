@@ -228,4 +228,70 @@ describe('composeSystemPrompt', () => {
     expect(out).not.toContain('Accepted patterns');
     expect(out).not.toContain('Architectural decisions');
   });
+
+  // #134 — PR summary section
+  describe('PR summary section', () => {
+    it('emits a PR summary section by default with walkthrough and change_impact enabled', () => {
+      const out = composeSystemPrompt(baseOpts);
+      expect(out).toContain('## PR summary');
+      expect(out).toContain('### Walkthrough (enabled)');
+      expect(out).toContain('### Change impact (enabled)');
+      // dependency_view is disabled by default
+      expect(out).toContain('### Dependencies (disabled)');
+      expect(out).not.toContain('### Dependencies (enabled)');
+    });
+
+    it('emits walkthrough disabled text when walkthrough=false', () => {
+      const out = composeSystemPrompt({
+        ...baseOpts,
+        summaryConfig: { walkthrough: false, changeImpact: true, dependencyView: false },
+      });
+      expect(out).toContain('### Walkthrough (disabled)');
+      expect(out).not.toContain('### Walkthrough (enabled)');
+      expect(out).toContain('### Change impact (enabled)');
+    });
+
+    it('emits change_impact disabled text when changeImpact=false', () => {
+      const out = composeSystemPrompt({
+        ...baseOpts,
+        summaryConfig: { walkthrough: true, changeImpact: false, dependencyView: false },
+      });
+      expect(out).toContain('### Change impact (disabled)');
+      expect(out).not.toContain('### Change impact (enabled)');
+      expect(out).toContain('### Walkthrough (enabled)');
+    });
+
+    it('emits dependency_view enabled text when dependencyView=true', () => {
+      const out = composeSystemPrompt({
+        ...baseOpts,
+        summaryConfig: { walkthrough: true, changeImpact: true, dependencyView: true },
+      });
+      expect(out).toContain('### Dependencies (enabled)');
+      expect(out).not.toContain('### Dependencies (disabled)');
+    });
+
+    it('does not emit static graph analysis instructions for dependency_view', () => {
+      const out = composeSystemPrompt({
+        ...baseOpts,
+        summaryConfig: { walkthrough: true, changeImpact: true, dependencyView: true },
+      });
+      // LLM inference only — no static analysis
+      expect(out).toContain('LLM inference');
+      expect(out).toContain('no static import graph');
+    });
+
+    it('instructs LLM to keep summary within 10 000 characters and use truncation note', () => {
+      const out = composeSystemPrompt(baseOpts);
+      expect(out).toContain('10 000 characters');
+      expect(out).toContain('truncated');
+    });
+
+    it('falls back to defaults when summaryConfig is absent', () => {
+      const out = composeSystemPrompt(baseOpts);
+      // Default: walkthrough=true, changeImpact=true, dependencyView=false
+      expect(out).toContain('### Walkthrough (enabled)');
+      expect(out).toContain('### Change impact (enabled)');
+      expect(out).toContain('### Dependencies (disabled)');
+    });
+  });
 });

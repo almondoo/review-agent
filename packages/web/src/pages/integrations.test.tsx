@@ -7,14 +7,10 @@ import { IntegrationsPage } from './integrations.js';
 
 vi.stubEnv('VITE_USE_MOCK', 'true');
 
-// Mutable container so tests can override the returned integrations data.
-// vi.hoisted runs before imports so we cannot reference mockIntegrations here;
-// we assign the real data in beforeEach instead.
 const mockState = vi.hoisted<{ data: IntegrationsStatus | null }>(() => ({
   data: null,
 }));
 
-// Mutable container for hook state so individual tests can override isLoading / error.
 const mockHookState = vi.hoisted(() => ({
   isLoading: false,
   error: null as Error | null,
@@ -25,6 +21,7 @@ vi.mock('../api/client.js', () => ({
     data: mockState.data ?? null,
     isLoading: mockHookState.isLoading,
     error: mockHookState.error,
+    refetch: vi.fn(),
   }),
 }));
 
@@ -84,10 +81,11 @@ describe('IntegrationsPage — loading and error states', () => {
     expect(screen.getByText('[LOADING...]')).toBeInTheDocument();
   });
 
-  it('renders fetch-error message when error is set', () => {
+  it('renders ErrorState with retry button when error is set', () => {
     mockHookState.error = new Error('network failure');
     renderWithProviders(<IntegrationsPage />, { route: '/integrations' });
     expect(screen.getByText('[ERROR] Failed to load integrations.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '[RETRY]' })).toBeInTheDocument();
   });
 });
 
@@ -113,7 +111,6 @@ describe('IntegrationsPage — Connect GitHub button', () => {
   });
 
   it('calls window.location.assign with /github/install-redirect when clicked', () => {
-    // jsdom does not allow spying on window.location.assign directly; replace the whole object.
     const originalLocation = window.location;
     const mockAssign = vi.fn();
     Object.defineProperty(window, 'location', {
@@ -131,6 +128,37 @@ describe('IntegrationsPage — Connect GitHub button', () => {
       writable: true,
       configurable: true,
     });
+  });
+
+  it('shows App not configured message when appId is null', () => {
+    mockState.data = {
+      ...mockIntegrations,
+      github: { configured: false, appId: null, appSlug: null, installationCount: 0 },
+    };
+    renderWithProviders(<IntegrationsPage />, { route: '/integrations' });
+    expect(screen.getByText(/アプリ未設定|APP NOT CONFIGURED/)).toBeInTheDocument();
+  });
+
+  it('shows manage GitHub link when installationCount > 0', () => {
+    renderWithProviders(<IntegrationsPage />, { route: '/integrations' });
+    const manageLink = screen.getByRole('link', { name: '[MANAGE GITHUB →]' });
+    expect(manageLink).toBeInTheDocument();
+    expect(manageLink).toHaveAttribute('href', '/integrations/github');
+  });
+});
+
+describe('IntegrationsPage — BYOK manage link', () => {
+  beforeEach(() => {
+    mockState.data = mockIntegrations;
+    mockHookState.isLoading = false;
+    mockHookState.error = null;
+  });
+
+  it('shows Manage API Keys link in LLM card', () => {
+    renderWithProviders(<IntegrationsPage />, { route: '/integrations' });
+    const link = screen.getByRole('link', { name: '[MANAGE API KEYS →]' });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/integrations/keys');
   });
 });
 
@@ -220,13 +248,9 @@ describe('IntegrationsPage — error banner', () => {
     renderWithProviders(<IntegrationsPage />, {
       route: '/integrations?error=setup_cancelled',
     });
-    // Banner is visible
     expect(screen.getByRole('alert')).toBeInTheDocument();
-    // Click dismiss button
     fireEvent.click(screen.getByRole('button', { name: '[×]' }));
-    // Banner gone
     expect(screen.queryByRole('alert')).toBeNull();
-    // replaceState called to clean URL
     expect(replaceStateSpy).toHaveBeenCalled();
   });
 });

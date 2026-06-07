@@ -5,7 +5,7 @@ import {
   mergeWithEnv,
   resolveEffectiveConfig,
 } from '@review-agent/config';
-import type { PR, PRRef, ReviewState, VCS } from '@review-agent/core';
+import type { Diff, PR, PRRef, ReviewState, Severity, VCS } from '@review-agent/core';
 import { createAnthropicProvider, type LlmProvider } from '@review-agent/llm';
 import { createCodecommitVCS } from '@review-agent/platform-codecommit';
 import { createGithubVCS } from '@review-agent/platform-github';
@@ -17,10 +17,16 @@ import {
   runReview,
 } from '@review-agent/runner';
 import type { ProgramIo } from '../io.js';
+import type { SpawnResult } from '../lib/spawn.js';
+import { type LocalReviewMode, runLocalReviewCommand } from './local-review.js';
 
 export type ReviewPlatform = 'github' | 'codecommit';
 
 export type RunReviewOpts = {
+  /**
+   * VCS review mode (required when not in local mode).
+   * In local mode these are ignored; in VCS mode they are required.
+   */
   readonly repo: string;
   readonly pr: number;
   readonly configPath: string;
@@ -34,19 +40,70 @@ export type RunReviewOpts = {
   readonly createVCS?: (token: string | null, config: Config) => VCS;
   readonly createProvider?: (apiKey: string, config: Config) => LlmProvider;
   readonly confirm?: () => Promise<boolean>;
+  // ---- Local mode fields (AC: review --local) ----------------------------
+  /**
+   * When set, activates local mode — no VCS credentials required, no
+   * postReview call. Selects the diff acquisition source.
+   */
+  readonly localMode?: LocalReviewMode;
+  /** Target directory for git diff (local mode). Defaults to cwd. */
+  readonly localPath?: string;
+  /** Commit range for --range mode (local mode). */
+  readonly localRange?: string;
+  /** Patch file path for --diff-file mode (local mode). */
+  readonly localDiffFile?: string;
+  /** Minimum severity for non-zero exit in local mode. Default: 'major'. */
+  readonly failOn?: Severity;
+  /** Test seam: override git spawn in local mode. */
+  readonly spawnGit?: (args: string[], cwd: string) => Promise<SpawnResult>;
+  /** Test seam: override sample diff reader in local mode. */
+  readonly readSampleDiff?: () => Promise<string>;
 };
 
 export type RunReviewResult = {
-  readonly status: 'reviewed' | 'skipped' | 'auth_failed' | 'cancelled';
+  readonly status: 'reviewed' | 'skipped' | 'auth_failed' | 'cancelled' | 'diff_error';
   readonly reason?: string;
   readonly postedComments: number;
   readonly costUsd: number;
+  /** Non-zero when local mode has failing findings (>= --fail-on severity). */
+  readonly exitCode?: number;
 };
 
 export async function runReviewCommand(
   io: ProgramIo,
   opts: RunReviewOpts,
 ): Promise<RunReviewResult> {
+  // ---- Local mode: delegate to runLocalReviewCommand (no VCS) ------------
+  if (opts.localMode !== undefined) {
+    const localResult = await runLocalReviewCommand(io, {
+      mode: opts.localMode,
+      targetDir: opts.localPath ?? process.cwd(),
+      ...(opts.localDiffFile !== undefined ? { diffFile: opts.localDiffFile } : {}),
+      ...(opts.localRange !== undefined ? { range: opts.localRange } : {}),
+      configPath: opts.configPath,
+      failOn: opts.failOn ?? 'major',
+      ...(opts.language !== undefined ? { language: opts.language } : {}),
+      ...(opts.profile !== undefined ? { profile: opts.profile } : {}),
+      ...(opts.costCapUsd !== undefined ? { costCapUsd: opts.costCapUsd } : {}),
+      env: opts.env,
+      ...(opts.readFile !== undefined ? { readFile: opts.readFile } : {}),
+      ...(opts.createProvider !== undefined ? { createProvider: opts.createProvider } : {}),
+      ...(opts.spawnGit !== undefined ? { spawnGit: opts.spawnGit } : {}),
+      ...(opts.readSampleDiff !== undefined ? { readSampleDiff: opts.readSampleDiff } : {}),
+    });
+    return {
+      status:
+        localResult.status === 'reviewed'
+          ? 'reviewed'
+          : localResult.status === 'diff_error'
+            ? 'diff_error'
+            : 'auth_failed',
+      postedComments: 0,
+      costUsd: localResult.costUsd,
+      exitCode: localResult.exitCode,
+    };
+  }
+
   const platform: ReviewPlatform = opts.platform ?? 'github';
 
   let token: string | null = null;
@@ -132,6 +189,13 @@ export async function runReviewCommand(
     changedPaths: diff.files.map((f) => f.path),
   });
 
+  // Load external SARIF tool contents (back-compat: no-op when tools list is empty).
+  const externalTools = await loadExternalToolContents(
+    config.external_tools.tools,
+    readFile,
+    (msg) => io.stderr(`${msg}\n`),
+  );
+
   const result = await runReview(
     {
       jobId: `${ref.owner}/${ref.repo}#${ref.number}`,
@@ -163,6 +227,12 @@ export async function runReviewCommand(
       maxFiles: config.reviews.max_files,
       maxDiffLines: config.reviews.max_diff_lines,
       maxSteps: config.reviews.max_steps,
+      suggestions: config.suggestions,
+      largePr: {
+        enabled: config.large_pr.enabled,
+        maxChunks: config.large_pr.max_chunks,
+        prioritization: config.large_pr.prioritization,
+      },
       privacy: {
         allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
         denyPaths: config.privacy.deny_paths,
@@ -172,12 +242,19 @@ export async function runReviewCommand(
       // Pass resolution provenance so the onConfigResolution hook below
       // can log it at the start of the review (issue #146 AC2).
       resolutionLog,
+      ...(externalTools.length > 0 ? { externalTools } : {}),
+      summary: {
+        walkthrough: config.summary.walkthrough,
+        changeImpact: config.summary.change_impact,
+        dependencyView: config.summary.dependency_view,
+      },
     },
     provider,
     {
       onConfigResolution: (log) => {
         io.stderr(formatResolutionLog(log));
       },
+      logger: (msg) => io.stderr(`${msg}\n`),
     },
   );
 
@@ -198,7 +275,7 @@ export async function runReviewCommand(
     return { status: 'cancelled', postedComments: 0, costUsd: result.costUsd };
   }
 
-  await postOrUpdate(vcs, ref, pr, result, previousState);
+  await postOrUpdate(vcs, ref, pr, result, previousState, diff);
   io.stdout(`Posted ${result.comments.length} comments.\n`);
   return {
     status: 'reviewed',
@@ -323,6 +400,39 @@ function defaultReadFile(p: string, enc: 'utf8'): Promise<string> {
 }
 
 /**
+ * Load SARIF file contents for each configured external tool.
+ * Unreadable paths are warned and skipped (review continues without them).
+ */
+async function loadExternalToolContents(
+  tools: ReadonlyArray<{
+    readonly name: string;
+    readonly sarif_path: string;
+    readonly merge_policy: 'tool_wins' | 'annotate' | 'ai_wins';
+  }>,
+  readFile: (p: string, enc: 'utf8') => Promise<string>,
+  warn: (msg: string) => void,
+): Promise<
+  Array<{ name: string; mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins'; sarif: string }>
+> {
+  const result: Array<{
+    name: string;
+    mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    sarif: string;
+  }> = [];
+  for (const tool of tools) {
+    try {
+      const content = await readFile(tool.sarif_path, 'utf8');
+      result.push({ name: tool.name, mergePolicy: tool.merge_policy, sarif: content });
+    } catch {
+      warn(
+        `external_tools: sarif_path '${tool.sarif_path}' for tool '${tool.name}' not found or unreadable — skipping`,
+      );
+    }
+  }
+  return result;
+}
+
+/**
  * Resolve the PR's host/owner/repo triple consumed by the URL
  * allowlist refine in `createReviewOutputSchema` (spec §7.3 #4).
  *
@@ -377,6 +487,7 @@ async function postOrUpdate(
   pr: PR,
   result: RunnerResult,
   previousState: ReviewState | null,
+  diff?: Diff,
 ): Promise<void> {
   const state = buildReviewState({
     previousState,
@@ -387,11 +498,17 @@ async function postOrUpdate(
     tokensUsed: result.tokensUsed.input + result.tokensUsed.output,
     costUsd: result.costUsd,
   });
+  // #152: forward per-file patch data so the GitHub adapter can validate
+  // suggestion anchor lines against the diff hunk context window.
+  const diffPayload = diff
+    ? { files: diff.files.map((f) => ({ path: f.path, patch: f.patch })) }
+    : undefined;
   await vcs.postReview(ref, {
     comments: result.comments,
     summary: result.summary,
     state,
     event: result.reviewEvent,
+    ...(diffPayload !== undefined ? { diff: diffPayload } : {}),
   });
   await vcs.upsertStateComment(ref, state);
 }

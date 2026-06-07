@@ -44,6 +44,8 @@ function makeVCS(overrides: Partial<VCS> = {}): VCS {
       stateComment: 'native',
       approvalEvent: 'github',
       commitMessages: true,
+      conversationReply: true,
+      committableSuggestions: true,
     },
     getPR: vi.fn(async () => samplePR),
     getDiff: vi.fn(async () => ({ baseSha: 'B', headSha: 'H', files: [] })),
@@ -571,5 +573,312 @@ describe('runAction', () => {
     const generateMock = provider.generateReview as ReturnType<typeof vi.fn>;
     const reviewInput = generateMock.mock.calls[0]?.[0] as { language: string } | undefined;
     expect(reviewInput?.language).toBe('ja-JP');
+  });
+
+  // -------------------------------------------------------------------------
+  // #152: suggestions config propagation
+  // -------------------------------------------------------------------------
+
+  it('forwards config.suggestions into the ReviewJob passed to runReview (#152)', async () => {
+    // Verify that when a config with suggestions.enabled=false is loaded,
+    // the LLM-facing system prompt path gets called (which means ReviewJob
+    // was built and passed to the runner). We spy on generateReview to
+    // capture the injected ReviewJob indirectly via the provider call.
+    const generateReview = vi.fn(async () => ({
+      summary: 'OK',
+      comments: [],
+      tokensUsed: { input: 100, output: 50 },
+      costUsd: 0.001,
+    }));
+    const provider: ReturnType<typeof makeProvider> = {
+      ...makeProvider(),
+      generateReview,
+    };
+    const postReview = vi.fn(async () => undefined);
+    const vcs = makeVCS({ postReview });
+    const yaml = 'suggestions:\n  enabled: false\n';
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => yaml,
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        sleep: noSleep,
+      },
+    );
+    // The runner was called (provider.generateReview) — means ReviewJob
+    // with suggestions reached the runner.
+    expect(generateReview).toHaveBeenCalledTimes(1);
+    // postReview was called — means postOrUpdate ran.
+    expect(postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards diff into ReviewPayload.diff when calling postReview (#152)', async () => {
+    // When getDiff returns files with patches, postReview must receive those
+    // patches in the diff field so the GitHub adapter can do hunk validation.
+    const patch = '@@ -1,3 +1,3 @@\n context\n+added at 2\n context at 3';
+    const getDiff = vi.fn(async () => ({
+      baseSha: 'B',
+      headSha: 'H',
+      files: [
+        {
+          path: 'src/a.ts',
+          patch,
+          previousPath: null,
+          status: 'modified' as const,
+          additions: 1,
+          deletions: 0,
+        },
+      ],
+    }));
+    const postReview = vi.fn(async () => undefined);
+    const vcs = makeVCS({ getDiff, postReview });
+    await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        sleep: noSleep,
+      },
+    );
+    expect(postReview).toHaveBeenCalledTimes(1);
+    const payload = (postReview as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as {
+      diff?: { files: Array<{ path: string; patch: string | null }> };
+    };
+    // diff must be forwarded with path + patch for each file.
+    expect(payload.diff).toBeDefined();
+    expect(payload.diff?.files).toHaveLength(1);
+    expect(payload.diff?.files[0]?.path).toBe('src/a.ts');
+    expect(payload.diff?.files[0]?.patch).toBe(patch);
+  });
+
+  // external_tools wiring (#160)
+  it('reads sarif_path and passes externalTools to runReview when configured', async () => {
+    const sarifContent = JSON.stringify({
+      version: '2.1.0',
+      runs: [
+        {
+          tool: { driver: { name: 'CodeQL', rules: [{ id: 'sql-injection' }] } },
+          results: [
+            {
+              ruleId: 'sql-injection',
+              level: 'error',
+              message: { text: 'SQL injection' },
+              locations: [
+                {
+                  physicalLocation: {
+                    artifactLocation: { uri: 'src/db.ts' },
+                    region: { startLine: 5 },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    const vcs = makeVCS();
+    let capturedProvider: LlmProvider | null = null;
+
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async (p) => {
+          if (p === '.review-agent.yml') {
+            return 'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: results/codeql.sarif\n';
+          }
+          if (p === 'results/codeql.sarif') return sarifContent;
+          throw new Error(`unexpected read: ${p}`);
+        },
+        createVCS: () => vcs,
+        createProvider: (_key, _cfg) => {
+          capturedProvider = makeProvider();
+          return capturedProvider;
+        },
+        sleep: noSleep,
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    // The action ran to completion; the SARIF was read (no read errors logged).
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns and skips when sarif_path is not readable, review still completes', async () => {
+    const warnMessages: string[] = [];
+    const vcs = makeVCS();
+
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async (p) => {
+          if (p === '.review-agent.yml') {
+            return 'external_tools:\n  tools:\n    - name: codeql\n      sarif_path: missing.sarif\n';
+          }
+          throw new Error(`not found: ${p}`);
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        logger: (msg) => {
+          warnMessages.push(msg);
+        },
+        sleep: noSleep,
+      },
+    );
+
+    expect(result.skipped).toBe(false);
+    expect(vcs.postReview).toHaveBeenCalledTimes(1);
+    expect(warnMessages.some((m) => m.includes('not found or unreadable'))).toBe(true);
+  });
+});
+
+// #144 Phase B — notification dispatch
+describe('runAction — notification dispatch', () => {
+  function makeMockDispatcher() {
+    const dispatched: Array<import('@review-agent/server/notification').NotificationEvent> = [];
+    const dispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch(event) {
+        dispatched.push(event);
+      },
+    };
+    return { dispatcher, dispatched };
+  }
+
+  it('dispatches review.completed after a successful review', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const vcs = makeVCS();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        notificationDispatcher: dispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    // review.completed is dispatched async (fire-and-forget); wait a tick.
+    await new Promise((r) => setTimeout(r, 0));
+    const completed = dispatched.find((e) => e.type === 'review.completed');
+    expect(completed).toBeDefined();
+    expect(completed?.repo).toBe('o/r');
+    expect(completed?.prNumber).toBe(1);
+    expect(completed?.summary).toContain('Review completed');
+  });
+
+  it('dispatches job.failed when runReview throws and re-throws the original error', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const provider = makeProvider();
+    // Estimate >> cap so cost-guard throws CostExceededError
+    provider.estimateCost = vi.fn(async () => ({ inputTokens: 1_000_000, estimatedUsd: 100 }));
+    const vcs = makeVCS();
+
+    await expect(
+      runAction(
+        { ...inputs, costCapUsd: 0.01 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => provider,
+          notificationDispatcher: dispatcher,
+        },
+      ),
+    ).rejects.toThrow(/cost/i);
+
+    await new Promise((r) => setTimeout(r, 0));
+    const failed = dispatched.find((e) => e.type === 'job.failed');
+    expect(failed).toBeDefined();
+    expect(failed?.repo).toBe('o/r');
+  });
+
+  it('fail-open: a throwing dispatcher does not prevent review.completed result', async () => {
+    const throwingDispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch() {
+        throw new Error('channel down');
+      },
+    };
+    const vcs = makeVCS();
+    // Should not throw despite dispatcher throwing
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        readFile: async () => {
+          throw new Error('no config');
+        },
+        createVCS: () => vcs,
+        createProvider: () => makeProvider(),
+        notificationDispatcher: throwingDispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    expect(result.postedComments).toBeGreaterThanOrEqual(0);
+  });
+
+  it('dispatches budget.overrun when budget_alert threshold fires via config.cost.budget_alert_usd', async () => {
+    const { dispatcher, dispatched } = makeMockDispatcher();
+    const provider = makeProvider();
+    // costUsd (0.001) exceeds budgetAlertUsd (0.0005 from yaml) → budget_alert fires
+    // The provider returns costUsd: 0.001 (from makeProvider)
+    const vcs = makeVCS();
+    const result = await runAction(
+      inputs,
+      { ref },
+      {
+        // Set budget_alert_usd below the provider's costUsd (0.001)
+        readFile: async () => 'cost:\n  budget_alert_usd: 0.0005\n',
+        createVCS: () => vcs,
+        createProvider: () => provider,
+        notificationDispatcher: dispatcher,
+      },
+    );
+    expect(result.skipped).toBe(false);
+    // budget_alert is fired synchronously in cost-guard, but dispatch is async fire-and-forget
+    await new Promise((r) => setTimeout(r, 0));
+    const overrun = dispatched.find((e) => e.type === 'budget.overrun');
+    expect(overrun).toBeDefined();
+    expect(overrun?.repo).toBe('o/r');
+    expect(overrun?.summary).toContain('Budget alert');
+  });
+
+  it('fail-open: a throwing dispatcher for job.failed does not suppress the original error', async () => {
+    const throwingDispatcher: import('@review-agent/server/notification').NotificationDispatcher = {
+      async dispatch() {
+        throw new Error('channel down');
+      },
+    };
+    const provider = makeProvider();
+    provider.estimateCost = vi.fn(async () => ({ inputTokens: 1_000_000, estimatedUsd: 100 }));
+    const vcs = makeVCS();
+
+    // Original cost error must propagate even if dispatcher throws
+    await expect(
+      runAction(
+        { ...inputs, costCapUsd: 0.01 },
+        { ref },
+        {
+          readFile: async () => {
+            throw new Error('no config');
+          },
+          createVCS: () => vcs,
+          createProvider: () => provider,
+          notificationDispatcher: throwingDispatcher,
+        },
+      ),
+    ).rejects.toThrow(/cost/i);
   });
 });

@@ -1,12 +1,13 @@
 import { useTranslation } from 'react-i18next';
 import { useOverview } from '../api/client.js';
+import { ErrorState } from '../components/error-state.js';
 import { MetricCard } from '../components/metric-card.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
 
 export function OverviewPage() {
   const { t } = useTranslation();
-  const { data, isLoading, error } = useOverview();
+  const { data, isLoading, error, refetch } = useOverview();
 
   if (isLoading) {
     return (
@@ -18,9 +19,13 @@ export function OverviewPage() {
 
   if (error || !data) {
     return (
-      <div className="label-mono" style={{ color: 'var(--rust)', padding: '2rem 0' }}>
-        {t('pages.overview.loadingError')}
-      </div>
+      <ErrorState
+        message={t('pages.overview.loadingError')}
+        onRetry={() => {
+          void refetch();
+        }}
+        retryLabel={t('common.retry')}
+      />
     );
   }
 

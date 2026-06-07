@@ -1045,6 +1045,36 @@ RUN curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAK
 
 Hash is updated only via reviewed PR. Renovate config pins the version.
 
+### 7.4.1 External static-analysis tool ingestion (#160)
+
+Beyond gitleaks (secret scanning), operators can configure CI-generated SARIF
+2.1.0 files from arbitrary static-analysis tools (CodeQL, Semgrep, ESLint SARIF
+formatter, etc.). The agent **reads** these files; it does not execute the tools.
+
+**Pipeline:**
+
+1. At entry-point time (action / cli), each `external_tools.tools[].sarif_path`
+   file is read from the workspace. Unreadable paths emit a warning and are
+   skipped; the review continues with AI findings only.
+2. The runner calls `parseSarif()` on each file's content (pure, no I/O). The
+   SARIF parser normalises results to `ReviewOutputComment`-compatible findings.
+   Malformed SARIF or invalid JSON emits a warning and returns no findings.
+3. Each external finding is fingerprinted via `fingerprint(path:line:ruleId:comment)`.
+4. Findings already posted in a previous review (matching `previousState.commentFingerprints`)
+   or muted by a suppression rule are excluded.
+5. Per-tool `ruleset` (category enable / `min_severity`) filters are applied.
+6. The merge-policy resolves fingerprint conflicts between AI and external findings:
+   - `tool_wins` (default) — external finding replaces the AI duplicate; non-conflicting
+     findings from both sides are kept.
+   - `ai_wins` — AI finding is kept; external duplicate dropped; non-conflicting external
+     findings added.
+   - `annotate` — AI body gains `_Also flagged by <name> (`<ruleId>`)_`; external
+     duplicate dropped; non-conflicting external findings added.
+7. The merged comment list (AI ∪ external, deduplicated) is passed to `postReview`.
+
+**Out of scope (explicit):** URL/stdin SARIF input; tool-native non-SARIF JSON
+formats; server-mode operator filesystem reads (seam exists, not wired).
+
 **Telemetry redaction.** The Pino logger has a redaction plugin that strips
 matches against gitleaks' rule set from any log object before serialization.
 Same applies to OTel span attributes via a custom processor.
@@ -1657,9 +1687,57 @@ skills:
 incremental:
   enabled: true                        # default. Set false to always full-review.
 
+large_pr:                              # v1.2; chunked multi-pass review (#158)
+  enabled: true                        # default true; false = legacy skip behaviour
+  max_chunks: 5                        # maximum LLM passes per PR (default 5)
+  prioritization:                      # ordered criteria for file ranking before chunking
+    - path_instructions                # path_instructions-matched files first
+    - diff_size                        # larger diffs earlier (desc)
+    # alphabetical tiebreak is always applied last
+
 server:                                # v1.1; Server / CLI mode only
   workspace_strategy: none             # none | contents-api | sparse-clone (default: none)
 ```
+
+### 10.4 Chunked multi-pass review (large_pr, #158)
+
+When a PR exceeds the `reviews.max_files` or `reviews.max_diff_lines` caps and
+`large_pr.enabled: true` (the default), the runner splits the diff into chunks
+instead of refusing the review:
+
+**Prioritization** — before splitting, files are sorted by the criteria listed in
+`large_pr.prioritization` (applied in order, with alphabetical as the final
+tiebreak):
+
+- `path_instructions` — files matching any `reviews.path_instructions` glob come
+  first (most operator attention).
+- `diff_size` — larger diffs (additions + deletions) come earlier so high-churn
+  files are reviewed before low-churn ones.
+- `alphabetical` — lexicographic ascending fallback; always applied last.
+
+**Chunk splitting** — sorted files are greedily assigned to chunks that each
+respect the `max_files` and `max_diff_lines` per-chunk caps. A file that alone
+exceeds `max_diff_lines` is placed in its own single-file chunk (never silently
+dropped).
+
+**max_chunks limit** — at most `large_pr.max_chunks` chunks are reviewed. Files
+in chunks beyond this limit are recorded in `ExclusionReport` with reason
+`max_chunks_exceeded` and included in the PR summary.
+
+**Cost cap** — the `cost.max_usd_per_pr` cap applies across all chunks (shared
+`CostState`). If the cap is reached mid-review, remaining files are recorded as
+`budget_exhausted`.
+
+**Cross-chunk dedup** — fingerprints accumulate across chunks so an identical
+finding emitted by two chunks is deduplicated to one.
+
+**Coverage reporting** — the PR summary includes a `Large-PR review: reviewed N
+files across M chunks` line followed by skip counts and reasons. Silent truncation
+is forbidden (AC#3).
+
+**Back-compat** — set `large_pr.enabled: false` to restore the pre-v1.2 behavior
+where caps fire as hard skips (`aborted.reason: max_files_exceeded` /
+`max_diff_lines_exceeded`).
 
 ### 10.2 Precedence (highest → lowest)
 
@@ -1990,11 +2068,23 @@ CREATE TABLE audit_log (
   input_tokens INT,
   output_tokens INT,
   prev_hash TEXT,
-  hash TEXT
+  hash TEXT,
+  actor TEXT,          -- operator/service identity (nullable; omitted from hash when null)
+  resource_type TEXT,  -- mutated resource kind (nullable; omitted from hash when null)
+  resource_id TEXT     -- mutated resource identifier (nullable; omitted from hash when null)
 );
 ```
 
 `hash = sha256(prev_hash || row_payload)`. Verifiable by replaying.
+
+**Admin mutation auditing.** The following config-and-access mutations are automatically
+recorded (issue #136): repo CRUD (`repo.create/enable/disable/delete/bulk_register`),
+prompt update (`prompt.update`), BYOK key management (`byok.key.*`), GitHub App installation
+setup (`github_installation.setup`), principal/membership management via CLI
+(`principal.create/delete/password_change`, `membership.grant/revoke`). The `actor` column
+carries the JWT principal ID for HTTP API requests, `cli:<$USER>` for CLI operations, or `null`
+when no authenticated principal is available. Secret material is never written to audit fields.
+Export via `review-agent audit export` includes `actor`, `resource_type`, and `resource_id`.
 
 ---
 

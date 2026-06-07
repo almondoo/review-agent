@@ -32,10 +32,42 @@ export {
 } from './conversation-state.js';
 export { createCostLedgerRecorder, createCostTotalsReader } from './cost-ledger.js';
 export {
+  type CostMetricsOverall,
+  type CostMetricsResult,
+  loadCostMetrics,
+  type ModelCostSnapshot,
+  type PeriodCostBucket,
+  type RepoCostSnapshot,
+} from './cost-metrics.js';
+export {
   type SegmentVerificationReport,
   verifyAuditChainSegmentFromDb,
 } from './hmac-chain.js';
 export { type MigrateOpts, runMigrations } from './migrate.js';
+export {
+  type CreatePrincipalOpts,
+  createPrincipal,
+  deletePrincipal,
+  findPrincipalByExternalId,
+  getPrincipalByUsername,
+  listMemberships,
+  listPrincipals,
+  type MembershipRow,
+  type PrincipalLookup,
+  type PrincipalRow,
+  revokeMembership,
+  setPrincipalPassword,
+  type UpsertOidcPrincipalOpts,
+  type UpsertOidcPrincipalResult,
+  upsertMembership,
+  upsertOidcPrincipal,
+} from './operator-principals.js';
+export { loadOverviewTotals, type OverviewTotals } from './overview-totals.js';
+export {
+  loadQualityMetrics,
+  type QualityMetricsResult,
+  type RepoQualityMetrics,
+} from './quality-metrics.js';
 export {
   type RecoverEvalEventsOpts,
   type RecoverEvalEventsResult,

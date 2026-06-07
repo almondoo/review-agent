@@ -2,12 +2,15 @@ import type {
   BulkCreateRepoBody,
   BulkCreateRepoResponse,
   BYOKProvider,
+  CostMetrics,
   InstallationRepo,
   InstallationReposResponse,
   IntegrationsStatus,
   LlmKeyStatus,
   LlmKeysResponse,
+  MetricsSince,
   OverviewMetrics,
+  QualityMetrics,
   RepoDetail,
   RepoMetrics,
   RepoPrompt,
@@ -906,6 +909,146 @@ const mockInstallationRepos: InstallationRepo[] = [
 export function getMockInstallationRepos(installationId: number): InstallationReposResponse {
   void installationId;
   return { repos: mockInstallationRepos };
+}
+
+// --- Quality metrics mocks ---
+
+export function getMockQualityMetrics(
+  _installationId: number,
+  since: MetricsSince,
+): QualityMetrics {
+  return {
+    period: since,
+    overall: {
+      reviewCount: 347,
+      acceptanceRate: 0.68,
+      falsePositiveRate: 0.12,
+      coverageRate: 0.84,
+      latencyP50Ms: 5200,
+      latencyP95Ms: 9400,
+    },
+    perRepo: [
+      {
+        repo: 'acme/api-service',
+        reviewCount: 82,
+        acceptanceRate: 0.61,
+        falsePositiveRate: 0.15,
+        coverageRate: 0.9,
+        latencyP50Ms: 6100,
+        latencyP95Ms: 9000,
+      },
+      {
+        repo: 'acme/frontend',
+        reviewCount: 74,
+        acceptanceRate: 0.73,
+        falsePositiveRate: 0.09,
+        coverageRate: 0.78,
+        latencyP50Ms: 4800,
+        latencyP95Ms: 8200,
+      },
+      {
+        repo: 'legacy/monolith',
+        reviewCount: 58,
+        acceptanceRate: 0.69,
+        falsePositiveRate: null,
+        coverageRate: null,
+        latencyP50Ms: 5500,
+        latencyP95Ms: 9600,
+      },
+      {
+        repo: 'acme/infra',
+        reviewCount: 71,
+        acceptanceRate: 0.72,
+        falsePositiveRate: 0.1,
+        coverageRate: 0.88,
+        latencyP50Ms: 4900,
+        latencyP95Ms: 8800,
+      },
+      {
+        repo: 'analytics/pipeline',
+        reviewCount: 33,
+        acceptanceRate: null,
+        falsePositiveRate: null,
+        coverageRate: null,
+        latencyP50Ms: null,
+        latencyP95Ms: null,
+      },
+      {
+        repo: 'acme/auth',
+        reviewCount: 29,
+        acceptanceRate: 0.62,
+        falsePositiveRate: 0.14,
+        coverageRate: 0.81,
+        latencyP50Ms: 5600,
+        latencyP95Ms: 9400,
+      },
+    ],
+  };
+}
+
+// --- Cost analytics mocks ---
+
+export function getMockCostMetrics(_installationId: number, since: MetricsSince): CostMetrics {
+  return {
+    period: since,
+    overall: {
+      totalCostUsd: 18.42,
+      totalInputTokens: 2_840_000,
+      totalOutputTokens: 198_000,
+      totalCacheReadTokens: 520_000,
+      totalCacheCreationTokens: 310_000,
+      callCount: 347,
+      budgetAlertUsd: null,
+    },
+    perModel: [
+      {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
+        costUsd: 15.2,
+        callCount: 290,
+      },
+      {
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5',
+        costUsd: 3.22,
+        callCount: 57,
+      },
+    ],
+    perRepo: [
+      { repo: 'acme/api-service', costUsd: 4.8 },
+      { repo: 'acme/auth', costUsd: 3.9 },
+      { repo: 'acme/infra', costUsd: 3.5 },
+      { repo: 'acme/frontend', costUsd: 2.8 },
+      { repo: 'legacy/monolith', costUsd: 2.1 },
+      { repo: 'analytics/pipeline', costUsd: 1.32 },
+    ],
+    nextCursor: null,
+    perPeriod: [
+      { bucket: '2026-05-06T00:00:00.000Z', costUsd: 0.42 },
+      { bucket: '2026-05-07T00:00:00.000Z', costUsd: 0.61 },
+      { bucket: '2026-05-08T00:00:00.000Z', costUsd: 0.38 },
+      { bucket: '2026-05-09T00:00:00.000Z', costUsd: 0.72 },
+      { bucket: '2026-05-10T00:00:00.000Z', costUsd: 0.55 },
+      { bucket: '2026-05-11T00:00:00.000Z', costUsd: 0.88 },
+      { bucket: '2026-05-12T00:00:00.000Z', costUsd: 0.63 },
+      { bucket: '2026-05-13T00:00:00.000Z', costUsd: 0.79 },
+      { bucket: '2026-05-14T00:00:00.000Z', costUsd: 0.47 },
+      { bucket: '2026-05-15T00:00:00.000Z', costUsd: 0.91 },
+      { bucket: '2026-05-16T00:00:00.000Z', costUsd: 0.68 },
+      { bucket: '2026-05-17T00:00:00.000Z', costUsd: 0.84 },
+      { bucket: '2026-05-18T00:00:00.000Z', costUsd: 0.52 },
+      { bucket: '2026-05-19T00:00:00.000Z', costUsd: 0.76 },
+      { bucket: '2026-05-20T00:00:00.000Z', costUsd: 0.93 },
+      { bucket: '2026-05-21T00:00:00.000Z', costUsd: 0.44 },
+      { bucket: '2026-05-22T00:00:00.000Z', costUsd: 0.67 },
+      { bucket: '2026-05-23T00:00:00.000Z', costUsd: 0.81 },
+      { bucket: '2026-05-24T00:00:00.000Z', costUsd: 0.58 },
+      { bucket: '2026-05-25T00:00:00.000Z', costUsd: 0.74 },
+      { bucket: '2026-05-26T00:00:00.000Z', costUsd: 0.96 },
+      { bucket: '2026-05-27T00:00:00.000Z', costUsd: 0.62 },
+      { bucket: '2026-05-28T00:00:00.000Z', costUsd: 0.86 },
+    ],
+  };
 }
 
 /** Sentinel name: triggers a simulated error entry in bulkCreateMockRepos (207 path). */

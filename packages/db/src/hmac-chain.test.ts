@@ -21,6 +21,8 @@ type AuditRowShape = {
 // `.orderBy()` returns an object that is both awaitable AND exposes
 // `.where()` returning a Promise. We use real Promises (no thenables on
 // plain objects) so we don't trip `noThenProperty`.
+// `execute` is stubbed to a no-op so the GUC set_config call in the
+// installationId branch does not throw.
 function fakeDb(rows: AuditRowShape[]): DbClient {
   const builder: {
     where: () => Promise<AuditRowShape[]>;
@@ -34,6 +36,7 @@ function fakeDb(rows: AuditRowShape[]): DbClient {
   };
   const db = {
     select: () => queryBuilder,
+    execute: () => Promise.resolve([]),
   };
   return db as unknown as DbClient;
 }

@@ -30,6 +30,17 @@ export type ReviewEvalEvent = {
   readonly tokensInput: number;
   readonly tokensOutput: number;
   readonly abortReason: ReviewAbortReason | null;
+  /**
+   * Total files in the PR diff after path-filter exclusions (universe the
+   * runner was asked to review). Null when not computable (back-compat).
+   */
+  readonly filesTotal?: number | null;
+  /**
+   * Files actually handed to the LLM. Equals `filesTotal` minus any files
+   * excluded by max_files / max_diff_lines / max_chunks / budget caps.
+   * Null when not computable (back-compat).
+   */
+  readonly filesReviewed?: number | null;
 };
 
 export type ReviewEvalEventRecorder = (event: ReviewEvalEvent) => Promise<void>;

@@ -8,6 +8,7 @@ type RepoRecord = {
   platform: 'github' | 'codecommit';
   name: string;
   enabled: boolean;
+  installationId?: bigint | null;
   systemPrompt: string | null | undefined;
   systemPromptUpdatedAt: Date | null | undefined;
   createdAt: Date;
@@ -81,7 +82,7 @@ type ChainResult = Promise<unknown[]> & {
   limit: (_n: number) => Promise<unknown[]>;
 };
 
-function makeSequentialDb(responses: unknown[][]) {
+function makeSequentialDb(responses: unknown[][], txResponses: unknown[][] = []) {
   let idx = 0;
 
   function chainable(rows: unknown[]): ChainResult {
@@ -109,6 +110,24 @@ function makeSequentialDb(responses: unknown[][]) {
         }),
       }),
     }),
+    // transaction() is used by withTenant for RLS-scoped queries (metrics).
+    // The callback receives a tx object whose select() consumes `txResponses`.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      let txIdx = 0;
+      const tx = {
+        execute: () => Promise.resolve([]),
+        select: (_fields?: unknown) => ({
+          from: (_table: unknown) => ({
+            where: (_cond?: unknown): ChainResult => {
+              const r = txResponses[txIdx] ?? [];
+              txIdx++;
+              return chainable(r);
+            },
+          }),
+        }),
+      };
+      return fn(tx);
+    },
     update: (_table: unknown) => ({
       set: (_patch: unknown) => ({
         where: (_cond: unknown) => Promise.resolve(),
@@ -215,6 +234,44 @@ describe('GET /repos/:id', () => {
     const res = await app.request('http://host/r1');
     const body = await res.json();
     expect(body.systemPromptPresent).toBe(true);
+  });
+
+  it('uses withTenant path when repo has installationId — populates lastReviewAt', async () => {
+    // Repo with installationId → handler wraps reviewEvalEvent query in withTenant.
+    // The tx select returns one eval row; the response should reflect it.
+    const repo = makeRepo({ installationId: 42n, systemPrompt: null });
+    const evalRow = { createdAt: NOW, abortReason: null };
+    const db = makeSequentialDb(
+      [[repo]], // outer: repo lookup
+      [[evalRow]], // tx: last eval event
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+      generateId: () => 'new-id',
+    });
+    const res = await app.request('http://host/r1');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.lastReviewAt).toBe(NOW.toISOString());
+    expect(body.lastOutcome).toBe('commented');
+  });
+
+  it('returns null lastReviewAt for null-installationId repo (no tenant scope)', async () => {
+    // Repo with installationId=null → withTenant skipped → lastReviewAt is null.
+    const repo = makeRepo({ installationId: null, systemPrompt: null });
+    const db = makeSequentialDb([[repo]]);
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+      generateId: () => 'new-id',
+    });
+    const res = await app.request('http://host/r1');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.lastReviewAt).toBeNull();
   });
 });
 
@@ -477,12 +534,12 @@ describe('GET /repos/:id/metrics', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns zeros when no reviews exist', async () => {
-    const db = makeSequentialDb([
-      [{ name: 'org/repo' }], // repo lookup
-      [{ totalReviews: 0, avgDurationMs: null, totalCostUsd: null }], // all-time agg
-      [{ reviewsLast30d: 0 }], // last 30d count
-    ]);
+  it('returns zeros when repo has null installation_id (no RLS tenant scope)', async () => {
+    // Repo without installationId — the handler skips withTenant and returns
+    // 0/0/0/0 because null-installation repos cannot be scoped under RLS.
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: null }]], // repo lookup (no installationId)
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
@@ -497,23 +554,50 @@ describe('GET /repos/:id/metrics', () => {
     expect(body.totalCostUsd).toBe(0);
   });
 
-  it('returns numeric aggregates', async () => {
-    const db = makeSequentialDb([
-      [{ name: 'org/repo' }],
-      [{ totalReviews: 15, avgDurationMs: '1200.5', totalCostUsd: '3.75' }],
-      [{ reviewsLast30d: 5 }],
-    ]);
+  it('aggregates metrics via withTenant when repo has installationId', async () => {
+    // Repo with installationId — handler runs withTenant, which calls
+    // db.transaction(). The tx select() calls consume txResponses.
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: 42n }]], // outer: repo lookup
+      [
+        [{ totalReviews: 15, avgDurationMs: '1200.5', totalCostUsd: '3.75' }], // tx: all-time agg
+        [{ reviewsLast30d: 5 }], // tx: last 30d count
+      ],
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
       now: () => NOW,
     });
     const res = await app.request('http://host/r1/metrics');
+    expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.totalReviews).toBe(15);
     expect(body.reviewsLast30d).toBe(5);
     expect(typeof body.avgDurationMs).toBe('number');
     expect(typeof body.totalCostUsd).toBe('number');
+  });
+
+  it('returns zeros when no reviews exist (installationId present, empty data)', async () => {
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: 99n }]], // outer: repo lookup
+      [
+        [{ totalReviews: 0, avgDurationMs: null, totalCostUsd: null }], // tx: all-time agg
+        [{ reviewsLast30d: 0 }], // tx: last 30d count
+      ],
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request('http://host/r1/metrics');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.totalReviews).toBe(0);
+    expect(body.reviewsLast30d).toBe(0);
+    expect(body.avgDurationMs).toBe(0);
+    expect(body.totalCostUsd).toBe(0);
   });
 });
 
@@ -673,6 +757,8 @@ describe('GET /repos/:id/reviews', () => {
   });
 
   it('returns failed outcome for review with abortReason set', async () => {
+    // Repo has installationId so the handler takes the withTenant path.
+    // Eval row goes into txResponses (consumed by the transaction mock).
     const evalRow = {
       id: BigInt(10),
       repo: 'org/repo',
@@ -683,31 +769,10 @@ describe('GET /repos/:id/reviews', () => {
       latencyMs: 500,
       createdAt: NOW,
     };
-    let callIdx = 0;
-    const responses = [
-      [{ name: 'org/repo', platform: 'github' }], // repo lookup
-      [evalRow], // reviews
-    ];
-    const db = {
-      select: (_fields?: unknown) => ({
-        from: (_table: unknown) => ({
-          where: (_cond?: unknown) => ({
-            limit: (_n: number) => {
-              const r = responses[callIdx] ?? [];
-              callIdx++;
-              return Promise.resolve(r);
-            },
-            orderBy: (..._args: unknown[]) => ({
-              limit: (_n: number) => {
-                const r = responses[callIdx] ?? [];
-                callIdx++;
-                return Promise.resolve(r);
-              },
-            }),
-          }),
-        }),
-      }),
-    };
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', platform: 'github', installationId: 42n }]], // repo lookup
+      [[evalRow]], // tx: reviews (consumed inside withTenant)
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
@@ -721,6 +786,7 @@ describe('GET /repos/:id/reviews', () => {
   });
 
   it('returns platform=codecommit for a codecommit repo review list', async () => {
+    // Repo has installationId so the handler takes the withTenant path.
     const evalRow = {
       id: BigInt(20),
       repo: 'my-cc-repo',
@@ -731,31 +797,10 @@ describe('GET /repos/:id/reviews', () => {
       latencyMs: 100,
       createdAt: NOW,
     };
-    let callIdx = 0;
-    const responses = [
-      [{ name: 'my-cc-repo', platform: 'codecommit' }], // repo lookup
-      [evalRow],
-    ];
-    const db = {
-      select: (_fields?: unknown) => ({
-        from: (_table: unknown) => ({
-          where: (_cond?: unknown) => ({
-            limit: (_n: number) => {
-              const r = responses[callIdx] ?? [];
-              callIdx++;
-              return Promise.resolve(r);
-            },
-            orderBy: (..._args: unknown[]) => ({
-              limit: (_n: number) => {
-                const r = responses[callIdx] ?? [];
-                callIdx++;
-                return Promise.resolve(r);
-              },
-            }),
-          }),
-        }),
-      }),
-    };
+    const db = makeSequentialDb(
+      [[{ name: 'my-cc-repo', platform: 'codecommit', installationId: 55n }]], // repo lookup
+      [[evalRow]], // tx: reviews
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
@@ -769,7 +814,7 @@ describe('GET /repos/:id/reviews', () => {
   });
 
   it('returns nextCursor when hasMore is true', async () => {
-    // Create limit+1 rows so hasMore fires
+    // Create limit+1 rows so hasMore fires; repo has installationId.
     const baseRow = {
       id: BigInt(1),
       repo: 'org/repo',
@@ -785,31 +830,10 @@ describe('GET /repos/:id/reviews', () => {
       id: BigInt(i + 1),
       prNumber: i + 1,
     }));
-    let callIdx = 0;
-    const responses = [
-      [{ name: 'org/repo', platform: 'github' }],
-      rows, // 21 rows > default limit of 20
-    ];
-    const db = {
-      select: (_fields?: unknown) => ({
-        from: (_table: unknown) => ({
-          where: (_cond?: unknown) => ({
-            limit: (_n: number) => {
-              const r = responses[callIdx] ?? [];
-              callIdx++;
-              return Promise.resolve(r);
-            },
-            orderBy: (..._args: unknown[]) => ({
-              limit: (_n: number) => {
-                const r = responses[callIdx] ?? [];
-                callIdx++;
-                return Promise.resolve(r);
-              },
-            }),
-          }),
-        }),
-      }),
-    };
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', platform: 'github', installationId: 77n }]], // repo lookup
+      [rows], // tx: 21 rows > default limit of 20
+    );
     const app = createReposRouter({
       // biome-ignore lint/suspicious/noExplicitAny: test mock
       db: db as any,
@@ -818,5 +842,154 @@ describe('GET /repos/:id/reviews', () => {
     const res = await app.request('http://host/r1/reviews?limit=20');
     const body = await res.json();
     expect(body.nextCursor).not.toBe(null);
+  });
+
+  it('silently coerces non-numeric limit to default (schema transforms, never 422)', async () => {
+    // The reviewsQuerySchema transforms `limit=abc` to 50 (the default) rather
+    // than rejecting it, so the safeParse always succeeds and the handler returns
+    // 200 with the default page size.
+    const db = makeSequentialDb([[{ name: 'org/repo', platform: 'github', installationId: null }]]);
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request('http://host/r1/reviews?limit=abc');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Coerced to default limit, returns empty items for null-installationId repo
+    expect(Array.isArray(body.items)).toBe(true);
+  });
+
+  it('returns 400 for cursor with valid base64 JSON but NaN timestamp', async () => {
+    // decodeCursor succeeds (returns {t, id}) but new Date(decoded.t) is NaN.
+    // Exercises the Number.isNaN branch (line 663 in repos.ts).
+    const badCursor = Buffer.from(JSON.stringify({ t: 'not-a-date', id: '1' })).toString(
+      'base64url',
+    );
+    const db = makeSequentialDb([[{ name: 'org/repo', platform: 'github', installationId: null }]]);
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request(`http://host/r1/reviews?cursor=${badCursor}`);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe('invalid_cursor');
+  });
+
+  it('passes cursor into withTenant query when repo has installationId', async () => {
+    // Exercises the cursorDate !== undefined && cursorId !== undefined true branch
+    // inside the withTenant call (line 696 in repos.ts): the query uses the
+    // cursor-filtered WHERE clause rather than the no-cursor fallback.
+    const cursorDate = new Date('2026-04-01T00:00:00Z');
+    const validCursor = Buffer.from(
+      JSON.stringify({ t: cursorDate.toISOString(), id: '5' }),
+    ).toString('base64url');
+
+    const evalRow = {
+      id: BigInt(3),
+      repo: 'org/repo',
+      prNumber: 2,
+      jobId: 'j2',
+      abortReason: null,
+      costUsd: 0.02,
+      latencyMs: 200,
+      createdAt: new Date('2026-03-15T00:00:00Z'),
+    };
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', platform: 'github', installationId: 42n }]], // repo lookup
+      [[evalRow]], // tx: reviews with cursor filter applied
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request(`http://host/r1/reviews?cursor=${validCursor}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Should return the eval row mapped to a ReviewEvent
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].outcome).toBe('commented');
+    expect(body.nextCursor).toBe(null); // only 1 row, no next page
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /:id/metrics — additional branch coverage
+// ---------------------------------------------------------------------------
+
+describe('GET /repos/:id/metrics — additional branches', () => {
+  it('returns zeros when last30d tx call returns empty array (last30d undefined)', async () => {
+    // Covers the results.last30d?.reviewsLast30d branch where last30d is
+    // undefined (tx second select returns []).
+    const db = makeSequentialDb(
+      [[{ name: 'org/repo', installationId: 42n }]],
+      [
+        [{ totalReviews: 3, avgDurationMs: '500', totalCostUsd: '0.5' }], // all-time agg
+        [], // last30d returns empty — last30dRows[0] is undefined
+      ],
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request('http://host/r1/metrics');
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.reviewsLast30d).toBe(0);
+    // All-time values are still populated
+    expect(body.totalReviews).toBe(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /:id — lastReviewAt populated when installationId present
+// ---------------------------------------------------------------------------
+
+describe('PATCH /repos/:id — lastReviewAt and lastOutcome populated via withTenant', () => {
+  it('returns lastReviewAt and lastOutcome from withTenant event when repo has installationId', async () => {
+    // Exercises lines 446-447: last !== undefined true branch in PATCH summary.
+    // The tx (called twice by PATCH: once for GET /:id, once post-update) returns
+    // an event row on the second transaction call.
+    const evalRow = { createdAt: NOW, abortReason: null };
+    const repoRow = {
+      id: 'r1',
+      platform: 'github',
+      name: 'org/repo',
+      enabled: true,
+      installationId: 55n,
+      systemPrompt: null,
+      systemPromptUpdatedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+      deletedAt: null,
+    };
+    // PATCH /:id selects the repo twice:
+    //   1. Before update (to check existence + principal auth)
+    //   2. After update (to build summary response)
+    // Each outer select() call consumes one response entry.
+    // Then withTenant (called after update) consumes one txResponse entry.
+    const db = makeSequentialDb(
+      [[repoRow], [repoRow]], // outer: before-update lookup, after-update lookup
+      [[evalRow]], // tx: last eval event for the repo
+    );
+    const app = createReposRouter({
+      // biome-ignore lint/suspicious/noExplicitAny: test mock
+      db: db as any,
+      now: () => NOW,
+    });
+    const res = await app.request('http://host/r1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.lastReviewAt).toBe(NOW.toISOString());
+    expect(body.lastOutcome).toBe('commented');
   });
 });

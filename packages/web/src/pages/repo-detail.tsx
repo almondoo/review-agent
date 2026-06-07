@@ -13,6 +13,7 @@ import type { ReviewEvent } from '../api/types.js';
 import { ConfirmDialog } from '../components/confirm-dialog.js';
 import type { Column } from '../components/data-table.js';
 import { DataTable } from '../components/data-table.js';
+import { ErrorState } from '../components/error-state.js';
 import { Hairline } from '../components/hairline.js';
 import { MetricCard } from '../components/metric-card.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
@@ -87,9 +88,18 @@ export function RepoDetailPage() {
     },
   ];
 
-  const { data: repo, isLoading: repoLoading, error: repoError } = useRepoDetail(safeId);
-  const { data: metrics } = useRepoMetrics(safeId);
-  const { data: reviews } = useRepoReviews(safeId, 10);
+  const {
+    data: repo,
+    isLoading: repoLoading,
+    error: repoError,
+    refetch: refetchRepo,
+  } = useRepoDetail(safeId);
+  const { data: metrics, error: metricsError, refetch: refetchMetrics } = useRepoMetrics(safeId);
+  const {
+    data: reviews,
+    error: reviewsError,
+    refetch: refetchReviews,
+  } = useRepoReviews(safeId, 10);
   const { data: promptData, isLoading: promptLoading, error: promptError } = useRepoPrompt(safeId);
   const patchRepo = usePatchRepo();
   const deleteRepo = useDeleteRepo();
@@ -106,14 +116,13 @@ export function RepoDetailPage() {
 
   if (repoError || !repo) {
     return (
-      <div style={{ padding: '2rem 0' }}>
-        <p className="label-mono" style={{ color: 'var(--rust)', marginBottom: '1rem' }}>
-          {t('pages.repoDetail.loadingError')}
-        </p>
-        <Link to="/repos" className="label-mono" style={{ color: 'var(--graphite)' }}>
-          {t('pages.repoDetail.backToRepos')}
-        </Link>
-      </div>
+      <ErrorState
+        message={t('pages.repoDetail.loadingError')}
+        onRetry={() => {
+          void refetchRepo();
+        }}
+        retryLabel={t('common.retry')}
+      />
     );
   }
 
@@ -257,6 +266,19 @@ export function RepoDetailPage() {
           <Hairline style={{ marginTop: '1rem', marginBottom: '2rem' }} />
         </StaggerItem>
 
+        {/* Metrics error */}
+        {metricsError && !metrics && (
+          <StaggerItem>
+            <ErrorState
+              message={t('pages.repoDetail.loadingError')}
+              onRetry={() => {
+                void refetchMetrics();
+              }}
+              retryLabel={t('common.retry')}
+            />
+          </StaggerItem>
+        )}
+
         {/* Metrics */}
         {metrics && (
           <StaggerItem>
@@ -304,6 +326,15 @@ export function RepoDetailPage() {
             title={t('pages.repoDetail.recentReviews')}
             subtitle={t('pages.repoDetail.recentReviewsSubtitle')}
           />
+          {reviewsError && !reviews && (
+            <ErrorState
+              message={t('pages.repoDetail.loadingError')}
+              onRetry={() => {
+                void refetchReviews();
+              }}
+              retryLabel={t('common.retry')}
+            />
+          )}
           {reviews && (
             <DataTable
               columns={REVIEW_COLUMNS}

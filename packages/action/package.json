@@ -31,7 +31,8 @@
     "@review-agent/core": "workspace:*",
     "@review-agent/llm": "workspace:*",
     "@review-agent/platform-github": "workspace:*",
-    "@review-agent/runner": "workspace:*"
+    "@review-agent/runner": "workspace:*",
+    "@review-agent/server": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "24.0.0",

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Link, useLocation } from 'react-router-dom';
 import { useIntegrations } from '../api/client.js';
 import type { CodeCommitIntegration, GithubIntegration, LlmIntegration } from '../api/types.js';
+import { ErrorState } from '../components/error-state.js';
 import { Hairline } from '../components/hairline.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { SectionHeading } from '../components/section-heading.js';
@@ -101,6 +102,22 @@ function Field({ label, value }: FieldProps) {
   );
 }
 
+const ctaBtnStyle: React.CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: '0.6875rem',
+  fontWeight: 700,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase',
+  color: 'var(--fg)',
+  background: 'none',
+  border: '1px solid var(--hairline)',
+  borderRadius: 'var(--radius)',
+  padding: '0.375rem 0.75rem',
+  cursor: 'pointer',
+  display: 'inline-block',
+  textDecoration: 'none',
+};
+
 function GithubCard({ data }: { data: GithubIntegration }) {
   const { t } = useTranslation();
   return (
@@ -110,29 +127,34 @@ function GithubCard({ data }: { data: GithubIntegration }) {
         label={t('pages.integrations.fieldInstallations')}
         value={String(data.installationCount)}
       />
-      {data.appSlug !== null && (
+      {/* App not configured at all — server-side setup missing */}
+      {data.appId === null && (
+        <dt style={{ gridColumn: '1 / -1', marginTop: '0.75rem' }}>
+          <span className="label-mono" style={{ color: 'var(--graphite)', fontSize: '0.6875rem' }}>
+            {t('pages.integrations.appNotConfigured')}
+          </span>
+        </dt>
+      )}
+      {/* App is configured and appSlug is set — show connect button */}
+      {data.appId !== null && data.appSlug !== null && (
         <dt style={{ gridColumn: '1 / -1', marginTop: '0.75rem' }}>
           <button
             type="button"
             onClick={() => {
               window.location.assign('/github/install-redirect');
             }}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: 'var(--fg)',
-              background: 'none',
-              border: '1px solid var(--hairline)',
-              borderRadius: 'var(--radius)',
-              padding: '0.375rem 0.75rem',
-              cursor: 'pointer',
-            }}
+            style={ctaBtnStyle}
           >
             {t('pages.integrations.connectGithub')}
           </button>
+        </dt>
+      )}
+      {/* App is configured and already has installations — show manage link */}
+      {data.configured && data.installationCount > 0 && (
+        <dt style={{ gridColumn: '1 / -1', marginTop: '0.5rem' }}>
+          <Link to="/integrations/github" style={ctaBtnStyle}>
+            {t('pages.integrations.manageGithub')}
+          </Link>
         </dt>
       )}
     </IntegrationCard>
@@ -158,6 +180,11 @@ function LlmCard({ data }: { data: LlmIntegration }) {
     <IntegrationCard title="LLM Provider" tag="ai / model" configured={data.configured}>
       <Field label={t('pages.integrations.fieldProvider')} value={data.provider ?? '—'} />
       <Field label={t('pages.integrations.fieldModel')} value={data.model ?? '—'} />
+      <dt style={{ gridColumn: '1 / -1', marginTop: '0.75rem' }}>
+        <Link to="/integrations/keys" style={ctaBtnStyle}>
+          {t('pages.integrations.manageKeys')}
+        </Link>
+      </dt>
     </IntegrationCard>
   );
 }
@@ -181,7 +208,7 @@ function errorKey(err: SetupError): string {
 
 export function IntegrationsPage() {
   const { t } = useTranslation();
-  const { data, isLoading, error } = useIntegrations();
+  const { data, isLoading, error, refetch } = useIntegrations();
   const { search } = useLocation();
   const initialSetupError = getSetupError(search);
   const [setupError, setSetupError] = useState<SetupError | null>(initialSetupError);
@@ -251,11 +278,15 @@ export function IntegrationsPage() {
         </StaggerItem>
       )}
 
-      {error && (
+      {error && !isLoading && (
         <StaggerItem>
-          <div className="label-mono" style={{ color: 'var(--rust)' }}>
-            {t('pages.integrations.loadingError')}
-          </div>
+          <ErrorState
+            message={t('pages.integrations.loadingError')}
+            onRetry={() => {
+              void refetch();
+            }}
+            retryLabel={t('common.retry')}
+          />
         </StaggerItem>
       )}
 
@@ -274,25 +305,6 @@ export function IntegrationsPage() {
           </div>
         </StaggerItem>
       )}
-
-      <StaggerItem>
-        <div style={{ marginTop: '1.5rem' }}>
-          <Link
-            to="/integrations/keys"
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '0.6875rem',
-              fontWeight: 700,
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-              color: 'var(--fg)',
-              textDecoration: 'none',
-            }}
-          >
-            {t('pages.byokKeys.manageKeysLink')}
-          </Link>
-        </div>
-      </StaggerItem>
     </StaggerContainer>
   );
 }

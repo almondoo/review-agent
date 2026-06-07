@@ -139,6 +139,17 @@ const CostSchema = z
     max_usd_per_pr: z.number().positive().default(1.0),
     hard_stop: z.boolean().default(true),
     daily_cap_usd: z.number().positive().default(50.0),
+    /**
+     * Soft budget alert threshold in USD (cumulative within the billing period).
+     * When the running cost for a job crosses this value, `onThresholdCrossed`
+     * is called with `threshold: 'budget_alert'` — a purely informational event
+     * that does NOT abort the review. The intent is to let OTel / audit logs
+     * capture the crossing so operators can act on it.
+     *
+     * Actual notification delivery (Slack / email) is deferred to issue #144.
+     * Not set by default (undefined = alert disabled).
+     */
+    budget_alert_usd: z.number().positive().optional(),
   })
   .strict();
 
@@ -259,6 +270,71 @@ const CoordinationSchema = z
   })
   .strict();
 
+// Large-PR / monorepo strategy (#158). Controls how the runner handles PRs
+// that exceed the `reviews.max_files` / `reviews.max_diff_lines` caps.
+//
+//   enabled (default true)     — when true and a PR exceeds the caps, the runner
+//                                splits the diff into chunks and reviews each chunk
+//                                in sequence (up to `max_chunks`). When false, the
+//                                runner uses the legacy skip behaviour (same as
+//                                before this feature).
+//
+//   max_chunks (default 5)     — maximum number of chunks to review per PR. Files
+//                                that would be in chunk N+1 are skipped and recorded
+//                                in the ExclusionReport with reason='max_chunks_exceeded'.
+//
+//   prioritization (default ['path_instructions','diff_size']) — ordered list of
+//                                criteria used to rank files before chunk assignment.
+//                                Supported values:
+//                                  'path_instructions' — files matching a
+//                                    path_instructions glob are ranked first.
+//                                  'diff_size'         — larger diffs (by added+deleted
+//                                    line count) are ranked earlier.
+//                                  'alphabetical'      — lexicographic tie-break
+//                                    (always applied last, implicit).
+//
+// Cost impact: with enabled=true, a large PR may trigger multiple LLM calls.
+// The PR-level cost cap (`cost.max_usd_per_pr`) applies across all chunks; if
+// the cap is hit mid-review the remaining files are recorded as budget_exhausted.
+const LARGE_PR_PRIORITIZATION_CRITERIA = [
+  'path_instructions',
+  'diff_size',
+  'alphabetical',
+] as const;
+
+export const LargePrSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    max_chunks: z.number().int().positive().default(5),
+    prioritization: z
+      .array(z.enum(LARGE_PR_PRIORITIZATION_CRITERIA))
+      .default(['path_instructions', 'diff_size']),
+  })
+  .strict();
+
+export type LargePr = z.infer<typeof LargePrSchema>;
+
+// Committable-suggestion gating (#152). Controls which categories of LLM
+// suggestions are rendered as GitHub ```suggestion blocks (or equivalent
+// informational code blocks on other platforms).
+//
+//   enabled (default true)   — when false, all `suggestion` fields are stripped
+//                              before posting; only the comment body is published.
+//   categories (default all) — suggestion blocks are only rendered for findings
+//                              whose category is in this list. Findings in other
+//                              categories keep their body but lose the suggestion
+//                              block. Findings with no category always keep their
+//                              suggestion (category-level gating requires a
+//                              category to match against).
+const SuggestionsSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    categories: z.array(z.enum(CATEGORIES)).default([...CATEGORIES]),
+  })
+  .strict();
+
+export type Suggestions = z.infer<typeof SuggestionsSchema>;
+
 // Feedback-loop tuning (#155). `suppress_after` is the number of distinct
 // 👎 / `/feedback reject` signals on the same finding fingerprint before a
 // persistent suppression rule is created (stored as a `suppression_rule`
@@ -316,6 +392,75 @@ export const RulesetSchema = z.record(z.enum(CATEGORIES), RulesetCategorySchema)
 
 export type Ruleset = z.infer<typeof RulesetSchema>;
 
+// Notifications configuration (#144). Drives the notification dispatcher in
+// `@review-agent/server`. Secrets (webhook URL, SMTP password) are NEVER
+// placed in this config — they are read from env at runtime:
+//
+//   REVIEW_AGENT_SLACK_WEBHOOK_URL   — Slack incoming webhook URL
+//   REVIEW_AGENT_SMTP_PASSWORD       — SMTP account password
+//
+// SES authentication uses the AWS credential chain (no secret in config).
+const NotificationEventsSchema = z
+  .object({
+    job_failed: z.boolean().default(true),
+    budget_overrun: z.boolean().default(true),
+    // Defaults to false — operators must opt in to receive a notification
+    // for every completed review (can be noisy in high-PR-volume repos).
+    review_completed: z.boolean().default(false),
+  })
+  .strict();
+
+const NotificationSmtpSchema = z
+  .object({
+    host: z.string().min(1),
+    port: z.number().int().positive().default(587),
+    secure: z.boolean().default(false),
+    // SMTP account username. Password is env REVIEW_AGENT_SMTP_PASSWORD.
+    user: z.string().min(1),
+  })
+  .strict();
+
+const NotificationSesSchema = z
+  .object({
+    // AWS region for the SES client. Falls back to AWS_REGION / AWS_DEFAULT_REGION
+    // from the credential chain when absent.
+    region: z.string().optional(),
+  })
+  .strict();
+
+const NotificationEmailSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    transport: z.enum(['smtp', 'ses']).default('smtp'),
+    // Sender address in RFC 5322 format, e.g. "Review Agent <noreply@example.com>".
+    from: z.string().optional(),
+    to: z.array(z.string().min(1)).default([]),
+    smtp: NotificationSmtpSchema.optional(),
+    ses: NotificationSesSchema.optional(),
+  })
+  .strict();
+
+const NotificationSlackSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    // Webhook URL is env REVIEW_AGENT_SLACK_WEBHOOK_URL — not stored in config.
+  })
+  .strict();
+
+export const NotificationsSchema = z
+  .object({
+    events: NotificationEventsSchema.default({}),
+    slack: NotificationSlackSchema.default({}),
+    email: NotificationEmailSchema.default({}),
+  })
+  .strict();
+
+export type NotificationsConfig = z.infer<typeof NotificationsSchema>;
+export type NotificationEventsConfig = z.infer<typeof NotificationEventsSchema>;
+export type NotificationEmailConfig = z.infer<typeof NotificationEmailSchema>;
+export type NotificationSmtpConfig = z.infer<typeof NotificationSmtpSchema>;
+export type NotificationSesConfig = z.infer<typeof NotificationSesSchema>;
+
 // `extends:` (§10.2 / #151) supports three forms:
 //
 //   extends: org               — org-merge keyword (§10.2 layer 3). Merges
@@ -339,6 +484,66 @@ export type Ruleset = z.infer<typeof RulesetSchema>;
 const ExtendsSchema = z
   .union([z.literal('org'), z.string().min(1), z.array(z.string().min(1)), z.null()])
   .optional();
+
+// PR summary sections (#134). Controls which Markdown sections appear in the
+// `summary` field of the review output.
+//
+//   walkthrough (default true)    — per-file or per-area narrative explaining
+//                                   what changed and why (inferred from diff).
+//   change_impact (default true)  — blast-radius analysis: modules, packages,
+//                                   or areas likely affected by the change,
+//                                   inferred from diff / changedPaths / visible
+//                                   imports. No static graph analysis.
+//   dependency_view (default false) — opt-in: plain-text / Markdown list of
+//                                   files that depend on the changed files, as
+//                                   inferred by the LLM from import lines in
+//                                   the diff. No static import analysis is
+//                                   performed; this is best-effort LLM guess.
+export const SummarySchema = z
+  .object({
+    walkthrough: z.boolean().default(true),
+    change_impact: z.boolean().default(true),
+    dependency_view: z.boolean().default(false),
+  })
+  .strict();
+
+export type Summary = z.infer<typeof SummarySchema>;
+
+// External static-analysis tool configuration (#160). Enables the runner to
+// ingest SARIF 2.1.0 output generated by CI tools (e.g. CodeQL, Semgrep,
+// ESLint SARIF formatter) and merge findings with the AI review results.
+//
+// `name`          — display name for the tool (used as ruleId prefix when the
+//                   SARIF result carries no ruleId, and in annotation bodies).
+// `sarif_path`    — path to the SARIF output file, resolved at entry-point
+//                   time (action/cli). Relative to the repo root / CWD.
+// `merge_policy`  — controls how external findings interact with AI findings
+//                   when both flag the same location (same fingerprint):
+//
+//   `tool_wins` (default) — the external tool finding is kept; the AI duplicate
+//                           is dropped. Non-conflicting findings from both sides
+//                           are kept.
+//   `ai_wins`   — the AI finding is kept; the external duplicate is dropped.
+//                 Non-conflicting external findings are still added.
+//   `annotate`  — keep the AI finding and append a `_Also flagged by <name>_`
+//                 note to its body; drop the external duplicate. Non-conflicting
+//                 external findings are added.
+const ExternalToolSchema = z
+  .object({
+    name: z.string().min(1),
+    sarif_path: z.string().min(1),
+    merge_policy: z.enum(['tool_wins', 'annotate', 'ai_wins']).default('tool_wins'),
+  })
+  .strict();
+
+const ExternalToolsSchema = z
+  .object({
+    tools: z.array(ExternalToolSchema).default([]),
+  })
+  .strict();
+
+export type ExternalTool = z.infer<typeof ExternalToolSchema>;
+export type ExternalTools = z.infer<typeof ExternalToolsSchema>;
 
 export const ConfigSchema = z
   .object({
@@ -366,6 +571,30 @@ export const ConfigSchema = z
     // 👎/reject signals on a finding fingerprint trigger a persistent
     // suppression rule. Absent `feedback` key == defaults (suppress_after: 3).
     feedback: FeedbackSchema.default({}),
+    // Committable-suggestion gating (#152): controls whether and for which
+    // categories `suggestion` fields are rendered as platform suggestion blocks.
+    // Absent `suggestions` key == defaults (enabled: true, all categories).
+    suggestions: SuggestionsSchema.default(SuggestionsSchema.parse({})),
+    // Large-PR / monorepo strategy (#158): controls chunked multi-pass review
+    // for PRs that exceed max_files / max_diff_lines caps.
+    // Absent `large_pr` key == defaults (enabled: true, max_chunks: 5, ...).
+    large_pr: LargePrSchema.default(LargePrSchema.parse({})),
+    // External static-analysis tool integration (#160): ingest SARIF 2.1.0
+    // output files from CI tools and merge with AI findings via fingerprint
+    // dedup + configurable merge_policy. Absent `external_tools` key == no
+    // external findings injected (complete back-compat).
+    external_tools: ExternalToolsSchema.default(ExternalToolsSchema.parse({})),
+    // Notification channels (#144): Slack incoming webhook and/or email (SMTP/SES).
+    // Events job_failed and budget_overrun are on by default; review_completed is off.
+    // Secrets (webhook URL, SMTP password) live in env, not in config.
+    // Absent `notifications` key == all channels disabled (back-compat).
+    notifications: NotificationsSchema.default(NotificationsSchema.parse({})),
+    // PR summary sections (#134): controls which Markdown sections the LLM
+    // includes in the `summary` field. walkthrough and change_impact are ON
+    // by default; dependency_view is opt-in (default OFF).
+    // Absent `summary` key == defaults (walkthrough=true, change_impact=true,
+    // dependency_view=false).
+    summary: SummarySchema.default(SummarySchema.parse({})),
   })
   .strict();
 

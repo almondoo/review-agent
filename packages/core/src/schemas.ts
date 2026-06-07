@@ -62,6 +62,20 @@ export const InlineCommentSchema = z
     confidence: z.enum(CONFIDENCES).optional(),
     ruleId: z.string().min(RULE_ID_MIN).max(RULE_ID_MAX).regex(RULE_ID_PATTERN).optional(),
     suggestion: z.string().max(SUGGESTION_MAX).optional(),
+    /**
+     * First line of a multi-line suggestion range (#165). Must be a
+     * positive integer strictly less than `line` (GitHub's API
+     * constraint: `start_line` < `line`). When absent the comment is
+     * single-line (back-compat with #152).
+     */
+    startLine: z.number().int().positive().max(LINE_MAX).optional(),
+    /**
+     * Side for the start anchor of a multi-line range (#165). Defaults
+     * to the same side as `side` when absent. Only meaningful with
+     * `startLine`. GitHub only supports RIGHT-side suggestions, so the
+     * adapter suppresses the suggestion block when either side is LEFT.
+     */
+    startSide: z.enum(SIDES).optional(),
   })
   .strict()
   // Enforce the taxonomy rule that `style` findings never exceed
@@ -74,7 +88,15 @@ export const InlineCommentSchema = z
       message: "category='style' must be at most severity='minor'",
       path: ['severity'],
     },
-  );
+  )
+  // Enforce the GitHub API constraint: start_line must be strictly
+  // less than line. Without this check a caller could pass
+  // startLine === line (which GitHub rejects with 422) or
+  // startLine > line (which is semantically inverted).
+  .refine((c) => c.startLine === undefined || c.startLine < c.line, {
+    message: "'startLine' must be strictly less than 'line'",
+    path: ['startLine'],
+  });
 
 /**
  * Inputs that {@link createReviewOutputSchema} bakes into its URL

@@ -1,6 +1,7 @@
 import { auditLog, costLedger } from '@review-agent/core/db';
 import { and, asc, eq, gte, lt, lte, sql } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
+import { TENANT_GUC } from './tenancy.js';
 
 export type AuditLogExportRow = {
   readonly kind: 'audit';
@@ -14,6 +15,9 @@ export type AuditLogExportRow = {
   readonly outputTokens: number | null;
   readonly prevHash: string | null;
   readonly hash: string;
+  readonly actor: string | null;
+  readonly resourceType: string | null;
+  readonly resourceId: string | null;
 };
 
 export type CostLedgerExportRow = {
@@ -45,6 +49,9 @@ export async function loadAuditLogForExport(
   db: DbClient,
   opts: LoadExportOpts,
 ): Promise<ReadonlyArray<AuditLogExportRow>> {
+  // Set the tenant GUC so the RLS `using` clause allows the SELECT.
+  const tenantId = String(opts.installationId);
+  await db.execute(sql`SELECT set_config(${TENANT_GUC}, ${tenantId}, true)`);
   const conditions = [
     eq(auditLog.installationId, opts.installationId),
     gte(auditLog.ts, opts.since),
@@ -62,6 +69,9 @@ export async function loadAuditLogForExport(
       outputTokens: auditLog.outputTokens,
       prevHash: auditLog.prevHash,
       hash: auditLog.hash,
+      actor: auditLog.actor,
+      resourceType: auditLog.resourceType,
+      resourceId: auditLog.resourceId,
     })
     .from(auditLog)
     .where(and(...conditions))
@@ -78,6 +88,9 @@ export async function loadAuditLogForExport(
     outputTokens: r.outputTokens,
     prevHash: r.prevHash,
     hash: r.hash,
+    actor: r.actor,
+    resourceType: r.resourceType,
+    resourceId: r.resourceId,
   }));
 }
 

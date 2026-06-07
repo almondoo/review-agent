@@ -10,6 +10,24 @@ export type AuditEvent = {
   readonly model?: string | null;
   readonly inputTokens?: number | null;
   readonly outputTokens?: number | null;
+  /**
+   * Optional identity of the operator or system process that triggered this
+   * event (e.g. a principal username or service identifier). Omitting or
+   * passing `null`/`undefined` is equivalent — see canonicalPayload for the
+   * backward-compatibility guarantee.
+   */
+  readonly actor?: string | null;
+  /**
+   * Optional resource type that was mutated (e.g. 'repo', 'principal',
+   * 'membership', 'github_installation'). Omitting or passing `null`/`undefined`
+   * is equivalent — canonicalPayload omits null values for backward compatibility.
+   */
+  readonly resourceType?: string | null;
+  /**
+   * Optional resource identifier (e.g. repo UUID, principal ID, composite key).
+   * Omitting or passing `null`/`undefined` is equivalent.
+   */
+  readonly resourceId?: string | null;
 };
 
 export type AuditRow = AuditEvent & {
@@ -19,7 +37,12 @@ export type AuditRow = AuditEvent & {
 };
 
 export function canonicalPayload(ev: AuditEvent, ts: Date): string {
-  const ordered = {
+  // BACKWARD-COMPAT NOTE: The `actor` field is appended to the canonical
+  // object ONLY when it is a non-null, non-undefined string. Events without
+  // an actor produce a JSON string byte-for-byte identical to events produced
+  // before `actor` was introduced, so existing stored HMAC hashes remain
+  // valid and re-verification succeeds without any data migration.
+  const ordered: Record<string, string | number | null> = {
     ts: ts.toISOString(),
     installationId: ev.installationId != null ? String(ev.installationId) : null,
     prId: ev.prId ?? null,
@@ -28,6 +51,19 @@ export function canonicalPayload(ev: AuditEvent, ts: Date): string {
     inputTokens: ev.inputTokens ?? null,
     outputTokens: ev.outputTokens ?? null,
   };
+  if (ev.actor != null) {
+    ordered.actor = ev.actor;
+  }
+  // BACKWARD-COMPAT NOTE: resourceType and resourceId follow the same pattern
+  // as actor — appended ONLY when non-null. Events without these fields produce
+  // a JSON string byte-for-byte identical to events produced before these fields
+  // were introduced.
+  if (ev.resourceType != null) {
+    ordered.resourceType = ev.resourceType;
+  }
+  if (ev.resourceId != null) {
+    ordered.resourceId = ev.resourceId;
+  }
   return JSON.stringify(ordered);
 }
 
@@ -46,6 +82,12 @@ export type ChainLink = {
   readonly model: string | null;
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
+  /** Present when the audit row was written after the actor field was added. */
+  readonly actor?: string | null;
+  /** Present when the audit row was written after the resource_type field was added. */
+  readonly resourceType?: string | null;
+  /** Present when the audit row was written after the resource_id field was added. */
+  readonly resourceId?: string | null;
 };
 
 export type ChainBreak = {

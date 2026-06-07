@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   applyPathFilters,
   countDiffLines,
+  countFileDiffLines,
   type ParsedDiff,
+  type ParsedDiffFile,
   parseDiffByFile,
   reassembleDiff,
+  sortByPrioritization,
+  splitIntoChunks,
 } from './diff-filter.js';
 
 // Builder for the production `--- <path>\n<patch>` joined-by-`\n`
@@ -339,5 +343,165 @@ describe('countDiffLines', () => {
     // preamble here, an unparseable test fixture would inflate the
     // count and the cap would fire on it.
     expect(countDiffLines(parsed)).toBe(1);
+  });
+});
+
+describe('countFileDiffLines', () => {
+  it('returns 0 for an empty body', () => {
+    expect(countFileDiffLines({ path: 'a.ts', body: '' })).toBe(0);
+  });
+
+  it('counts + and - lines in a file body', () => {
+    const file: ParsedDiffFile = { path: 'a.ts', body: '@@ -1 +1 @@\n+new\n-old\n context' };
+    expect(countFileDiffLines(file)).toBe(2);
+  });
+
+  it('skips +++ and --- decoration lines', () => {
+    const file: ParsedDiffFile = {
+      path: 'a.ts',
+      body: '+++ b/a.ts\n--- a/a.ts\n+real-add',
+    };
+    expect(countFileDiffLines(file)).toBe(1);
+  });
+});
+
+describe('sortByPrioritization', () => {
+  const files: ReadonlyArray<ParsedDiffFile> = [
+    { path: 'src/c.ts', body: '+one\n+two\n+three' }, // 3 diff lines
+    { path: 'src/a.ts', body: '+one' }, // 1 diff line
+    { path: 'src/b.ts', body: '+one\n+two' }, // 2 diff lines
+    { path: 'tests/c.test.ts', body: '+one\n+two\n+three\n+four' }, // 4 diff lines, matches path instruction
+  ];
+
+  it('sorts by path_instructions first (matched files come first)', () => {
+    const sorted = sortByPrioritization(files, ['path_instructions', 'diff_size'], ['tests/**']);
+    // tests/c.test.ts matches path_instructions → first; then diff_size desc
+    expect(sorted[0]?.path).toBe('tests/c.test.ts');
+    // Remaining sorted by diff_size desc
+    expect(sorted[1]?.path).toBe('src/c.ts');
+    expect(sorted[2]?.path).toBe('src/b.ts');
+    expect(sorted[3]?.path).toBe('src/a.ts');
+  });
+
+  it('sorts by diff_size descending when path_instructions not in criteria', () => {
+    const sorted = sortByPrioritization(files, ['diff_size'], []);
+    // tests/c.test.ts has most diff lines (4)
+    expect(sorted[0]?.path).toBe('tests/c.test.ts');
+    expect(sorted[1]?.path).toBe('src/c.ts');
+    expect(sorted[2]?.path).toBe('src/b.ts');
+    expect(sorted[3]?.path).toBe('src/a.ts');
+  });
+
+  it('applies alphabetical tie-break when diff_size is equal', () => {
+    const equal: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'src/z.ts', body: '+one' },
+      { path: 'src/a.ts', body: '+two' },
+      { path: 'src/m.ts', body: '+thr' },
+    ];
+    const sorted = sortByPrioritization(equal, ['diff_size'], []);
+    // All have 1 diff line → alphabetical tie-break
+    expect(sorted.map((f) => f.path)).toEqual(['src/a.ts', 'src/m.ts', 'src/z.ts']);
+  });
+
+  it('returns the original files in alphabetical order when criteria is empty', () => {
+    const sorted = sortByPrioritization(files, [], []);
+    // No criteria → pure alphabetical tie-break
+    const paths = sorted.map((f) => f.path);
+    const expected = [...files.map((f) => f.path)].sort();
+    expect(paths).toEqual(expected);
+  });
+
+  it('returns an empty array for an empty input', () => {
+    expect(sortByPrioritization([], ['path_instructions', 'diff_size'], ['**/*.ts'])).toEqual([]);
+  });
+
+  it('handles empty pathInstructionGlobs (no match boost)', () => {
+    const sorted = sortByPrioritization(files, ['path_instructions', 'diff_size'], []);
+    // No globs → no pi boost; falls through to diff_size
+    expect(sorted[0]?.path).toBe('tests/c.test.ts'); // largest diff
+    expect(sorted[3]?.path).toBe('src/a.ts'); // smallest diff
+  });
+
+  it('explicit alphabetical criterion sorts alphabetically before other criteria', () => {
+    // When 'alphabetical' appears in the prioritization list before 'diff_size',
+    // it should sort alphabetically first.
+    const unsorted: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'src/z.ts', body: '+one\n+two\n+three' }, // 3 lines
+      { path: 'src/a.ts', body: '+one' }, // 1 line
+    ];
+    const sorted = sortByPrioritization(unsorted, ['alphabetical', 'diff_size'], []);
+    // Alphabetical comes first → src/a.ts before src/z.ts regardless of diff size
+    expect(sorted[0]?.path).toBe('src/a.ts');
+    expect(sorted[1]?.path).toBe('src/z.ts');
+  });
+});
+
+describe('splitIntoChunks', () => {
+  const preamble = '';
+
+  it('returns an empty array for empty file list', () => {
+    expect(splitIntoChunks([], preamble, 2, 10)).toEqual([]);
+  });
+
+  it('splits files into chunks respecting maxFiles', () => {
+    const files: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'a.ts', body: '+one' },
+      { path: 'b.ts', body: '+two' },
+      { path: 'c.ts', body: '+three' },
+    ];
+    const chunks = splitIntoChunks(files, preamble, 2, 1000);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]?.files.map((f) => f.path)).toEqual(['a.ts', 'b.ts']);
+    expect(chunks[1]?.files.map((f) => f.path)).toEqual(['c.ts']);
+  });
+
+  it('splits files into chunks respecting maxDiffLines', () => {
+    // Each file has 2 diff lines; maxDiffLines=3 → chunk boundary after 2nd file
+    const files: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'a.ts', body: '+one\n+two' }, // 2 lines
+      { path: 'b.ts', body: '+three\n+four' }, // 2 lines
+      { path: 'c.ts', body: '+five\n+six' }, // 2 lines
+    ];
+    const chunks = splitIntoChunks(files, preamble, 100, 3);
+    expect(chunks).toHaveLength(3);
+    // Each chunk has 1 file (adding a second would exceed 3 lines)
+    expect(chunks[0]?.files.map((f) => f.path)).toEqual(['a.ts']);
+    expect(chunks[1]?.files.map((f) => f.path)).toEqual(['b.ts']);
+    expect(chunks[2]?.files.map((f) => f.path)).toEqual(['c.ts']);
+  });
+
+  it('puts an oversized single file in its own chunk (never silently dropped)', () => {
+    // A file that alone exceeds maxDiffLines must still appear in a chunk.
+    const files: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'a.ts', body: '+one\n+two\n+three\n+four\n+five' }, // 5 lines > maxDiffLines=2
+      { path: 'b.ts', body: '+tiny' }, // 1 line
+    ];
+    const chunks = splitIntoChunks(files, preamble, 100, 2);
+    // a.ts → its own chunk; b.ts → second chunk
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]?.files.map((f) => f.path)).toEqual(['a.ts']);
+    expect(chunks[1]?.files.map((f) => f.path)).toEqual(['b.ts']);
+  });
+
+  it('puts all files in one chunk when they all fit', () => {
+    const files: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'a.ts', body: '+one' },
+      { path: 'b.ts', body: '+two' },
+    ];
+    const chunks = splitIntoChunks(files, preamble, 10, 100);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.files.map((f) => f.path)).toEqual(['a.ts', 'b.ts']);
+  });
+
+  it('preserves the preamble on every chunk', () => {
+    const files: ReadonlyArray<ParsedDiffFile> = [
+      { path: 'a.ts', body: '+one' },
+      { path: 'b.ts', body: '+two' },
+    ];
+    const withPreamble = splitIntoChunks(files, 'preamble-text', 1, 100);
+    expect(withPreamble).toHaveLength(2);
+    for (const chunk of withPreamble) {
+      expect(chunk.preamble).toBe('preamble-text');
+    }
   });
 });

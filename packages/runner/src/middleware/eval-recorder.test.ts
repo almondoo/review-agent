@@ -37,6 +37,19 @@ describe('buildReviewEvalEvent', () => {
     expect(ev.abortReason).toBeNull();
   });
 
+  it('forwards filesTotal and filesReviewed from RunnerResult', () => {
+    const result = makeResult({ filesTotal: 20, filesReviewed: 15 });
+    const ev = buildReviewEvalEvent(ctx, result, 100);
+    expect(ev.filesTotal).toBe(20);
+    expect(ev.filesReviewed).toBe(15);
+  });
+
+  it('sets filesTotal/filesReviewed to null when absent from RunnerResult', () => {
+    const ev = buildReviewEvalEvent(ctx, makeResult(), 100);
+    expect(ev.filesTotal).toBeNull();
+    expect(ev.filesReviewed).toBeNull();
+  });
+
   it('counts severity / confidence buckets across posted comments', () => {
     const result = makeResult({
       comments: [

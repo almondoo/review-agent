@@ -41,6 +41,11 @@ describe('generateJsonSchema', () => {
       'server',
       'codecommit',
       'ruleset',
+      'suggestions',
+      'large_pr',
+      'external_tools',
+      'notifications',
+      'summary',
     ]) {
       expect(props[required], `expected '${required}' in JSON Schema properties`).toBeDefined();
     }
@@ -139,5 +144,28 @@ describe('generateJsonSchema', () => {
     // The ruleset is a z.record so it renders as additionalProperties in JSON Schema.
     // Verify the block exists with a default empty object.
     expect(rulesetProp?.default).toEqual({});
+  });
+
+  it('includes large_pr block with enabled/max_chunks/prioritization subfields (#158)', () => {
+    const schema = generateJsonSchema() as {
+      definitions: Record<
+        string,
+        {
+          properties: Record<
+            string,
+            {
+              properties?: Record<string, { type?: string; default?: unknown }>;
+              default?: unknown;
+            }
+          >;
+        }
+      >;
+    };
+    const largePrProp = schema.definitions.ReviewAgentConfig?.properties?.large_pr;
+    expect(largePrProp, 'expected large_pr in top-level schema properties').toBeDefined();
+    const subProps = largePrProp?.properties ?? {};
+    expect(subProps.enabled, 'expected enabled subfield').toBeDefined();
+    expect(subProps.max_chunks, 'expected max_chunks subfield').toBeDefined();
+    expect(subProps.prioritization, 'expected prioritization subfield').toBeDefined();
   });
 });

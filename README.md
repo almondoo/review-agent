@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: almondoo/review-agent@v0  # pin a tag in production
+      - uses: almondoo/review-agent@v1  # @v1 tracks latest v1.x; pin @v1.x.y for strict control
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           language: en-US
@@ -76,6 +76,47 @@ jobs:
 
 Add `ANTHROPIC_API_KEY` to your repository secrets. The default
 `secrets.GITHUB_TOKEN` is used to post comments.
+
+A self-contained, commented copy of this workflow lives at
+[`examples/workflows/review-agent.yml`](./examples/workflows/review-agent.yml) —
+drop it straight into `.github/workflows/`. Full walkthrough:
+[`docs/getting-started/action.md`](./docs/getting-started/action.md).
+
+## 3 ways to try review-agent
+
+| Path | Best for | Time to first review |
+|---|---|---|
+| **GitHub Action** (above) | Any GitHub repo, zero infra | < 5 min |
+| **CLI `--sample`** | Local evaluation, no VCS token | < 2 min |
+| **Self-host (docker compose)** | Persistent webhook server, full audit log | ~15 min |
+
+### CLI quick trial (no VCS token required)
+
+Only `ANTHROPIC_API_KEY` is needed — no GitHub token, no git repo:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... npx review-agent review --sample
+```
+
+Full CLI reference: [`docs/getting-started/cli.md`](./docs/getting-started/cli.md).
+
+### Self-host with docker compose
+
+```bash
+git clone https://github.com/almondoo/review-agent.git
+cd review-agent/examples/docker-compose
+cp .env.example .env
+# Edit .env: set DB_PASSWORD, GITHUB_APP_ID, GITHUB_WEBHOOK_SECRET,
+#            GITHUB_APP_PEM_FILE, ANTHROPIC_API_KEY
+docker compose up -d
+curl -fsS http://localhost:8080/healthz   # → ok
+```
+
+Full setup guide: [`docs/deployment/docker-compose.md`](./docs/deployment/docker-compose.md).
+
+> **Note:** The `docker-compose.yml` at the repository root is an Action
+> smoke-test fixture, **not** the self-host stack. Use
+> `examples/docker-compose/docker-compose.yml` for self-hosting.
 
 ## Configuration
 

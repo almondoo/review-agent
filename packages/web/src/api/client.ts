@@ -1,11 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { clearSessionToken, getSessionToken } from '../lib/session-token.js';
 import {
   addMockRepo,
   bulkCreateMockRepos,
   deleteMockLlmKey,
   deleteMockRepo,
+  getMockCostMetrics,
   getMockInstallationRepos,
   getMockLlmKeys,
+  getMockQualityMetrics,
   getMockRepoDetail,
   getMockRepoMetrics,
   getMockRepoPrompt,
@@ -20,17 +23,24 @@ import {
   upsertMockLlmKey,
 } from './mocks.js';
 import type {
+  AuthConfig,
+  AuthMeResponse,
   BulkCreateRepoBody,
   BulkCreateRepoResponse,
+  CostMetrics,
   CreateRepoBody,
   DeleteLlmKeyBody,
   DeleteLlmKeyResponse,
   InstallationReposResponse,
   IntegrationsStatus,
   LlmKeysResponse,
+  LoginBody,
+  LoginResponse,
+  MetricsSince,
   OverviewMetrics,
   PatchRepoBody,
   PutPromptBody,
+  QualityMetrics,
   RepoDetail,
   RepoMetrics,
   RepoPrompt,
@@ -45,20 +55,93 @@ import type {
   UpsertLlmKeyResponse,
 } from './types.js';
 
-const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+export const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+
+// Module-level unauthorized callback — set by the app bootstrap to navigate to /login.
+let _onUnauthorized: (() => void) | null = null;
+
+export function registerOnUnauthorized(cb: () => void): void {
+  _onUnauthorized = cb;
+}
+
+/** Paths that must NOT send an Authorization header. */
+const NO_AUTH_PATHS = new Set(['/api/auth/login', '/api/auth/config']);
+
+export class UnauthorizedError extends Error {
+  readonly status = 401;
+  constructor() {
+    super('Unauthorized');
+  }
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const sessionToken = getSessionToken();
   const dashboardToken = import.meta.env.VITE_REVIEW_AGENT_DASHBOARD_TOKEN as string | undefined;
+
+  // Precedence: (1) session JWT, (2) legacy dashboard token — but never on login path.
+  const authToken = NO_AUTH_PATHS.has(path)
+    ? undefined
+    : (sessionToken ?? dashboardToken ?? undefined);
+
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(dashboardToken ? { Authorization: `Bearer ${dashboardToken}` } : {}),
+    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     ...(init?.headers as Record<string, string> | undefined),
   };
   const res = await fetch(path, { ...init, headers });
+  if (res.status === 401 && !NO_AUTH_PATHS.has(path)) {
+    clearSessionToken();
+    _onUnauthorized?.();
+    throw new UnauthorizedError();
+  }
   if (!res.ok) {
     throw new Error(`API error ${res.status}: ${res.statusText}`);
   }
   return res.json() as Promise<T>;
+}
+
+// --- Auth ---
+
+export async function apiLogin(body: LoginBody): Promise<LoginResponse> {
+  return apiFetch<LoginResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export async function apiFetchMe(): Promise<AuthMeResponse> {
+  return apiFetch<AuthMeResponse>('/api/auth/me');
+}
+
+async function fetchAuthConfig(): Promise<AuthConfig> {
+  if (IS_MOCK) return Promise.resolve({ oidcEnabled: false });
+  return apiFetch<AuthConfig>('/api/auth/config');
+}
+
+export function useAuthConfig() {
+  return useQuery({
+    queryKey: ['auth-config'],
+    queryFn: fetchAuthConfig,
+    staleTime: 60_000,
+  });
+}
+
+export async function apiLogout(): Promise<void> {
+  clearSessionToken();
+  try {
+    await apiFetch<void>('/api/auth/logout', { method: 'POST' });
+  } catch {
+    // Logout is best-effort; server is stateless. Token is already cleared.
+  }
+}
+
+export function useAuthMe() {
+  return useQuery({
+    queryKey: ['auth-me'],
+    queryFn: apiFetchMe,
+    retry: false,
+    staleTime: 60_000,
+  });
 }
 
 // --- Overview ---
@@ -108,7 +191,7 @@ async function deleteRepo(id: string): Promise<void> {
 }
 
 export function useRepos() {
-  return useQuery({ queryKey: ['repos'], queryFn: fetchRepos });
+  return useQuery({ queryKey: ['repos'], queryFn: fetchRepos, retry: 1, staleTime: 30_000 });
 }
 
 export function useCreateRepo() {
@@ -373,5 +456,55 @@ export function useBulkCreateRepos() {
       void qc.invalidateQueries({ queryKey: ['repos'] });
       void qc.invalidateQueries({ queryKey: ['installation-repos', vars.installationId] });
     },
+  });
+}
+
+// --- Quality Metrics ---
+
+async function fetchQualityMetrics(
+  installationId: number,
+  since: MetricsSince,
+): Promise<QualityMetrics> {
+  if (IS_MOCK) return Promise.resolve(getMockQualityMetrics(installationId, since));
+  return apiFetch<QualityMetrics>(
+    `/api/dashboard/metrics?installationId=${installationId}&since=${since}`,
+  );
+}
+
+export function useQualityMetrics(installationId: number | null, since: MetricsSince = '30d') {
+  return useQuery({
+    queryKey: ['quality-metrics', installationId, since],
+    queryFn: () => fetchQualityMetrics(installationId as number, since),
+    enabled: installationId !== null,
+    staleTime: 30_000,
+  });
+}
+
+// --- Cost Analytics ---
+
+async function fetchCostMetrics(
+  installationId: number,
+  since: MetricsSince,
+  cursor?: string,
+): Promise<CostMetrics> {
+  if (IS_MOCK) return Promise.resolve(getMockCostMetrics(installationId, since));
+  const params = new URLSearchParams({
+    installationId: String(installationId),
+    since,
+  });
+  if (cursor !== undefined) params.set('cursor', cursor);
+  return apiFetch<CostMetrics>(`/api/dashboard/cost?${params.toString()}`);
+}
+
+export function useCostMetrics(
+  installationId: number | null,
+  since: MetricsSince = '30d',
+  cursor?: string,
+) {
+  return useQuery({
+    queryKey: ['cost-metrics', installationId, since, cursor],
+    queryFn: () => fetchCostMetrics(installationId as number, since, cursor),
+    enabled: installationId !== null,
+    staleTime: 30_000,
   });
 }

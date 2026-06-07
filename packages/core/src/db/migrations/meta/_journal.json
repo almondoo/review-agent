@@ -78,6 +78,34 @@
       "when": 1749081600000,
       "tag": "0010_conversation_threads",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1749168000000,
+      "tag": "0011_dashboard_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1749254400000,
+      "tag": "0012_audit_admin_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1749340800000,
+      "tag": "0013_eval_coverage",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1749427200000,
+      "tag": "0014_oidc_principals",
+      "breakpoints": true
     }
   ]
 }

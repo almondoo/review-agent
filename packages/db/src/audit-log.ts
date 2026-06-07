@@ -9,6 +9,7 @@ import {
 import { auditLog, type NewAuditLogRow } from '@review-agent/core/db';
 import { asc, eq, sql } from 'drizzle-orm';
 import type { DbClient } from './connection.js';
+import { TENANT_GUC } from './tenancy.js';
 
 export type AuditAppender = (event: AuditEvent) => Promise<AuditRow>;
 
@@ -18,6 +19,20 @@ export function createAuditAppender(
 ): AuditAppender {
   return async (event) => {
     return db.transaction(async (tx) => {
+      // Set the tenant GUC so the RLS `tenant_isolation` policy sees the correct
+      // installation_id for both the prev_hash SELECT and the INSERT.
+      //   - Non-null installationId: scopes prev_hash to this installation's chain
+      //     and satisfies `withCheck = installation_id IS NULL OR installation_id::text
+      //     = current_setting(...)`.
+      //   - Null installationId: GUC intentionally left unset (system/global events).
+      //     The withCheck `IS NULL` branch allows the INSERT without a GUC value; the
+      //     `using` clause means these rows are write-only under RLS (not visible to
+      //     tenant-scoped SELECT). This is the documented limitation for global events
+      //     (e.g. principal.create without an installation).
+      if (event.installationId != null) {
+        const id = String(event.installationId);
+        await tx.execute(sql`SELECT set_config(${TENANT_GUC}, ${id}, true)`);
+      }
       const lastRows = await tx
         .select({ hash: auditLog.hash })
         .from(auditLog)
@@ -35,6 +50,9 @@ export function createAuditAppender(
         outputTokens: row.outputTokens ?? null,
         prevHash: row.prevHash,
         hash: row.hash,
+        actor: row.actor ?? null,
+        resourceType: row.resourceType ?? null,
+        resourceId: row.resourceId ?? null,
       };
       await tx.insert(auditLog).values(insertRow);
       return row;
@@ -52,6 +70,12 @@ export async function verifyAuditChainFromDb(
   db: DbClient,
   opts: { installationId?: bigint } = {},
 ): Promise<ChainVerificationReport> {
+  // Set the tenant GUC so the RLS `using` clause allows the SELECT.
+  // Without it the policy sees current_setting(...)=NULL which matches no rows.
+  if (opts.installationId !== undefined) {
+    const id = String(opts.installationId);
+    await db.execute(sql`SELECT set_config(${TENANT_GUC}, ${id}, true)`);
+  }
   const where =
     opts.installationId !== undefined
       ? eq(auditLog.installationId, opts.installationId)
@@ -67,6 +91,9 @@ export async function verifyAuditChainFromDb(
       outputTokens: auditLog.outputTokens,
       prevHash: auditLog.prevHash,
       hash: auditLog.hash,
+      actor: auditLog.actor,
+      resourceType: auditLog.resourceType,
+      resourceId: auditLog.resourceId,
     })
     .from(auditLog)
     .orderBy(asc(auditLog.id));
@@ -81,6 +108,9 @@ export async function verifyAuditChainFromDb(
     model: r.model,
     inputTokens: r.inputTokens,
     outputTokens: r.outputTokens,
+    actor: r.actor,
+    resourceType: r.resourceType,
+    resourceId: r.resourceId,
   }));
   const result = verifyAuditChain(links);
   return { ok: result.ok, rowsChecked: links.length, breaks: result.breaks };

@@ -37,8 +37,10 @@ Stay silent on these — existing tooling already covers them, and re-flagging j
 
 The optional 'suggestion' field is a literal replacement that GitHub renders inline. Treat it as code, not prose.
 
-- Include a 'suggestion' only when the fix is mechanical and unambiguous — a single-line or few-line literal the author can accept verbatim.
+- Include a 'suggestion' only when the fix is mechanical and unambiguous — a literal the author can accept verbatim.
 - Omit 'suggestion' when the fix is semantic, design-level, or has more than one plausible shape; describe the approach in the 'body' field instead. A wrong 'suggestion' is worse than none, because the one-click apply propagates it without review.
+- For a **single-line** fix: set 'line' to the target line and leave 'startLine' absent. The suggestion replaces that one line.
+- For a **multi-line** fix: set 'startLine' to the first line of the range and 'line' to the last line (startLine must be strictly less than line). The suggestion text must replace the entire range — include all lines that should appear after the edit, not just the changed ones. The adapter validates that every line in [startLine..line] is within the same diff hunk; if any line falls outside, the suggestion is suppressed to a plain comment.
 
 ## Comment categories
 
@@ -137,6 +139,15 @@ export type ComposeSystemPromptOptions = {
     readonly factType: 'accepted_pattern' | 'rejected_finding' | 'arch_decision';
     readonly factText: string;
   }>;
+  /**
+   * PR summary section configuration (#134). When absent, defaults to
+   * walkthrough=true, changeImpact=true, dependencyView=false.
+   */
+  readonly summaryConfig?: {
+    readonly walkthrough: boolean;
+    readonly changeImpact: boolean;
+    readonly dependencyView: boolean;
+  };
 };
 
 /**
@@ -181,6 +192,7 @@ export function composeSystemPrompt(opts: ComposeSystemPromptOptions): string {
   if (opts.learnedFacts && opts.learnedFacts.length > 0) {
     sections.push(renderLearnedFactsSection(opts.learnedFacts));
   }
+  sections.push(renderSummarySection(opts.summaryConfig));
   sections.push(
     `Write all comment bodies and the summary in ${opts.language}. Code identifiers, file paths, and technical terms stay in their original form.`,
   );
@@ -241,6 +253,71 @@ function renderLearnedFactsSection(
     lines.push('');
   }
   lines.push('</learned_facts>');
+  return lines.join('\n');
+}
+
+/**
+ * Build the `## PR summary` instruction section that tells the LLM which
+ * Markdown sections to include in the `summary` output field (#134).
+ *
+ * The section is always emitted (even when all toggles are their defaults)
+ * so the LLM always has explicit guidance on the expected shape of the
+ * `summary` field. Disabled sections are mentioned as "omit" to prevent the
+ * LLM from guessing.
+ *
+ * SUMMARY_MAX (10 000 chars) from `@review-agent/core` is referenced as a
+ * prose cap — no runtime truncation is done here; the Zod schema enforces it.
+ */
+function renderSummarySection(
+  cfg:
+    | {
+        readonly walkthrough: boolean;
+        readonly changeImpact: boolean;
+        readonly dependencyView: boolean;
+      }
+    | undefined,
+): string {
+  const walkthrough = cfg?.walkthrough ?? true;
+  const changeImpact = cfg?.changeImpact ?? true;
+  const dependencyView = cfg?.dependencyView ?? false;
+
+  const lines: string[] = [
+    '## PR summary',
+    '',
+    'The `summary` field in your output must be a Markdown string (≤ 10 000 characters). Structure it using the sections listed below. Include ONLY the sections that are enabled; omit disabled sections entirely. If the diff is very large and keeping all sections within the limit would require truncation, shorten prose rather than dropping a section silently — append a note like "(truncated: N files omitted)" when you have condensed coverage.',
+    '',
+  ];
+
+  if (walkthrough) {
+    lines.push(
+      '### Walkthrough (enabled)',
+      'Emit a `## Walkthrough` section. For each logical area or file group, write a concise narrative: what changed, and why (inferred from the diff and commit messages). Keep it factual and brief — one to three sentences per area.',
+      '',
+    );
+  } else {
+    lines.push('### Walkthrough (disabled) — omit the `## Walkthrough` section.', '');
+  }
+
+  if (changeImpact) {
+    lines.push(
+      '### Change impact (enabled)',
+      'Emit a `## Change impact` section. List the modules, packages, or system areas whose behavior could be affected by this diff. Infer blast radius from the changed paths, visible import statements in the diff, and any exported API surface that appears to be modified. Plain Markdown list. No static graph analysis — LLM inference only.',
+      '',
+    );
+  } else {
+    lines.push('### Change impact (disabled) — omit the `## Change impact` section.', '');
+  }
+
+  if (dependencyView) {
+    lines.push(
+      '### Dependencies (enabled)',
+      'Emit a `## Dependencies` section. List the files or modules that appear to import or depend on the changed files, as you can infer from import lines visible in the diff context. Plain Markdown list. This is best-effort LLM inference — no static import graph is available.',
+      '',
+    );
+  } else {
+    lines.push('### Dependencies (disabled) — omit the `## Dependencies` section.', '');
+  }
+
   return lines.join('\n');
 }
 

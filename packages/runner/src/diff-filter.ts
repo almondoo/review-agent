@@ -1,5 +1,9 @@
 import { globToRegExp } from '@review-agent/core';
 
+export type LargePrPrioritization = ReadonlyArray<
+  'path_instructions' | 'diff_size' | 'alphabetical'
+>;
+
 /**
  * Per-file segment carved out of a `ReviewJob.diffText`. The payload
  * format the action / cli entry points build is:
@@ -170,6 +174,140 @@ export function reassembleDiff(parsed: ParsedDiff): string {
     parts.push(f.body.length > 0 ? `--- ${f.path}\n${f.body}` : `--- ${f.path}`);
   }
   return parts.join('\n');
+}
+
+/**
+ * Count the number of diff lines (additions + deletions) in a single
+ * `ParsedDiffFile.body`. Reuses the same `+`/`-` counting logic as
+ * `countDiffLines` but operates on one file at a time. Used by the
+ * large-PR prioritization sort to rank files by diff size before
+ * chunk assignment.
+ */
+export function countFileDiffLines(file: ParsedDiffFile): number {
+  if (file.body.length === 0) return 0;
+  let total = 0;
+  const lines = file.body.split('\n');
+  for (const line of lines) {
+    if (line.length === 0) continue;
+    const first = line.charCodeAt(0);
+    if (first !== 43 && first !== 45) continue;
+    if (line.startsWith('+++ ') || line.startsWith('--- ')) continue;
+    total += 1;
+  }
+  return total;
+}
+
+/**
+ * Sort `ParsedDiffFile` entries by the operator's `prioritization` criteria
+ * for large-PR chunk assignment (#158). Returns a new array (does not mutate
+ * the input).
+ *
+ * Criteria are applied in order (highest priority first):
+ *
+ *   1. `path_instructions` — files matching any glob in `pathInstructionGlobs`
+ *      come first (matched=0, unmatched=1).
+ *   2. `diff_size`         — larger diffs (by `countFileDiffLines`) come first
+ *      (descending).
+ *   3. `alphabetical`      — lexicographic ascending tie-break. Always applied
+ *      last regardless of whether it appears in `prioritization` — ensures a
+ *      fully deterministic sort order.
+ *
+ * When a criterion does not appear in `prioritization` it is skipped (except
+ * `alphabetical`, which is always the final tie-break).
+ */
+export function sortByPrioritization(
+  files: ReadonlyArray<ParsedDiffFile>,
+  prioritization: LargePrPrioritization,
+  pathInstructionGlobs: ReadonlyArray<string>,
+): ReadonlyArray<ParsedDiffFile> {
+  // Compile path-instruction matchers once.
+  const piMatchers = pathInstructionGlobs.map((g) => globToRegExp(g));
+
+  // Pre-compute per-file sort keys to avoid repeated computation in comparator.
+  type SortKey = {
+    readonly file: ParsedDiffFile;
+    readonly piRank: number; // 0 = matched, 1 = unmatched
+    readonly diffSize: number;
+  };
+  const keyed: Array<SortKey> = files.map((file) => ({
+    file,
+    piRank: piMatchers.length > 0 && piMatchers.some((re) => re.test(file.path)) ? 0 : 1,
+    diffSize: countFileDiffLines(file),
+  }));
+
+  keyed.sort((a, b) => {
+    for (const criterion of prioritization) {
+      if (criterion === 'alphabetical') {
+        const cmp = a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0;
+        if (cmp !== 0) return cmp;
+        continue;
+      }
+      if (criterion === 'path_instructions') {
+        const diff = a.piRank - b.piRank;
+        if (diff !== 0) return diff;
+      } else if (criterion === 'diff_size') {
+        const diff = b.diffSize - a.diffSize; // descending
+        if (diff !== 0) return diff;
+      }
+    }
+    // Final alphabetical tie-break (always applied).
+    return a.file.path < b.file.path ? -1 : a.file.path > b.file.path ? 1 : 0;
+  });
+
+  return keyed.map((k) => k.file);
+}
+
+/**
+ * Greedily split a sorted list of `ParsedDiffFile` entries into chunks
+ * that each fit within `maxFiles` and `maxDiffLines` (#158).
+ *
+ * Algorithm:
+ *   - Start a new chunk.
+ *   - For each file (in sorted order), try to add it to the current chunk.
+ *   - If adding it would exceed either cap, close the current chunk and start
+ *     a new one with just this file (a single file that alone exceeds the diff
+ *     cap is placed in its own chunk so it is not silently skipped).
+ *   - A file that exceeds `maxDiffLines` on its own is placed in a single-file
+ *     chunk so operators see it in coverage reporting rather than losing it.
+ *
+ * Returns a non-empty list of chunks (each chunk is a non-empty `ParsedDiff`
+ * with the original preamble preserved). A single empty file list returns an
+ * empty array.
+ */
+export function splitIntoChunks(
+  sorted: ReadonlyArray<ParsedDiffFile>,
+  preamble: string,
+  maxFiles: number,
+  maxDiffLines: number,
+): ReadonlyArray<ParsedDiff> {
+  if (sorted.length === 0) return [];
+
+  const chunks: Array<ParsedDiff> = [];
+  let currentFiles: Array<ParsedDiffFile> = [];
+  let currentLines = 0;
+
+  for (const file of sorted) {
+    const fileLines = countFileDiffLines(file);
+    const wouldExceedFiles = currentFiles.length + 1 > maxFiles;
+    const wouldExceedLines = currentLines + fileLines > maxDiffLines;
+
+    if (currentFiles.length > 0 && (wouldExceedFiles || wouldExceedLines)) {
+      // Close the current chunk and start a new one.
+      chunks.push({ preamble, files: currentFiles });
+      currentFiles = [file];
+      currentLines = fileLines;
+    } else {
+      currentFiles.push(file);
+      currentLines += fileLines;
+    }
+  }
+
+  // Flush the last chunk.
+  if (currentFiles.length > 0) {
+    chunks.push({ preamble, files: currentFiles });
+  }
+
+  return chunks;
 }
 
 /**

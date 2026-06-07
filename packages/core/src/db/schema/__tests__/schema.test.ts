@@ -5,7 +5,9 @@ import { installationSecrets } from '../byok-store.js';
 import { conversationThreads } from '../conversation-state.js';
 import { costLedger, installationCostDaily } from '../cost-ledger.js';
 import { githubInstallations } from '../github-installations.js';
+import { installationMemberships } from '../installation-memberships.js';
 import { installationTokens } from '../installation-tokens.js';
+import { operatorPrincipals } from '../operator-principals.js';
 import { repos } from '../repos.js';
 import { reviewEvalEvent } from '../review-eval-event.js';
 import { reviewHistory } from '../review-history.js';
@@ -238,6 +240,73 @@ describe('db schema shape', () => {
 
   it('webhook_deliveries does not enable RLS (no installation_id column)', () => {
     const cfg = getTableConfig(webhookDeliveries);
+    expect(cfg.enableRLS).toBe(false);
+    expect(cfg.policies).toEqual([]);
+  });
+
+  it('operator_principals covers required columns with correct types and no RLS', () => {
+    const cfg = getTableConfig(operatorPrincipals);
+    expect(cfg.name).toBe('operator_principals');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of [
+      'id',
+      'username',
+      'password_hash',
+      'provider',
+      'external_id',
+      'token_version',
+      'created_at',
+      'updated_at',
+    ]) {
+      expect(cols).toContain(required);
+    }
+    // id is the primary key
+    const pk = cfg.columns.find((c) => c.name === 'id');
+    expect(pk?.primary).toBe(true);
+    // username is unique (column-level .unique() surfaces as isUnique on the column)
+    const usernameCol = cfg.columns.find((c) => c.name === 'username');
+    expect(usernameCol?.isUnique, 'username must be unique').toBe(true);
+    // password_hash is nullable (OIDC principals have no local password)
+    const passwordCol = cfg.columns.find((c) => c.name === 'password_hash');
+    expect(passwordCol?.notNull, 'password_hash must be nullable for OIDC users').toBe(false);
+    // token_version has default 1
+    const tokenVersionCol = cfg.columns.find((c) => c.name === 'token_version');
+    expect(tokenVersionCol?.notNull).toBe(true);
+    expect(tokenVersionCol?.hasDefault).toBe(true);
+    // (provider, external_id) partial index must be UNIQUE — prevents duplicate
+    // JIT-provisioned OIDC principals for the same sub (security review #137).
+    expect(
+      cfg.indexes.some(
+        (i) => i.config.name === 'operator_principals_provider_external_id_uidx' && i.config.unique,
+      ),
+      'provider+external_id index must be UNIQUE',
+    ).toBe(true);
+    // RLS intentionally omitted (control-plane auth table)
+    expect(cfg.enableRLS).toBe(false);
+    expect(cfg.policies).toEqual([]);
+  });
+
+  it('installation_memberships has composite PK, principal_id index, and no RLS', () => {
+    const cfg = getTableConfig(installationMemberships);
+    expect(cfg.name).toBe('installation_memberships');
+    const cols = cfg.columns.map((c) => c.name);
+    for (const required of ['principal_id', 'installation_id', 'role', 'granted_at']) {
+      expect(cols).toContain(required);
+    }
+    // Composite primary key on (principal_id, installation_id)
+    expect(cfg.primaryKeys.length).toBe(1);
+    expect(cfg.primaryKeys[0]?.columns.map((c) => c.name).sort()).toEqual(
+      ['installation_id', 'principal_id'].sort(),
+    );
+    // Index on principal_id for lookup by principal
+    expect(
+      cfg.indexes.some((i) => i.config.name === 'installation_memberships_principal_id_idx'),
+    ).toBe(true);
+    // role defaults to 'viewer'
+    const roleCol = cfg.columns.find((c) => c.name === 'role');
+    expect(roleCol?.notNull).toBe(true);
+    expect(roleCol?.hasDefault).toBe(true);
+    // RLS intentionally omitted (auth middleware table)
     expect(cfg.enableRLS).toBe(false);
     expect(cfg.policies).toEqual([]);
   });

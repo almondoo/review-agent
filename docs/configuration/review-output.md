@@ -121,6 +121,40 @@ existing reviews keep working byte-for-byte.
 
 ---
 
+## PR summary sections (#134)
+
+The `summary` field of `ReviewOutput` is a Markdown string (≤ 10 000 characters). review-agent structures it using up to three optional sections, controlled per-installation via `.review-agent.yml`:
+
+```yaml
+summary:
+  walkthrough: true        # default true — per-area narrative
+  change_impact: true      # default true — blast-radius analysis
+  dependency_view: false   # default false — opt-in dependency list
+```
+
+### `walkthrough` (default: `true`)
+
+When enabled, the LLM emits a `## Walkthrough` section describing what changed in each logical area or file group, and why (inferred from the diff and commit messages). One to three sentences per area, factual and brief.
+
+### `change_impact` (default: `true`)
+
+When enabled, the LLM emits a `## Change impact` section listing the modules, packages, or system areas whose behavior could be affected. Blast radius is inferred from changed paths, visible import statements in the diff, and any exported API surface that appears to be modified. Plain Markdown list — no static graph analysis is performed.
+
+### `dependency_view` (default: `false`)
+
+Opt-in. When `dependency_view: true`, the LLM emits a `## Dependencies` section listing files or modules that appear to import or depend on the changed files, as it can infer from import lines visible in the diff context.
+
+**Important constraints:**
+- This is best-effort LLM inference only — no static import graph is built.
+- The output is a plain Markdown list (no visual graph).
+- For large PRs, coverage may be partial; the LLM will note "(truncated: N files omitted)" rather than silently dropping sections.
+
+### Large-PR graceful degradation
+
+When a PR is very large, the LLM condenses prose to stay within the 10 000-character limit rather than silently dropping sections. A truncation note is appended: `(truncated: N files omitted)`. The `large_pr` chunk mechanism already appends a coverage note via `buildChunkCoverageSummary`; summary-level truncation notes are additive and do not duplicate it.
+
+---
+
 ## Server-mode audit log
 
 The Server-mode `audit_log` table records observability events

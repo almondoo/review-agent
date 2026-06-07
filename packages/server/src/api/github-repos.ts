@@ -9,18 +9,16 @@
  * Spec §8.2.4 (accessible repos API), §8.2.5 (bulk repo registration),
  * §16.1 (RLS, withTenant for INSERT).
  *
- * NOTE (spec §8.2.4 open question b / issue #132):
- *   Per-installation authorization gap: in the current single-tenant model,
- *   any authenticated dashboard user can enumerate repos for an arbitrary
- *   installationId. Accepted as a known gap for single-operator deployments.
- *   A fail-closed `REVIEW_AGENT_MULTI_TENANT` interlock now guards these
- *   endpoints: when set to true they return 501 before any token mint or DB
- *   write, making it structurally impossible to ship the IDOR in multi-tenant
- *   mode until per-installation authz lands. See
- *   docs/security/multi-tenant-authz.md and issue #132.
+ * Authz (issue #161 §F):
+ *   GET  /github/installations/:id/repos  — viewer + membership
+ *   POST /repos/bulk                      — admin  + membership
+ *
+ * When no JWT principal is present (legacy / shared-token), the original
+ * multiTenantGuard behaviour is preserved: multiTenant=true → 501,
+ * multiTenant=false → pass-through (single-operator implicit trust).
  */
 import { githubInstallations, repos } from '@review-agent/core/db';
-import type { DbClient } from '@review-agent/db';
+import type { AuditAppender, DbClient } from '@review-agent/db';
 import { withTenant } from '@review-agent/db';
 import type {
   AppAuthClient,
@@ -31,7 +29,8 @@ import { listInstallationRepos } from '@review-agent/platform-github';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { multiTenantGuard } from './middleware/multi-tenant-guard.js';
+import type { AuthEnv } from '../auth/types.js';
+import { installationAuthz } from './middleware/installation-authz.js';
 
 // ---------------------------------------------------------------------------
 // Deps
@@ -61,10 +60,12 @@ export type GithubReposDeps = {
    */
   readonly appAuth?: AppAuthDeps;
   /**
-   * Fail-closed multi-tenant guard flag. When true both routes return 501 before
-   * any token mint or DB write. See docs/security/multi-tenant-authz.md.
+   * Fail-closed multi-tenant guard flag. When true both routes return 501
+   * (principal absent path) before any token mint or DB write.
+   * See docs/security/multi-tenant-authz.md.
    */
   readonly multiTenant?: boolean;
+  readonly auditAppender?: AuditAppender;
 };
 
 // ---------------------------------------------------------------------------
@@ -117,15 +118,15 @@ function defaultId(): string {
 }
 
 export function createGithubReposRouter(deps: GithubReposDeps): Hono {
-  const app = new Hono();
+  const app = new Hono<AuthEnv>();
   const generateId = deps.generateId ?? defaultId;
-
-  // Fail-closed guard: when REVIEW_AGENT_MULTI_TENANT=true both routes
-  // return 501 before any token mint or DB write (issue #132).
-  app.use('*', multiTenantGuard({ multiTenant: deps.multiTenant ?? false }));
+  const multiTenant = deps.multiTenant ?? false;
 
   // ------------------------------------------------------------------
   // GET /github/installations/:installationId/repos
+  //
+  // Role required: viewer + membership check on installationId path param.
+  // Legacy/shared-token path: multiTenant gate (501 or pass-through).
   //
   // Generates an installation token, calls listInstallationRepos,
   // joins against the local repos table to compute `registered`.
@@ -133,99 +134,96 @@ export function createGithubReposRouter(deps: GithubReposDeps): Hono {
   // Returns 404 when the installation does not exist or is suspended.
   // Returns 503 when the appAuth client is not configured.
   // ------------------------------------------------------------------
-  app.get('/github/installations/:installationId/repos', async (c) => {
-    if (deps.appAuth === undefined) {
-      return c.json({ error: 'github_app_not_configured' }, 503);
-    }
+  app.get(
+    '/github/installations/:installationId/repos',
+    installationAuthz({
+      required: 'viewer',
+      getInstallationId: (c) => c.req.param('installationId'),
+      multiTenant,
+      db: deps.db,
+    }),
+    async (c) => {
+      if (deps.appAuth === undefined) {
+        return c.json({ error: 'github_app_not_configured' }, 503);
+      }
 
-    const rawParam = { installationId: c.req.param('installationId') };
-    const parsed = installationIdParamSchema.safeParse(rawParam);
-    if (!parsed.success) {
-      return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
-    }
+      const rawParam = { installationId: c.req.param('installationId') };
+      const parsed = installationIdParamSchema.safeParse(rawParam);
+      if (!parsed.success) {
+        return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
+      }
 
-    const { installationId } = parsed.data;
+      const { installationId } = parsed.data;
 
-    // Verify installation exists and is not suspended.
-    // RLS: github_installations is tenant-scoped. To read a specific
-    // installation row without a withTenant context, use a raw select
-    // against the non-RLS admin path, OR check the row via withTenant.
-    // In the single-tenant model the row IS accessible via withTenant
-    // for the given installationId.
-    const installationRows = await (async () => {
+      // Verify installation exists and is not suspended.
+      const installationRows = await (async () => {
+        try {
+          return await withTenant(deps.db, installationId, async (tx) =>
+            tx
+              .select({
+                installationId: githubInstallations.installationId,
+                suspendedAt: githubInstallations.suspendedAt,
+              })
+              .from(githubInstallations)
+              .where(eq(githubInstallations.installationId, installationId))
+              .limit(1),
+          );
+        } catch {
+          return [];
+        }
+      })();
+
+      const installation = installationRows[0];
+      if (installation === undefined || installation.suspendedAt !== null) {
+        return c.json({ error: 'not_found' }, 404);
+      }
+
+      let githubRepos: InstallationRepo[];
       try {
-        return await withTenant(deps.db, installationId, async (tx) =>
-          tx
-            .select({
-              installationId: githubInstallations.installationId,
-              suspendedAt: githubInstallations.suspendedAt,
-            })
-            .from(githubInstallations)
-            .where(eq(githubInstallations.installationId, installationId))
-            .limit(1),
-        );
-      } catch {
-        return [];
+        const { token } = await deps.appAuth.appAuthClient.getInstallationToken(installationId);
+
+        /* v8 ignore start */
+        const { Octokit } = await import('@octokit/rest');
+        const octokit = new Octokit({ auth: token });
+        /* v8 ignore stop */
+
+        githubRepos = await listInstallationRepos(octokit, installationId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return c.json({ error: 'github_api_error', message }, 502);
       }
-    })();
 
-    const installation = installationRows[0];
-    if (installation === undefined || installation.suspendedAt !== null) {
-      return c.json({ error: 'not_found' }, 404);
-    }
+      const fullNames = githubRepos.map((r) => r.fullName);
+      const registeredNames = new Set<string>();
 
-    // Fetch the full set of repos accessible to this installation via the
-    // GitHub Apps API. We mint a fresh installation token and use a simple
-    // Octokit instance (avoids needing the full AppOctokitFactory for this
-    // read-only listing).
-    let githubRepos: InstallationRepo[];
-    try {
-      // Obtain a fresh installation token.
-      const { token } = await deps.appAuth.appAuthClient.getInstallationToken(installationId);
+      if (fullNames.length > 0) {
+        const registeredRows = await deps.db
+          .select({ name: repos.name })
+          .from(repos)
+          .where(and(inArray(repos.name, fullNames), isNull(repos.deletedAt)));
 
-      // Dynamically import Octokit so this file doesn't hard-bind to
-      // @octokit/rest at module load time (same pattern as github-setup.ts).
-      /* v8 ignore start */
-      const { Octokit } = await import('@octokit/rest');
-      const octokit = new Octokit({ auth: token });
-      /* v8 ignore stop */
-
-      githubRepos = await listInstallationRepos(octokit, installationId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return c.json({ error: 'github_api_error', message }, 502);
-    }
-
-    // Join against the local repos table to flag which are already registered.
-    // Query by full_name, limited to repos whose installation_id matches or
-    // whose name is in the set (covers manually-registered repos too).
-    const fullNames = githubRepos.map((r) => r.fullName);
-    const registeredNames = new Set<string>();
-
-    if (fullNames.length > 0) {
-      const registeredRows = await deps.db
-        .select({ name: repos.name })
-        .from(repos)
-        .where(and(inArray(repos.name, fullNames), isNull(repos.deletedAt)));
-
-      for (const row of registeredRows) {
-        registeredNames.add(row.name);
+        for (const row of registeredRows) {
+          registeredNames.add(row.name);
+        }
       }
-    }
 
-    const repoItems: InstallationRepoItem[] = githubRepos.map((r) => ({
-      id: r.id,
-      fullName: r.fullName,
-      private: r.private,
-      registered: registeredNames.has(r.fullName),
-    }));
+      const repoItems: InstallationRepoItem[] = githubRepos.map((r) => ({
+        id: r.id,
+        fullName: r.fullName,
+        private: r.private,
+        registered: registeredNames.has(r.fullName),
+      }));
 
-    const response: AccessibleReposResponse = { repos: repoItems };
-    return c.json(response, 200);
-  });
+      const response: AccessibleReposResponse = { repos: repoItems };
+      return c.json(response, 200);
+    },
+  );
 
   // ------------------------------------------------------------------
   // POST /repos/bulk
+  //
+  // Role required: admin + membership check on installationId in body.
+  // Legacy/shared-token path: multiTenant gate (501 or pass-through).
   //
   // Accepts { installationId: number, names: string[] }.
   // For each name:
@@ -238,76 +236,105 @@ export function createGithubReposRouter(deps: GithubReposDeps): Hono {
   //   200 — all alreadyExists (nothing new)
   //   207 — mixed or any errors
   // ------------------------------------------------------------------
-  app.post('/repos/bulk', async (c) => {
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: 'invalid JSON body' }, 400);
-    }
-
-    const parsed = bulkRepoBodySchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
-    }
-
-    const { installationId, names } = parsed.data;
-    const now = (deps.now ?? (() => new Date()))();
-
-    // Find which names already exist (non-soft-deleted).
-    const existingRows = await deps.db
-      .select({ name: repos.name })
-      .from(repos)
-      .where(and(inArray(repos.name, names), isNull(repos.deletedAt)));
-
-    const existingNames = new Set(existingRows.map((r) => r.name));
-
-    const created: string[] = [];
-    const alreadyExists: string[] = [];
-    const errors: { name: string; message: string }[] = [];
-
-    for (const name of names) {
-      if (existingNames.has(name)) {
-        alreadyExists.push(name);
-        continue;
-      }
-
-      // INSERT via withTenant so RLS enforces tenant isolation.
+  app.post(
+    '/repos/bulk',
+    installationAuthz({
+      required: 'admin',
+      getInstallationId: async (c) => {
+        try {
+          const body = await c.req.json();
+          const id = (body as Record<string, unknown>)?.installationId;
+          return typeof id === 'number' && Number.isInteger(id) && id > 0 ? String(id) : undefined;
+        } catch {
+          return undefined;
+        }
+      },
+      multiTenant,
+      db: deps.db,
+    }),
+    async (c) => {
+      let body: unknown;
       try {
-        const id = generateId();
-        await withTenant(deps.db, installationId, async (tx) => {
-          await tx.insert(repos).values({
-            id,
-            platform: 'github' as const,
-            name,
-            enabled: true,
-            installationId,
-            createdAt: now,
-            updatedAt: now,
-          });
-        });
-        created.push(name);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        errors.push({ name, message });
+        body = await c.req.json();
+      } catch {
+        return c.json({ error: 'invalid JSON body' }, 400);
       }
-    }
 
-    const result: BulkRepoResult = { created, alreadyExists, errors };
+      const parsed = bulkRepoBodySchema.safeParse(body);
+      if (!parsed.success) {
+        return c.json({ error: 'validation_error', issues: parsed.error.issues }, 422);
+      }
 
-    // 201: all newly created (no errors, no alreadyExists)
-    if (errors.length === 0 && alreadyExists.length === 0 && created.length > 0) {
-      return c.json(result, 201);
-    }
+      const { installationId, names } = parsed.data;
+      const now = (deps.now ?? (() => new Date()))();
 
-    // 200: all alreadyExists (no new rows, no errors)
-    if (errors.length === 0 && created.length === 0) {
-      return c.json(result, 200);
-    }
+      const existingRows = await deps.db
+        .select({ name: repos.name })
+        .from(repos)
+        .where(and(inArray(repos.name, names), isNull(repos.deletedAt)));
 
-    // 207: mixed (some created, some alreadyExists, or any errors)
-    return c.json(result, 207);
-  });
+      const existingNames = new Set(existingRows.map((r) => r.name));
 
-  return app;
+      const created: string[] = [];
+      const alreadyExists: string[] = [];
+      const errors: { name: string; message: string }[] = [];
+
+      for (const name of names) {
+        if (existingNames.has(name)) {
+          alreadyExists.push(name);
+          continue;
+        }
+
+        try {
+          const id = generateId();
+          await withTenant(deps.db, installationId, async (tx) => {
+            await tx.insert(repos).values({
+              id,
+              platform: 'github' as const,
+              name,
+              enabled: true,
+              installationId,
+              createdAt: now,
+              updatedAt: now,
+            });
+          });
+          created.push(name);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          errors.push({ name, message });
+        }
+      }
+
+      const result: BulkRepoResult = { created, alreadyExists, errors };
+
+      if (deps.auditAppender !== undefined && created.length > 0) {
+        const actor = c.get('principal')?.id ?? null;
+        try {
+          await deps.auditAppender({
+            event: 'repo.bulk_register',
+            installationId,
+            resourceType: 'repo',
+            resourceId: String(installationId),
+            ...(actor !== null ? { actor } : {}),
+          });
+        } catch (err) {
+          process.stderr.write(
+            `[review-agent] WARN: audit write failed for repo.bulk_register installationId=${installationId}: ${String(err)}\n`,
+          );
+        }
+      }
+
+      if (errors.length === 0 && alreadyExists.length === 0 && created.length > 0) {
+        return c.json(result, 201);
+      }
+
+      if (errors.length === 0 && created.length === 0) {
+        return c.json(result, 200);
+      }
+
+      return c.json(result, 207);
+    },
+  );
+
+  return app as unknown as Hono;
 }

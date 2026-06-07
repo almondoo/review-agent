@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useReviews } from '../api/client.js';
 import type {
   PlatformFilter,
@@ -11,6 +10,7 @@ import type {
 } from '../api/types.js';
 import type { Column } from '../components/data-table.js';
 import { DataTable } from '../components/data-table.js';
+import { ErrorState } from '../components/error-state.js';
 import { StaggerContainer, StaggerItem } from '../components/page-transition.js';
 import { PlatformBadge } from '../components/platform-badge.js';
 import { SectionHeading } from '../components/section-heading.js';
@@ -47,16 +47,64 @@ function FilterButton({ label, active, onClick }: FilterButtonProps) {
 
 const LIMIT = 50;
 
-type FiltersState = {
-  platform: PlatformFilter;
-  outcome: ReviewOutcomeFilter;
-  since: SinceAlias;
-  repoQuery: string;
-  cursor: string | null;
-};
-
 export function HistoryPage() {
   const { t } = useTranslation();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // URL-persisted filter state
+  const platform = (searchParams.get('platform') ?? 'all') as PlatformFilter;
+  const outcome = (searchParams.get('outcome') ?? 'all') as ReviewOutcomeFilter;
+  const since = (searchParams.get('since') ?? 'all') as SinceAlias;
+  const repoQuery = searchParams.get('repo') ?? '';
+  const cursor = searchParams.get('cursor') ?? null;
+
+  function setPlatform(value: PlatformFilter) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('cursor');
+      if (value === 'all') next.delete('platform');
+      else next.set('platform', value);
+      return next;
+    });
+  }
+
+  function setOutcome(value: ReviewOutcomeFilter) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('cursor');
+      if (value === 'all') next.delete('outcome');
+      else next.set('outcome', value);
+      return next;
+    });
+  }
+
+  function setSince(value: SinceAlias) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('cursor');
+      if (value === 'all') next.delete('since');
+      else next.set('since', value);
+      return next;
+    });
+  }
+
+  function setRepoQuery(value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete('cursor');
+      if (value === '') next.delete('repo');
+      else next.set('repo', value);
+      return next;
+    });
+  }
+
+  function setCursor(value: string) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('cursor', value);
+      return next;
+    });
+  }
 
   const COLUMNS: Column<ReviewEvent>[] = [
     {
@@ -138,28 +186,16 @@ export function HistoryPage() {
     },
   ];
 
-  const [filtersState, setFiltersState] = useState<FiltersState>({
-    platform: 'all',
-    outcome: 'all',
-    since: 'all',
-    repoQuery: '',
-    cursor: null,
-  });
-
   const filters: ReviewsFilters = {
     limit: LIMIT,
-    ...(filtersState.cursor !== null ? { cursor: filtersState.cursor } : {}),
-    platform: filtersState.platform,
-    outcome: filtersState.outcome,
-    since: filtersState.since,
-    ...(filtersState.repoQuery !== '' ? { repoQuery: filtersState.repoQuery } : {}),
+    ...(cursor !== null ? { cursor } : {}),
+    platform,
+    outcome,
+    since,
+    ...(repoQuery !== '' ? { repoQuery } : {}),
   };
 
-  const { data, isLoading, error } = useReviews(filters);
-
-  function resetCursor<K extends keyof FiltersState>(key: K, value: FiltersState[K]) {
-    setFiltersState((prev) => ({ ...prev, [key]: value, cursor: null }));
-  }
+  const { data, isLoading, error, refetch } = useReviews(filters);
 
   return (
     <StaggerContainer>
@@ -222,8 +258,8 @@ export function HistoryPage() {
                       ? t('pages.history.filterPlatformGh')
                       : t('pages.history.filterPlatformCc')
                 }
-                active={filtersState.platform === p}
-                onClick={() => resetCursor('platform', p)}
+                active={platform === p}
+                onClick={() => setPlatform(p)}
               />
             ))}
           </div>
@@ -244,8 +280,8 @@ export function HistoryPage() {
                           ? t('pages.history.filterOutcomeCommented')
                           : t('pages.history.filterOutcomeFailed')
                 }
-                active={filtersState.outcome === o}
-                onClick={() => resetCursor('outcome', o)}
+                active={outcome === o}
+                onClick={() => setOutcome(o)}
               />
             ))}
           </div>
@@ -264,8 +300,8 @@ export function HistoryPage() {
                         ? t('pages.history.filterSince30d')
                         : t('pages.history.filterSinceAll')
                 }
-                active={filtersState.since === s}
-                onClick={() => resetCursor('since', s)}
+                active={since === s}
+                onClick={() => setSince(s)}
               />
             ))}
           </div>
@@ -274,8 +310,8 @@ export function HistoryPage() {
           <input
             type="search"
             placeholder={t('common.repoNameEllipsis')}
-            value={filtersState.repoQuery}
-            onChange={(e) => resetCursor('repoQuery', e.target.value)}
+            value={repoQuery}
+            onChange={(e) => setRepoQuery(e.target.value)}
             style={{
               fontFamily: 'var(--font-mono)',
               fontSize: '0.6875rem',
@@ -297,10 +333,14 @@ export function HistoryPage() {
             {t('common.loading')}
           </div>
         )}
-        {error && (
-          <div className="label-mono" style={{ color: 'var(--rust)', padding: '2rem 0' }}>
-            {t('pages.history.loadingError')}
-          </div>
+        {error && !isLoading && (
+          <ErrorState
+            message={t('pages.history.loadingError')}
+            onRetry={() => {
+              void refetch();
+            }}
+            retryLabel={t('common.retry')}
+          />
         )}
         {data && (
           <>
@@ -315,7 +355,9 @@ export function HistoryPage() {
                 <button
                   type="button"
                   className="label-mono"
-                  onClick={() => setFiltersState((prev) => ({ ...prev, cursor: data.nextCursor }))}
+                  onClick={() => {
+                    if (data.nextCursor !== null) setCursor(data.nextCursor);
+                  }}
                   style={{
                     fontFamily: 'var(--font-mono)',
                     fontSize: '0.6875rem',

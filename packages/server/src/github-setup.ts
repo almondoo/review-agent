@@ -15,7 +15,7 @@
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { githubInstallations } from '@review-agent/core/db';
-import { type DbClient, withTenant } from '@review-agent/db';
+import { type AuditAppender, type DbClient, withTenant } from '@review-agent/db';
 import type { AppAuthClient } from '@review-agent/platform-github';
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -105,6 +105,11 @@ export type GithubRouterDeps = {
    * Database client for upserting github_installations via withTenant.
    */
   readonly db: DbClient;
+  /**
+   * Optional audit appender. When present, installation upserts are recorded.
+   * actor is null because /github/setup uses CSRF-only authentication (no JWT principal).
+   */
+  readonly auditAppender?: AuditAppender;
 };
 
 const setupQuerySchema = z.object({
@@ -259,6 +264,22 @@ export function createGithubRouter(deps: GithubRouterDeps): Hono {
             },
           });
       });
+
+      if (deps.auditAppender !== undefined) {
+        try {
+          await deps.auditAppender({
+            event: 'github_installation.setup',
+            installationId: installationIdBigInt,
+            resourceType: 'github_installation',
+            resourceId: String(installationIdBigInt),
+            // actor is null: /github/setup uses CSRF-only auth, no JWT principal
+          });
+        } catch (err) {
+          process.stderr.write(
+            `[review-agent] WARN: audit write failed for github_installation.setup installationId=${installationIdBigInt}: ${String(err)}\n`,
+          );
+        }
+      }
     } catch {
       deleteCookie(c, STATE_COOKIE, { path: '/' });
       return c.redirect(`${dashboardOrigin}/integrations?error=setup_failed`, 302);

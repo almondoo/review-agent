@@ -120,6 +120,22 @@ export type VcsCapabilities = {
    *             guard on this capability before invoking `postReply`.
    */
   readonly conversationReply: boolean;
+  /**
+   * Whether the adapter renders `InlineComment.suggestion` as a native
+   * committable suggestion block (#152).
+   *
+   * - `true`  — GitHub: renders suggestions as ```suggestion fenced blocks
+   *             inside the review comment. GitHub UI shows an "Apply suggestion"
+   *             button. Validity is gated by the adapter on hunk membership
+   *             (suggestions outside the diff hunk are suppressed to a plain
+   *             comment body).
+   * - `false` — CodeCommit (and other adapters without native suggestion
+   *             syntax): the suggestion is rendered as an informational
+   *             fenced code block (`**Suggested fix:** ...`) in the comment
+   *             body. No commit button is available. No hunk check is needed
+   *             because the block is purely informational.
+   */
+  readonly committableSuggestions: boolean;
 };
 
 /**

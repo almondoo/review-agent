@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { type Config, KNOWN_REVIEW_BOT_LOGINS, resolveEffectiveConfig } from '@review-agent/config';
 import {
+  type Diff,
   computeDiffStrategy as defaultComputeDiffStrategy,
   type PR,
   type PRRef,
@@ -18,6 +19,11 @@ import {
   renderSkillsBlock,
   runReview,
 } from '@review-agent/runner';
+import {
+  buildNotificationChannels,
+  createNotificationDispatcher,
+  type NotificationDispatcher,
+} from '@review-agent/server/notification';
 import type { ActionInputs } from './inputs.js';
 import { withRetry } from './retry.js';
 
@@ -45,6 +51,13 @@ export type RunActionDeps = {
    * pay real wall-clock delays.
    */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * #144 Phase B: injectable notification dispatcher for tests.
+   * Production callers leave this unset — the dispatcher is built from
+   * `config.notifications` + env vars inside `runAction`. Tests inject a
+   * mock to verify event dispatch without real channel side-effects.
+   */
+  readonly notificationDispatcher?: NotificationDispatcher;
 };
 
 export type ActionContext = {
@@ -74,6 +87,19 @@ export async function runAction(
   const env = deps.env ?? process.env;
 
   const config = await loadConfigOrDefault(inputs.configPath, readFn, env);
+
+  // #144 Phase B: build the notification dispatcher from config + env.
+  // Zero channels → dispatcher is a no-op (all dispatch calls return immediately).
+  // Tests may inject deps.notificationDispatcher directly.
+  const notifier: NotificationDispatcher =
+    deps.notificationDispatcher ??
+    createNotificationDispatcher({
+      channels: buildNotificationChannels(config.notifications, {
+        REVIEW_AGENT_SLACK_WEBHOOK_URL: env.REVIEW_AGENT_SLACK_WEBHOOK_URL,
+        REVIEW_AGENT_SMTP_PASSWORD: env.REVIEW_AGENT_SMTP_PASSWORD,
+      }),
+      config: config.notifications,
+    });
 
   const vcs = (deps.createVCS ?? ((t) => createGithubVCS({ token: t })))(inputs.githubToken);
   const pr = await vcs.getPR(ctx.ref);
@@ -129,8 +155,15 @@ export async function runAction(
     changedPaths: diff.files.map((f) => f.path),
   });
 
+  // Load external SARIF tool contents. Each configured tool's sarif_path is read
+  // from the Action workspace (same cwd as the diff). Missing/unreadable files
+  // are warned and skipped — the review continues without that tool's findings.
+  const externalTools = await loadExternalToolContents(config.external_tools.tools, readFn, log);
+
+  const jobId = `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`;
+  const notificationRepo = `${ctx.ref.owner}/${ctx.ref.repo}`;
   const reviewJob: Parameters<typeof runReview>[0] = {
-    jobId: `${ctx.ref.owner}/${ctx.ref.repo}#${ctx.ref.number}`,
+    jobId,
     workspaceDir,
     diffText,
     prMetadata: {
@@ -159,6 +192,12 @@ export async function runAction(
     maxFiles: config.reviews.max_files,
     maxDiffLines: config.reviews.max_diff_lines,
     maxSteps: config.reviews.max_steps,
+    suggestions: config.suggestions,
+    largePr: {
+      enabled: config.large_pr.enabled,
+      maxChunks: config.large_pr.max_chunks,
+      prioritization: config.large_pr.prioritization,
+    },
     privacy: {
       allowedUrlPrefixes: config.privacy.allowed_url_prefixes,
       denyPaths: config.privacy.deny_paths,
@@ -169,17 +208,92 @@ export async function runAction(
       owner: ctx.ref.owner,
       repo: ctx.ref.repo,
     },
+    ...(externalTools.length > 0 ? { externalTools } : {}),
+    summary: {
+      walkthrough: config.summary.walkthrough,
+      changeImpact: config.summary.change_impact,
+      dependencyView: config.summary.dependency_view,
+    },
   };
   if (incremental) {
     (reviewJob as { incrementalContext?: boolean }).incrementalContext = true;
     (reviewJob as { incrementalSinceSha?: string }).incrementalSinceSha = strategy.since;
   }
 
-  const result = await runReview(reviewJob, provider);
+  // #144 Phase B: budget.overrun — fired by cost-guard when cumulative cost
+  // crosses cost.budget_alert_usd. Fail-open: dispatch errors are caught so
+  // a notification failure never aborts the review.
+  const onThresholdCrossed = (e: {
+    readonly threshold: 'fallback' | 'abort' | 'kill' | 'daily_cap' | 'budget_alert';
+    readonly cumulativeUsd: number;
+    readonly capUsd: number;
+  }): void => {
+    if (e.threshold === 'budget_alert') {
+      const event = {
+        type: 'budget.overrun' as const,
+        repo: notificationRepo,
+        installationId: '0',
+        jobId,
+        timestamp: new Date().toISOString(),
+        prNumber: ctx.ref.number,
+        summary: `Budget alert: cumulative cost $${e.cumulativeUsd.toFixed(4)} exceeded alert threshold $${e.capUsd.toFixed(4)}`,
+      };
+      notifier.dispatch(event).catch(() => {
+        // fail-open: notification failure must not affect review result
+      });
+    }
+  };
+
+  let result: RunnerResult;
+  try {
+    result = await runReview(reviewJob, provider, {
+      logger: log,
+      onThresholdCrossed,
+      ...(config.cost.budget_alert_usd !== undefined
+        ? { budgetAlertUsd: config.cost.budget_alert_usd }
+        : {}),
+    });
+  } catch (err) {
+    // #144 Phase B: job.failed — runReview threw a permanent error.
+    // Dispatch the notification fail-open (swallow dispatch errors), then re-throw.
+    // Note: job.failed here is an interim signal based on runReview throw.
+    // Accurate DLQ-based permanent-failure detection is tracked in issue #138.
+    const failEvent = {
+      type: 'job.failed' as const,
+      repo: notificationRepo,
+      installationId: '0',
+      jobId,
+      timestamp: new Date().toISOString(),
+      prNumber: ctx.ref.number,
+      summary: `Job failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+    notifier.dispatch(failEvent).catch(() => {
+      // fail-open: notification failure must not shadow the original error
+    });
+    throw err;
+  }
+
+  // #144 Phase B: review.completed — successful review.
+  // Dispatch only when config.notifications.events.review_completed is enabled.
+  // The dispatcher gate handles the enable check, so we always call dispatch
+  // and let the dispatcher no-op when the event type is disabled.
+  const completeEvent = {
+    type: 'review.completed' as const,
+    repo: notificationRepo,
+    installationId: '0',
+    jobId,
+    timestamp: new Date().toISOString(),
+    prNumber: ctx.ref.number,
+    summary: `Review completed: ${result.comments.length} finding${result.comments.length !== 1 ? 's' : ''}`,
+  };
+  notifier.dispatch(completeEvent).catch(() => {
+    // fail-open
+  });
 
   await postOrUpdate(vcs, ctx.ref, pr, result, previousState, {
     stateWriteRetries: inputs.stateWriteRetries,
     log,
+    diff,
     ...(deps.sleep ? { sleep: deps.sleep } : {}),
   });
 
@@ -268,6 +382,39 @@ function inferGithubHost(env: NodeJS.ProcessEnv): string {
   }
 }
 
+/**
+ * Load SARIF file contents for each configured external tool.
+ * Unreadable paths are warned and skipped (review continues without them).
+ */
+async function loadExternalToolContents(
+  tools: ReadonlyArray<{
+    readonly name: string;
+    readonly sarif_path: string;
+    readonly merge_policy: 'tool_wins' | 'annotate' | 'ai_wins';
+  }>,
+  readFn: (p: string, enc: 'utf8') => Promise<string>,
+  log: (msg: string, meta?: Record<string, unknown>) => void,
+): Promise<
+  Array<{ name: string; mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins'; sarif: string }>
+> {
+  const result: Array<{
+    name: string;
+    mergePolicy: 'tool_wins' | 'annotate' | 'ai_wins';
+    sarif: string;
+  }> = [];
+  for (const tool of tools) {
+    try {
+      const content = await readFn(tool.sarif_path, 'utf8');
+      result.push({ name: tool.name, mergePolicy: tool.merge_policy, sarif: content });
+    } catch {
+      log(
+        `external_tools: sarif_path '${tool.sarif_path}' for tool '${tool.name}' not found or unreadable — skipping`,
+      );
+    }
+  }
+  return result;
+}
+
 function defaultLogger(msg: string, meta?: Record<string, unknown>): void {
   /* v8 ignore start */
   // GitHub Action consumers surface stdout to the run log; the
@@ -312,6 +459,7 @@ async function postOrUpdate(
   opts: {
     readonly stateWriteRetries: number;
     readonly log: (msg: string, meta?: Record<string, unknown>) => void;
+    readonly diff: Diff;
     readonly sleep?: (ms: number) => Promise<void>;
   },
 ): Promise<void> {
@@ -332,6 +480,11 @@ async function postOrUpdate(
   // takes a total-attempt count; `stateWriteRetries` is the number of
   // retries on top of the first attempt, so total = retries + 1.
   const totalAttempts = opts.stateWriteRetries + 1;
+  // #152: forward per-file patch data so the GitHub adapter can validate
+  // suggestion anchor lines against the diff hunk context window.
+  const diffPayload = {
+    files: opts.diff.files.map((f) => ({ path: f.path, patch: f.patch })),
+  };
   await withRetry(
     () =>
       vcs.postReview(ref, {
@@ -339,6 +492,7 @@ async function postOrUpdate(
         summary: result.summary,
         state,
         event: result.reviewEvent,
+        diff: diffPayload,
       }),
     {
       attempts: totalAttempts,

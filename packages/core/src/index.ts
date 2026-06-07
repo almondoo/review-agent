@@ -10,6 +10,7 @@ export {
   verifyAuditChain,
   verifyAuditChainSegment,
 } from './audit.js';
+export { hashPassword, verifyPassword } from './auth/password.js';
 export {
   appendFingerprintMarker,
   extractFingerprintFromComment,
@@ -24,6 +25,12 @@ export {
   decideCostAction,
   type RecordPhaseInput,
 } from './cost.js';
+export {
+  DASHBOARD_ROLES,
+  type DashboardRole,
+  dashboardRoleSchema,
+  roleSatisfies,
+} from './dashboard-roles.js';
 export { extractMessage, extractStatus } from './error-utils.js';
 export {
   ConfigError,

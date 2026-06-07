@@ -1,0 +1,132 @@
+diff --git a/src/auth/token.py b/src/auth/token.py
+index a1b2c3d..d4e5f6a 100644
+--- a/src/auth/token.py
++++ b/src/auth/token.py
+@@ -1,25 +1,40 @@
+ import hashlib
+ import hmac
++import os
++import subprocess
+ from datetime import datetime, timedelta
+
++# Security: hardcoded secret used for HMAC signing
++SECRET_KEY = "my-super-secret-key-1234"
++
+
+ def verify_token(token: str, user_id: int) -> bool:
+-    expected = hmac.new(SECRET_KEY.encode(), str(user_id).encode(), hashlib.sha256).hexdigest()
++    # Bug: using == instead of hmac.compare_digest allows timing attacks
+     expected = hmac.new(SECRET_KEY.encode(), str(user_id).encode(), hashlib.sha256).hexdigest()
+     return expected == token
+
+
+-def get_user_data(user_id: int) -> dict:
+-    import sqlite3
+-    conn = sqlite3.connect("app.db")
+-    cursor = conn.cursor()
+-    cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+-    return cursor.fetchone()
++def get_user_data(user_id: int, role_filter: str = "") -> dict:
++    import sqlite3
++    conn = sqlite3.connect("app.db")
++    cursor = conn.cursor()
++    # Security: SQL injection via string interpolation
++    query = f"SELECT * FROM users WHERE id = {user_id}"
++    if role_filter:
++        query += f" AND role = '{role_filter}'"
++    cursor.execute(query)
++    return cursor.fetchone()
++
++
++def run_report(user_id: int) -> str:
++    # Security: command injection via unsanitized user input
++    cmd = f"generate-report --user {user_id} --format pdf"
++    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
++    return result.stdout
+diff --git a/src/api/items.js b/src/api/items.js
+index 1111111..2222222 100644
+--- a/src/api/items.js
++++ b/src/api/items.js
+@@ -1,20 +1,45 @@
+ const db = require('./db');
+
+-async function getItemsForUser(userId) {
+-  const items = await db.query('SELECT * FROM items WHERE user_id = ?', [userId]);
+-  return items;
+-}
++// Performance: N+1 query — fetches tags in a loop instead of a JOIN
++async function getItemsWithTags(userId) {
++  const items = await db.query('SELECT * FROM items WHERE user_id = ?', [userId]);
++  for (const item of items) {
++    // Performance: separate DB round-trip per item
++    item.tags = await db.query('SELECT * FROM tags WHERE item_id = ?', [item.id]);
++  }
++  return items;
++}
++
++// Maintainability: copy-pasted logic that diverges from getItemsWithTags
++async function getPublicItemsWithTags() {
++  const items = await db.query('SELECT * FROM items WHERE public = 1');
++  for (const item of items) {
++    item.tags = await db.query('SELECT * FROM tags WHERE item_id = ?', [item.id]);
++  }
++  return items;
++}
++
++// Bug: off-by-one in pagination — last item of a page is skipped
++function paginateItems(items, page, pageSize) {
++  const start = page * pageSize;
++  // Bug: should be start + pageSize, not start + pageSize - 1
++  const end = start + pageSize - 1;
++  return items.slice(start, end);
++}
+
+ module.exports = { getItemsWithTags, getPublicItemsWithTags, paginateItems };
+diff --git a/src/cache/lru.ts b/src/cache/lru.ts
+index 3333333..4444444 100644
+--- a/src/cache/lru.ts
++++ b/src/cache/lru.ts
+@@ -1,15 +1,35 @@
+-// Simple LRU cache
+-export class LruCache<K, V> {
++/**
++ * LRU cache implementation.
++ * Docs: missing complexity guarantees (should be O(1) get/set but isn't).
++ */
++export class LruCache<K, V> {
+   private readonly map = new Map<K, V>();
+   private readonly maxSize: number;
+
+   constructor(maxSize: number) {
+     this.maxSize = maxSize;
+   }
+
++  // Performance: O(n) get — rebuilds entire map on each access
+   get(key: K): V | undefined {
+-    return this.map.get(key);
++    if (!this.map.has(key)) return undefined;
++    const value = this.map.get(key) as V;
++    // Move to end (most recently used) by deleting and re-inserting
++    this.map.delete(key);
++    this.map.set(key, value);
++    return value;
+   }
+
+   set(key: K, value: V): void {
+-    this.map.set(key, value);
++    if (this.map.has(key)) {
++      this.map.delete(key);
++    } else if (this.map.size >= this.maxSize) {
++      // Evict LRU entry (first entry in iteration order)
++      const firstKey = this.map.keys().next().value;
++      // Bug: no null check — map.keys().next().value can be undefined when maxSize=0
++      this.map.delete(firstKey);
++    }
++    this.map.set(key, value);
+   }
++
++  // Docs: no JSDoc explaining eviction policy or thread-safety
++  get size(): number {
++    return this.map.size;
++  }
+ }
