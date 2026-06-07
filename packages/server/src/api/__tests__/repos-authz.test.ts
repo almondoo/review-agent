@@ -119,6 +119,30 @@ function makeDb(
         },
       }),
     }),
+    // withTenant calls db.transaction(); return empty event arrays so tests that
+    // don't care about review-event enrichment still get 200 back.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      type ChainResult = Promise<unknown[]> & {
+        orderBy: (..._a: unknown[]) => ChainResult;
+        limit: (n: number) => Promise<unknown[]>;
+      };
+      function chainable(rows: unknown[]): ChainResult {
+        const p: ChainResult = Object.assign(Promise.resolve(rows), {
+          orderBy: (..._a: unknown[]): ChainResult => chainable(rows),
+          limit: (n: number): Promise<unknown[]> => Promise.resolve(rows.slice(0, n)),
+        });
+        return p;
+      }
+      const tx = {
+        execute: () => Promise.resolve([]),
+        select: (_fields?: unknown) => ({
+          from: (_table: unknown) => ({
+            where: (_cond?: unknown): ChainResult => chainable([]),
+          }),
+        }),
+      };
+      return fn(tx);
+    },
   };
 }
 
@@ -660,5 +684,85 @@ describe('repos router — audit actor is populated from JWT principal', () => {
     expect(records).toHaveLength(1);
     // actor must be the principal ID, not null
     expect(records[0]?.actor).toBe(ADMIN_PRINCIPAL.id);
+  });
+});
+
+// ===========================================================================
+// Session-mode: GET /repos/:id/reviews, GET /repos/:id/metrics,
+//               GET /repos/:id/prompt — principal branch coverage
+// ===========================================================================
+// These tests verify that the `if (principal !== undefined)` branches in
+// each of those handlers are exercised (lines 634, 762, 524 in repos.ts).
+
+describe('GET /repos/:id/reviews — session mode', () => {
+  it('viewer with membership can GET /:id/reviews → 200', async () => {
+    // Exercises the principal !== undefined branch (line 634 in repos.ts)
+    // and the checkRepoAccess ok=true path.
+    const app = makeApp([REPO_A], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-a/reviews', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.items)).toBe(true);
+  });
+
+  it('cross-installation: viewer of A cannot GET /:id/reviews for repo-b → 404', async () => {
+    // Exercises the checkRepoAccess not-ok path in the reviews handler (line 637-639).
+    const app = makeApp([REPO_B], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-b/reviews', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /repos/:id/metrics — session mode', () => {
+  it('viewer with membership can GET /:id/metrics → 200', async () => {
+    // Exercises the principal !== undefined branch (line 762 in repos.ts).
+    const app = makeApp([REPO_A], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-a/metrics', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.totalReviews).toBe('number');
+  });
+
+  it('cross-installation: viewer of A cannot GET /:id/metrics for repo-b → 404', async () => {
+    // Exercises the checkRepoAccess not-ok path in the metrics handler (line 765-767).
+    const app = makeApp([REPO_B], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-b/metrics', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /repos/:id/prompt — session mode', () => {
+  it('viewer with membership can GET /:id/prompt → 200', async () => {
+    // Exercises the principal !== undefined branch (line 524 in repos.ts).
+    const app = makeApp([REPO_A], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-a/prompt', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(typeof body.systemPrompt).toBe('string');
+  });
+
+  it('cross-installation: viewer of A cannot GET /:id/prompt for repo-b → 404', async () => {
+    // Exercises the checkRepoAccess not-ok path in the GET /:id/prompt handler.
+    const app = makeApp([REPO_B], [VIEWER_MEMBERSHIP_A], PRINCIPAL_ROWS);
+    const jwt = await viewerJwt();
+    const res = await app.request('http://host/repos/repo-b/prompt', {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
+    expect(res.status).toBe(404);
   });
 });

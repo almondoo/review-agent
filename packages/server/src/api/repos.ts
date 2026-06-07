@@ -159,19 +159,41 @@ export function createReposRouter(deps: ReposDeps): Hono {
     }
     // Legacy (principal === undefined): return all repos unchanged.
 
-    const repoNames = filteredRepos.map((r) => r.name);
-    const recentEvents =
-      repoNames.length > 0
-        ? await deps.db
-            .select({
-              repo: reviewEvalEvent.repo,
-              createdAt: reviewEvalEvent.createdAt,
-              abortReason: reviewEvalEvent.abortReason,
-            })
-            .from(reviewEvalEvent)
-            .where(inArray(reviewEvalEvent.repo, repoNames))
-            .orderBy(desc(reviewEvalEvent.createdAt))
-        : [];
+    // Group repos by installationId so each non-null tenant gets exactly one
+    // withTenant call (mirrors the grouping pattern in overview-totals.ts).
+    // Repos with null installationId contribute no events (no tenant to scope).
+    const byInstallation = new Map<bigint, { names: string[] }>();
+    for (const r of filteredRepos) {
+      if (r.installationId != null) {
+        const gid = r.installationId;
+        const entry = byInstallation.get(gid);
+        if (entry !== undefined) {
+          entry.names.push(r.name);
+        } else {
+          byInstallation.set(gid, { names: [r.name] });
+        }
+      }
+    }
+
+    type EventRow = { repo: string; createdAt: Date; abortReason: string | null };
+    const recentEvents: EventRow[] = [];
+
+    for (const [gid, { names }] of byInstallation) {
+      const groupEvents = await withTenant(deps.db, gid, async (tx) =>
+        tx
+          .select({
+            repo: reviewEvalEvent.repo,
+            createdAt: reviewEvalEvent.createdAt,
+            abortReason: reviewEvalEvent.abortReason,
+          })
+          .from(reviewEvalEvent)
+          .where(and(eq(reviewEvalEvent.installationId, gid), inArray(reviewEvalEvent.repo, names)))
+          .orderBy(desc(reviewEvalEvent.createdAt)),
+      );
+      for (const ev of groupEvents) {
+        recentEvents.push(ev);
+      }
+    }
 
     const latestByRepo = new Map<string, { createdAt: Date; abortReason: string | null }>();
     for (const ev of recentEvents) {
@@ -221,15 +243,25 @@ export function createReposRouter(deps: ReposDeps): Hono {
       }
     }
 
-    const lastEvents = await deps.db
-      .select({
-        createdAt: reviewEvalEvent.createdAt,
-        abortReason: reviewEvalEvent.abortReason,
-      })
-      .from(reviewEvalEvent)
-      .where(eq(reviewEvalEvent.repo, row.name))
-      .orderBy(desc(reviewEvalEvent.createdAt))
-      .limit(1);
+    let lastEvents: { createdAt: Date; abortReason: string | null }[] = [];
+    if (row.installationId != null) {
+      lastEvents = await withTenant(deps.db, row.installationId, async (tx) =>
+        tx
+          .select({
+            createdAt: reviewEvalEvent.createdAt,
+            abortReason: reviewEvalEvent.abortReason,
+          })
+          .from(reviewEvalEvent)
+          .where(
+            and(
+              eq(reviewEvalEvent.installationId, row.installationId as bigint),
+              eq(reviewEvalEvent.repo, row.name),
+            ),
+          )
+          .orderBy(desc(reviewEvalEvent.createdAt))
+          .limit(1),
+      );
+    }
     const last = lastEvents[0];
 
     const detail: RepoDetail = {
@@ -385,15 +417,25 @@ export function createReposRouter(deps: ReposDeps): Hono {
       return c.json({ error: 'not_found' }, 404);
     }
 
-    const lastEvents = await deps.db
-      .select({
-        createdAt: reviewEvalEvent.createdAt,
-        abortReason: reviewEvalEvent.abortReason,
-      })
-      .from(reviewEvalEvent)
-      .where(eq(reviewEvalEvent.repo, updatedRow.name))
-      .orderBy(desc(reviewEvalEvent.createdAt))
-      .limit(1);
+    let lastEvents: { createdAt: Date; abortReason: string | null }[] = [];
+    if (updatedRow.installationId != null) {
+      lastEvents = await withTenant(deps.db, updatedRow.installationId, async (tx) =>
+        tx
+          .select({
+            createdAt: reviewEvalEvent.createdAt,
+            abortReason: reviewEvalEvent.abortReason,
+          })
+          .from(reviewEvalEvent)
+          .where(
+            and(
+              eq(reviewEvalEvent.installationId, updatedRow.installationId as bigint),
+              eq(reviewEvalEvent.repo, updatedRow.name),
+            ),
+          )
+          .orderBy(desc(reviewEvalEvent.createdAt))
+          .limit(1),
+      );
+    }
     const last = lastEvents[0];
 
     const summary: RepoSummary = {
@@ -625,31 +667,53 @@ export function createReposRouter(deps: ReposDeps): Hono {
       cursorId = BigInt(decoded.id);
     }
 
-    const rows = await deps.db
-      .select({
-        id: reviewEvalEvent.id,
-        repo: reviewEvalEvent.repo,
-        prNumber: reviewEvalEvent.prNumber,
-        jobId: reviewEvalEvent.jobId,
-        abortReason: reviewEvalEvent.abortReason,
-        costUsd: reviewEvalEvent.costUsd,
-        latencyMs: reviewEvalEvent.latencyMs,
-        createdAt: reviewEvalEvent.createdAt,
-      })
-      .from(reviewEvalEvent)
-      .where(
-        cursorDate !== undefined && cursorId !== undefined
-          ? and(
-              eq(reviewEvalEvent.repo, repoRow.name),
-              or(
-                lt(reviewEvalEvent.createdAt, cursorDate),
-                and(eq(reviewEvalEvent.createdAt, cursorDate), lt(reviewEvalEvent.id, cursorId)),
-              ),
-            )
-          : eq(reviewEvalEvent.repo, repoRow.name),
-      )
-      .orderBy(desc(reviewEvalEvent.createdAt), desc(reviewEvalEvent.id))
-      .limit(limit + 1);
+    // eslint-disable-next-line prefer-const
+    let rows: {
+      id: bigint;
+      repo: string;
+      prNumber: number;
+      jobId: string;
+      abortReason: string | null;
+      costUsd: number;
+      latencyMs: number;
+      createdAt: Date;
+    }[] = [];
+    if (repoRow.installationId != null) {
+      rows = await withTenant(deps.db, repoRow.installationId, async (tx) =>
+        tx
+          .select({
+            id: reviewEvalEvent.id,
+            repo: reviewEvalEvent.repo,
+            prNumber: reviewEvalEvent.prNumber,
+            jobId: reviewEvalEvent.jobId,
+            abortReason: reviewEvalEvent.abortReason,
+            costUsd: reviewEvalEvent.costUsd,
+            latencyMs: reviewEvalEvent.latencyMs,
+            createdAt: reviewEvalEvent.createdAt,
+          })
+          .from(reviewEvalEvent)
+          .where(
+            cursorDate !== undefined && cursorId !== undefined
+              ? and(
+                  eq(reviewEvalEvent.installationId, repoRow.installationId as bigint),
+                  eq(reviewEvalEvent.repo, repoRow.name),
+                  or(
+                    lt(reviewEvalEvent.createdAt, cursorDate),
+                    and(
+                      eq(reviewEvalEvent.createdAt, cursorDate),
+                      lt(reviewEvalEvent.id, cursorId),
+                    ),
+                  ),
+                )
+              : and(
+                  eq(reviewEvalEvent.installationId, repoRow.installationId as bigint),
+                  eq(reviewEvalEvent.repo, repoRow.name),
+                ),
+          )
+          .orderBy(desc(reviewEvalEvent.createdAt), desc(reviewEvalEvent.id))
+          .limit(limit + 1),
+      );
+    }
 
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;
